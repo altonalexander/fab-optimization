@@ -1,0 +1,24 @@
+# Simulators standing in for physical hardware and the MES.
+# In a real fab NONE of these containers exist — they are replaced by the
+# actual controller, tools, and MES. Keeping them as separate images makes
+# that substitution obvious.
+FROM ubuntu:24.04 AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      g++ librdkafka-dev libzmq3-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY include/ include/
+COPY src/ src/
+RUN g++ -std=c++20 -O2 -pthread -Iinclude -DFAB_HAVE_RDKAFKA \
+        src/mes_producer_main.cpp -o /mes_producer -lrdkafka++ -lrdkafka || true
+RUN g++ -std=c++20 -O2 -pthread -Iinclude \
+        src/hsms_sim_main.cpp -o /hsms_sim
+RUN g++ -std=c++20 -O2 -pthread -Iinclude \
+        src/equipment_sim_main.cpp -o /equipment_sim || true
+
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      librdkafka++1 libzmq5 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /hsms_sim /app/
+COPY --from=build /mes_producer /equipment_sim /app/
+RUN useradd -r -u 10003 sim
+USER sim

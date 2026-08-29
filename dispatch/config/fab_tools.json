@@ -1,0 +1,92 @@
+{
+  "fab": "FAB1",
+  "revision": "2026-08-28.1",
+
+  "active_recipes": [
+    "POLY_ETCH", "METAL_ETCH", "GATE_OX", "NITRIDE", "OXIDE",
+    "M1_EXPOSE", "M2_EXPOSE", "CD_MEASURE", "SORT_HOT", "SORT_AMB"
+  ],
+
+  "tools": [
+    {
+      "id": "ETCH_11", "kind": "SINGLE_WAFER", "area": "ETCH",
+      "recipes": ["POLY_ETCH", "METAL_ETCH"],
+      "sec_per_wafer": 45.0, "changeover_s": 600.0
+    },
+    {
+      "id": "ETCH_12", "kind": "SINGLE_WAFER", "area": "ETCH",
+      "recipes": ["POLY_ETCH"],
+      "sec_per_wafer": 48.0, "changeover_s": 600.0
+    },
+    {
+      "id": "ETCH_13", "kind": "SINGLE_WAFER", "area": "ETCH",
+      "recipes": ["METAL_ETCH"],
+      "sec_per_wafer": 44.0, "changeover_s": 620.0
+    },
+    {
+      "id": "FURN_02", "kind": "BATCH_FURNACE", "area": "DIFF",
+      "recipes": ["GATE_OX"],
+      "min_batch": 4, "max_batch": 6,
+      "fixed_process_s": 7200.0, "max_hold_s": 1800.0
+    },
+    {
+      "id": "FURN_03", "kind": "BATCH_FURNACE", "area": "DIFF",
+      "recipes": ["GATE_OX"],
+      "min_batch": 4, "max_batch": 6,
+      "fixed_process_s": 7400.0, "max_hold_s": 1800.0
+    },
+    {
+      "id": "CVD_07", "kind": "CLUSTER", "area": "THIN_FILM",
+      "sec_per_wafer": 30.0,
+      "chambers": [
+        { "name": "A", "recipes": ["NITRIDE", "OXIDE"] },
+        { "name": "B", "recipes": ["NITRIDE"] },
+        { "name": "C", "recipes": ["OXIDE"] }
+      ]
+    },
+    {
+      "id": "CVD_08", "kind": "CLUSTER", "area": "THIN_FILM",
+      "sec_per_wafer": 32.0,
+      "chambers": [
+        { "name": "A", "recipes": ["NITRIDE", "OXIDE"] },
+        { "name": "B", "recipes": ["OXIDE"] }
+      ]
+    },
+    {
+      "id": "LITHO_03", "kind": "LITHO_SCANNER", "area": "LITHO",
+      "recipes": ["M1_EXPOSE", "M2_EXPOSE"],
+      "sec_per_wafer": 22.0, "reticle_swap_s": 300.0
+    },
+    {
+      "id": "LITHO_04", "kind": "LITHO_SCANNER", "area": "LITHO",
+      "recipes": ["M1_EXPOSE"],
+      "sec_per_wafer": 24.0, "reticle_swap_s": 300.0
+    },
+    {
+      "id": "CD_SEM_01", "kind": "METROLOGY", "area": "METRO",
+      "recipes": ["CD_MEASURE"],
+      "sample_rate": 0.20, "slots": 2, "sec_per_lot": 480.0
+    },
+    {
+      "id": "PROBE_21", "kind": "PROBE_TESTER", "area": "SORT",
+      "probe_cards": ["PC_MCU_A", "PC_LOGIC_B"],
+      "test_programs": ["SORT_HOT", "SORT_AMB"],
+      "parallel_sites": 4,
+      "sec_per_wafer": 18.0, "card_change_s": 1200.0, "temp_soak_s": 900.0,
+      "product_cards": {
+        "AUTOMOTIVE_MCU_01":  "PC_MCU_A",
+        "COMMODITY_LOGIC_09": "PC_LOGIC_B"
+      },
+      "program_temps": { "SORT_HOT": "hot", "SORT_AMB": "ambient" }
+    },
+    {
+      "id": "PROBE_22", "kind": "PROBE_TESTER", "area": "SORT",
+      "probe_cards": ["PC_MCU_A"],
+      "test_programs": ["SORT_HOT"],
+      "parallel_sites": 2,
+      "sec_per_wafer": 20.0, "card_change_s": 1200.0, "temp_soak_s": 900.0,
+      "product_cards": { "AUTOMOTIVE_MCU_01": "PC_MCU_A" },
+      "program_temps": { "SORT_HOT": "hot" }
+    }
+  ]
+}

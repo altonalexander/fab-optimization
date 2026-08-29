@@ -1,0 +1,135 @@
+# infra/zones.yaml
+#
+# The authoritative network segmentation policy. Machine-readable so it can be
+# diffed, reviewed, and VERIFIED against the running stack (see verify-zones.sh).
+#
+# In a real fab this is the document the security team signs off on, and it
+# maps to VLAN IDs and firewall rules rather than Docker networks. The
+# structure is identical; only the enforcement point changes.
+
+fab: FAB1
+revision: "2026-08-28.1"
+
+zones:
+
+  - id: 0
+    name: equipment
+    network: fab-zone0-equipment
+    subnet: 172.28.0.0/24
+    trust: untrusted
+    egress: false
+    description: >
+      Physical process tools and the AMHS/OHT controller. Vendor-supplied
+      software, rarely patched, often running unsupported OS versions. Treated
+      as hostile: it is the least controllable part of the fab.
+    protocols: [HSMS/TCP, SECS-II]
+    members: [amhs-controller, equipment-sim, amhs-adapter]
+
+  - id: 1
+    name: realtime
+    network: fab-zone1-realtime
+    subnet: 172.28.1.0/24
+    trust: critical
+    egress: false
+    description: >
+      The 1ms decision path. No internet, no shared storage, pinned CPUs.
+      Anything that can introduce jitter is excluded by construction.
+    protocols: [ZeroMQ]
+    members: [amhs-adapter, dispatcher]
+    latency_budget_ms: 1
+
+  - id: 2
+    name: data
+    network: fab-zone2-data
+    subnet: 172.28.2.0/24
+    trust: internal
+    egress: false
+    description: >
+      Durable event backbone. Milliseconds are acceptable; durability is not
+      optional. A lost LOT_COMPLETE leaks tool capacity permanently.
+    protocols: [Kafka]
+    members: [kafka, kafka-init, mes-producer, dispatcher, api]
+
+  - id: 3
+    name: enterprise
+    network: fab-zone3-enterprise
+    subnet: 172.28.3.0/24
+    trust: corporate
+    egress: true
+    description: >
+      Dashboards, scenario exploration, config authoring. The only zone with
+      egress and the only one a human logs into.
+    protocols: [HTTP, WebSocket]
+    members: [api, ui]
+
+# ---------------------------------------------------------------------------
+# BOUNDARY CROSSINGS
+# Exactly three processes are dual-homed. Every one is a deliberate, reviewed
+# decision with a stated reason it must exist.
+# ---------------------------------------------------------------------------
+boundaries:
+
+  - service: amhs-adapter
+    zones: [0, 1]
+    direction: bidirectional
+    rationale: >
+      Translates vendor HSMS/SECS-II into the internal Envelope schema. Exists
+      as a separate process specifically so that SECS decode bugs, session
+      quirks, and reconnect storms cannot stall the dispatcher's 1ms budget.
+    allowed:
+      - { from: equipment, to: adapter, proto: HSMS/TCP,  port: 5000 }
+      - { from: adapter,   to: realtime, proto: ZMQ-PUB,  port: 5562 }
+      - { from: realtime,  to: adapter,  proto: ZMQ-SUB,  port: 5561 }
+    denied:
+      - "adapter MUST NOT reach zone 2 or 3"
+      - "equipment MUST NOT reach anything except the adapter"
+
+  - service: dispatcher
+    zones: [1, 2]
+    direction: bidirectional
+    rationale: >
+      Reads durable lot/tool events from Kafka to build state; writes the
+      decision log back for audit. The Kafka write is async fire-and-forget so
+      it can never block the dispatch path.
+    allowed:
+      - { from: realtime, to: data, proto: Kafka, port: 9092 }
+    denied:
+      - "dispatcher MUST NOT reach zone 0 (adapter mediates) or zone 3"
+
+  - service: api
+    zones: [2, 3]
+    direction: read-only
+    rationale: >
+      Read-only mirror for dashboards and scenario exploration. Scenario runs
+      execute against a CLONED state snapshot, never the live planner.
+    allowed:
+      - { from: enterprise, to: api,  proto: HTTP/WS, port: 8000 }
+      - { from: api,        to: data, proto: Kafka,   port: 9092, mode: consume-only }
+    denied:
+      - "api MUST NOT produce to any Kafka topic"
+      - "api MUST NOT reach zone 0 or zone 1"
+      - "no path exists from a browser to the dispatcher. This is the point."
+
+# ---------------------------------------------------------------------------
+# INVARIANTS — assert these in CI. A violation is a build failure.
+# ---------------------------------------------------------------------------
+invariants:
+  - id: INV-1
+    rule: "No service is attached to both zone 0 and zone 3"
+    reason: "A tool-to-dashboard path must be at least three hops."
+
+  - id: INV-2
+    rule: "Zones 0, 1, 2 have egress=false"
+    reason: "Only the enterprise zone reaches the internet."
+
+  - id: INV-3
+    rule: "Exactly one service is dual-homed on zones 0 and 1"
+    reason: "A single, reviewable protocol boundary."
+
+  - id: INV-4
+    rule: "Only one port is published to the host (ui:8080)"
+    reason: "One front door for the whole stack."
+
+  - id: INV-5
+    rule: "No service on zone 1 has a volume mount that is writable"
+    reason: "Disk I/O is jitter; the real-time path does not touch storage."

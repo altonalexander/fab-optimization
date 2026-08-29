@@ -1,0 +1,230 @@
+# infra/docker-compose.yml
+#
+# Runs on one box. Models a real fab.
+#
+# Each service is a SEPARATE MACHINE in a real deployment. Each network is a
+# SEPARATE VLAN / firewall zone. A service can only reach what it is attached
+# to — Docker enforces this, so the boundaries are real here, not just drawn
+# on a diagram. If you delete a network from a service, that service loses
+# reachability. Try it: that is the demonstration.
+#
+#   ZONE 0  equipment-net   L1/L2  air-gapped, HSMS/SECS only, no route out
+#   ZONE 1  rt-net          L2     real-time control, ZMQ, no internet
+#   ZONE 2  data-net        L3     durable event backbone, Kafka
+#   ZONE 3  enterprise-net  L4     analytics + UI, the only zone with egress
+#
+# The rule that matters: NO SERVICE TOUCHES ZONE 0 AND ZONE 3.
+# The path from a tool to a dashboard is always at least three hops.
+
+name: fabdisp
+
+# ---------------------------------------------------------------------------
+# NETWORKS = FIREWALL ZONES
+# ---------------------------------------------------------------------------
+networks:
+  equipment-net:
+    name: fab-zone0-equipment
+    driver: bridge
+    internal: true          # NO EGRESS. Enforced. Tools cannot reach the internet.
+    ipam:
+      config: [{ subnet: 172.28.0.0/24 }]
+
+  rt-net:
+    name: fab-zone1-realtime
+    driver: bridge
+    internal: true          # NO EGRESS. Control plane is isolated.
+    ipam:
+      config: [{ subnet: 172.28.1.0/24 }]
+
+  data-net:
+    name: fab-zone2-data
+    driver: bridge
+    internal: true          # NO EGRESS. Kafka never talks to the internet.
+    ipam:
+      config: [{ subnet: 172.28.2.0/24 }]
+
+  enterprise-net:
+    name: fab-zone3-enterprise
+    driver: bridge          # egress allowed: this is the only one
+    ipam:
+      config: [{ subnet: 172.28.3.0/24 }]
+
+volumes:
+  kafka-data:
+  fab-ipc:
+
+services:
+
+  # =========================================================================
+  # ZONE 0 — EQUIPMENT NETWORK
+  # Physical tools and the AMHS controller. In a real fab this is a separate
+  # physical VLAN, often with no DHCP and MAC-locked ports.
+  # =========================================================================
+
+  amhs-controller:
+    # Stands in for the Murata/Daifuku OHT controller. Speaks HSMS over TCP.
+    # >>> PLACEHOLDER: replace with the real controller's IP. This container
+    #     exists so the topology is complete and testable.
+    build: { context: .., dockerfile: infra/Dockerfile.simulator }
+    command: ["/app/hsms_sim", "--listen", "0.0.0.0:5000", "--event-hz", "3"]
+    networks: [equipment-net]
+    # NOTE: attached to ONE network. It cannot reach Kafka, the UI, or the
+    # internet. This is how it must be in production.
+
+  equipment-sim:
+    # Process tools emitting SECS-II events.
+    build: { context: .., dockerfile: infra/Dockerfile.simulator }
+    command: ["/app/equipment_sim", "--hsms", "amhs-controller:5000"]
+    networks: [equipment-net]
+
+  # =========================================================================
+  # ZONE 0 <-> ZONE 1 BOUNDARY — THE ONLY CROSSING
+  # This is the single process permitted on both the equipment network and the
+  # real-time network. All vendor protocol handling stops here.
+  # =========================================================================
+
+  amhs-adapter:
+    build: { context: .., dockerfile: infra/Dockerfile.adapter }
+    command:
+      - /app/amhs_adapter
+      - --hsms=amhs-controller:5000     # southbound: zone 0
+      - --zmq-pub=tcp://0.0.0.0:5562    # northbound: zone 1
+      - --zmq-sub=tcp://0.0.0.0:5561
+    networks: [equipment-net, rt-net]   # <-- DUAL HOMED. The only one.
+    environment:
+      HSMS_T3_SECONDS: "45"             # >>> VERIFY against vendor spec
+      FAB_ZONE: "boundary-0-1"
+    healthcheck:
+      test: ["CMD", "/app/amhs_adapter", "--healthcheck"]
+      interval: 10s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  # =========================================================================
+  # ZONE 1 — REAL-TIME CONTROL NETWORK
+  # The 1ms budget lives here. No internet, no shared storage, pinned CPUs.
+  # =========================================================================
+
+  dispatcher:
+    build: { context: .., dockerfile: infra/Dockerfile.dispatcher }
+    command:
+      - /app/fabdisp
+      - --config=/etc/fab/fab_tools.json
+      - --solver=cpsat
+      - --zmq-sub=tcp://amhs-adapter:5562   # zone 1: move requests in
+      - --zmq-pub=tcp://amhs-adapter:5561   # zone 1: move commands out
+      - --brokers=kafka:9092                # zone 2: durable event log
+    networks: [rt-net, data-net]        # <-- DUAL HOMED, zones 1+2
+    volumes:
+      - ../config:/etc/fab:ro
+    environment:
+      FAB_ZONE: "realtime"
+      PLANNER_CYCLE_SECONDS: "10"
+      SOLVE_BUDGET_SECONDS: "5"
+    deploy:
+      resources:
+        # Pin the real-time path. In production these are isolcpus with the
+        # kernel tickless and the planner threads on different cores than
+        # the dispatch loop.
+        limits:      { cpus: "4.0", memory: 4G }
+        reservations: { cpus: "4.0", memory: 4G }
+    ulimits:
+      memlock: -1                       # allow mlockall(): no page faults
+    healthcheck:
+      test: ["CMD", "/app/fabdisp", "--healthcheck"]
+      interval: 5s
+
+  # =========================================================================
+  # ZONE 2 — DATA NETWORK
+  # Durable event backbone. Milliseconds are fine here; durability is not
+  # optional. A lost LOT_COMPLETE leaks tool capacity permanently.
+  # =========================================================================
+
+  kafka:
+    image: apache/kafka:3.9.0
+    networks: [data-net]
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"   # 3 in production
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_LOG_RETENTION_HOURS: "168"
+      # >>> PLACEHOLDER: production needs SASL_SSL, 3 brokers, rack awareness,
+      #     and min.insync.replicas=2.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      retries: 10
+
+  kafka-init:
+    image: apache/kafka:3.9.0
+    networks: [data-net]
+    depends_on:
+      kafka: { condition: service_healthy }
+    entrypoint: ["/bin/bash", "/init/create-topics.sh"]
+    volumes:
+      - ./create-topics.sh:/init/create-topics.sh:ro
+    restart: "no"
+
+  mes-producer:
+    # Stands in for the MES lot-tracking feed.
+    build: { context: .., dockerfile: infra/Dockerfile.simulator }
+    command: ["/app/mes_producer", "--brokers", "kafka:9092"]
+    networks: [data-net]
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+
+  # =========================================================================
+  # ZONE 2 <-> ZONE 3 BOUNDARY
+  # Read-only mirror. This is the ONLY path from fab data to the enterprise.
+  # It has NO write path back. A React button must never reach the dispatcher.
+  # =========================================================================
+
+  api:
+    build: { context: .., dockerfile: infra/Dockerfile.api }
+    networks: [data-net, enterprise-net]   # <-- DUAL HOMED, zones 2+3
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      READ_ONLY: "true"                    # enforced in code, not just here
+      FAB_ZONE: "boundary-2-3"
+      SOLVER: "cpsat"
+      # --- Claude on Vertex AI ---------------------------------------------
+      # The assistant is the ONE component with egress, and only because it is
+      # in zone 3. It reaches Vertex, never the fab.
+      GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT:-}"
+      VERTEX_REGION: "${VERTEX_REGION:-us-east5}"
+      VERTEX_MODEL: "${VERTEX_MODEL:-claude-sonnet-4-5@20250929}"
+      GOOGLE_APPLICATION_CREDENTIALS: "/var/secrets/gcp/sa.json"
+    volumes:
+      # Same tool master the dispatcher uses, and the zone policy the UI renders.
+      - ../config:/etc/fab:ro
+      - ./zones.yaml:/etc/fab/zones.yaml:ro
+      # >>> PLACEHOLDER: use Workload Identity in GKE instead of a key file.
+      #     A long-lived service-account key on disk is the weakest link here.
+      - ${GCP_SA_KEY:-/dev/null}:/var/secrets/gcp/sa.json:ro
+    depends_on:
+      kafka: { condition: service_healthy }
+    ports: []   # not published; the UI proxies to it
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1G }
+
+  # =========================================================================
+  # ZONE 3 — ENTERPRISE NETWORK
+  # Dashboards, scenario exploration, config authoring. The only zone with
+  # egress and the only one a human logs into.
+  # =========================================================================
+
+  ui:
+    build: { context: .., dockerfile: infra/Dockerfile.ui }
+    networks: [enterprise-net]
+    ports: ["8080:80"]     # the ONLY published port in the whole stack
+    depends_on: [api]

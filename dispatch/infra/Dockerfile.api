@@ -1,0 +1,31 @@
+# ZONE 2<->3 BOUNDARY — read-only mirror + scenario runner.
+#
+# Two-stage: the C++ scenario binary is built and copied in, so the API calls
+# the REAL planner rather than reimplementing dispatch logic in Python.
+FROM ubuntu:24.04 AS cxx
+RUN apt-get update && apt-get install -y --no-install-recommends g++ \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY include/ include/
+COPY src/ src/
+RUN g++ -std=c++20 -O2 -pthread -Iinclude src/scenario_main.cpp -o /fab_scenario
+
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY api/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY api/ .
+COPY --from=cxx /fab_scenario /app/fab_scenario
+
+ENV READ_ONLY=true \
+    SCENARIO_BIN=/app/fab_scenario \
+    TOOL_CONFIG=/etc/fab/fab_tools.json \
+    ZONES_FILE=/etc/fab/zones.yaml
+RUN useradd -r -u 10004 api
+USER api
+EXPOSE 8000
+# gevent worker: SSE needs many concurrent long-lived connections, and a
+# sync worker would block one thread per dashboard.
+CMD ["gunicorn","-k","gevent","-w","2","-b","0.0.0.0:8000","--timeout","120","main:app"]

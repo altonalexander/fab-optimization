@@ -1,0 +1,31 @@
+# build outputs
+dispatch/fabdisp
+dispatch/fab_scenario
+dispatch/hsms_sim
+dispatch/amhs_adapter
+dispatch/fabtest
+dispatch/build/
+dispatch/ui/node_modules/
+dispatch/ui/dist/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# baseline run artifacts
+wandb/
+baselines/pyscfabsim/debug_data/
+baselines/pyscfabsim/docs/
+
+# bench outputs are committed deliberately; scratch is not
+bench/scratch/
+
+# windows / editor junk
+*:Zone.Identifier
+.DS_Store
+
+# original unsorted drop + original clone, kept on disk as a safety net
+unorganized/
+PySCFabSim-revised/

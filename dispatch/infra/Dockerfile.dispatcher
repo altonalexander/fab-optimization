@@ -1,0 +1,23 @@
+# ZONE 1 — real-time control. Built for predictable latency, not features.
+FROM ubuntu:24.04 AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      g++ cmake make librdkafka-dev libzmq3-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY include/ include/
+COPY src/ src/
+COPY CMakeLists.txt .
+# >>> PLACEHOLDER: add -DFAB_HAVE_ORTOOLS once OR-Tools is vendored into
+#     the build image. It is a large dependency; pin the version.
+RUN g++ -std=c++20 -O2 -march=x86-64-v2 -pthread -Iinclude \
+        -DFAB_HAVE_RDKAFKA -DFAB_HAVE_ZMQ \
+        src/e2e_main.cpp -o /fabdisp -lrdkafka++ -lrdkafka -lzmq
+
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      librdkafka++1 libzmq5 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /fabdisp /app/fabdisp
+# Non-root: a control-plane process has no business running as root.
+RUN useradd -r -u 10001 fabdisp
+USER fabdisp
+ENTRYPOINT ["/app/fabdisp"]

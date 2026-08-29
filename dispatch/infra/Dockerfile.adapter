@@ -1,0 +1,20 @@
+# ZONE 0<->1 BOUNDARY. The only binary that speaks both HSMS and ZMQ.
+# Kept minimal on purpose: this process sits on the equipment network, which
+# is the least trusted and least patchable part of the fab.
+FROM ubuntu:24.04 AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      g++ libzmq3-dev librdkafka-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY include/ include/
+COPY src/ src/
+RUN g++ -std=c++20 -O2 -pthread -Iinclude -DFAB_HAVE_ZMQ \
+        src/amhs_adapter_main.cpp -o /amhs_adapter -lzmq
+
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends libzmq5 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /amhs_adapter /app/amhs_adapter
+RUN useradd -r -u 10002 amhs
+USER amhs
+ENTRYPOINT ["/app/amhs_adapter"]
