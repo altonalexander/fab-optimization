@@ -27,9 +27,9 @@ bench:
 
 # Two processes, real TCP, real HSMS handshake. Proves the transport path.
 hsms-test: hsms-sim adapter
-	@./hsms_sim --listen 127.0.0.1:5000 --event-hz 4 & sleep 1; \
+	@./hsms_sim --listen 127.0.0.1:5000 --event-hz 4 & sim=$$!; sleep 1; \
 	 timeout 12 ./amhs_adapter --hsms=127.0.0.1:5000; \
-	 pkill -f hsms_sim || true
+	 kill $$sim 2>/dev/null || true; wait $$sim 2>/dev/null || true
 
 adapter:
 	$(CXX) $(CXXFLAGS) src/amhs_adapter_main.cpp -o amhs_adapter
