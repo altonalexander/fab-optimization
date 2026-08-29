@@ -1,0 +1,66 @@
+C++ CP-SAT linked against OR-Tools v9.15.6755 and run for the first time.
+g++ 13.3.0 -std=c++20 -O2, Ubuntu 24.04 (WSL2), 2026-08-29
+Build: cmake -S dispatch -B build-ortools -DFAB_HAVE_ORTOOLS=ON \
+             -DCMAKE_PREFIX_PATH=<or-tools-root>
+
+fabtest        56 passed, 0 failed   (cpsat solver-contract tests now real)
+fabtest --bench 5
+
+== BACKENDS ==
+  greedy  linked
+  cpsat   linked
+  gurobi  NOT LINKED -> falls back to greedy
+  highs   NOT LINKED -> falls back to greedy
+
+   lots  tools   pairs     solver  assigned     objective     solve  viol
+------------------------------------------------------------------------------
+     50     20     307     greedy        20       1209841     0.0ms  0
+     50     20     307      cpsat        24        848431  3155.4ms  0
+    100     25     714     greedy        31       3646591     0.2ms  0
+    100     25     714      cpsat        36       2764286  5015.0ms  0
+    200     50    1625     greedy        65       7477808     0.3ms  0
+    200     50    1625      cpsat        73       5544390  5334.1ms  0
+    400    100    3116     greedy       132      13590020     0.5ms  0
+    400    100    3116      cpsat       147      10700860  5048.8ms  0
+    800    200    6626     greedy       239      34263635     2.3ms  0
+    800    200    6626      cpsat       282      25151072  5048.6ms  0
+
+  lots  pairs   lift over greedy   extra lots assigned
+    50    307        29.9%                 +4
+   100    714        24.2%                 +5
+   200   1625        25.9%                 +8
+   400   3116        21.3%                +15
+   800   6626        26.6%                +43
+
+VERDICT: the CP-SAT formulation is sound. It beats greedy at every scale, with
+0 hard-constraint violations on both sides, and assigns strictly more lots while
+costing strictly less. The direction and rough magnitude of the README claim
+survive contact with a real solver.
+
+WHAT DID NOT REPRODUCE, AND WHY
+
+1. The exact +34.4% is not reproduced; this run gives 21-30% depending on scale.
+   The instances are not the same. The deleted Python harness reported 859
+   feasible pairs at 200x60; the C++ generator in src/test_main.cpp produces
+   1625 pairs at 200x50. Denser feasibility gives greedy more good choices and
+   narrows the gap. Two different instances, so the two numbers were never
+   comparable. This is a generator difference, not a formulation error.
+
+2. The operational budget number in dispatch/README.md is WRONG on this build.
+
+   README:  "At 400 lots a 0.25s budget returns no incumbent. At 1s it is optimal."
+   Measured at 400 lots:
+       budget 0.25s -> no incumbent, fallback to greedy (13590020)
+       budget 1.0s  -> no incumbent, fallback to greedy (13590020)
+       budget 2.0s  -> 10700860, +21.3%
+       budget 3.0s  -> 10700860
+       budget 5.0s  -> 10700860
+
+   The real threshold is between 1s and 2s, not at 1s. A tactical cycle tuned to
+   the documented 1s would silently run greedy forever while reporting that
+   CP-SAT was enabled -- the worst kind of wrong, because the backend table says
+   "cpsat linked" and it would be telling the truth.
+
+   Corrected guidance: the tactical cycle must allow >=2s of solve time at 400
+   lots on this hardware, and the figure must be re-measured per deployment
+   rather than inherited. The greedy fallback is load-bearing, as claimed.

@@ -1,22 +1,41 @@
 # Build
 
-## Toolchain (not currently installed on this machine)
+## Toolchain
 
-`dispatch/` needs a C++20 compiler and `make`. Neither is present here, and
-installing requires sudo:
+`dispatch/` needs a C++20 compiler and `make`.
 
 ```bash
 sudo apt install build-essential cmake
 ```
 
-Optional solver backends, in the order they matter:
+Verified with g++ 13.3.0, GNU Make 4.3, cmake 3.28.3 on Ubuntu 24.04 (WSL2).
+
+## OR-Tools / CP-SAT
+
+Use the prebuilt C++ archive and CMake. Hand-rolled `-I/-L` flags do not work:
+the protobuf headers need defines that only `find_package(ortools)` supplies.
 
 ```bash
-# OR-Tools / CP-SAT — the one that turns the benchmark argument into evidence
-#   https://developers.google.com/optimization/install/cpp
-# HiGHS — free MILP, reads the LP text SolverExporter::to_lp() already emits
-# Gurobi — commercial, needs GUROBI_HOME and a license daemon in the fab zone
+curl -L -o ortools.tgz \
+  https://github.com/google/or-tools/releases/download/v9.15/or-tools_amd64_ubuntu-24.04_cpp_v9.15.6755.tar.gz
+mkdir -p ~/opt && tar xzf ortools.tgz -C ~/opt
+
+cd dispatch
+cmake -S . -B build-ortools -DFAB_HAVE_ORTOOLS=ON \
+      -DCMAKE_PREFIX_PATH=~/opt/or-tools_x86_64_Ubuntu-24.04_cpp_v9.15.6755
+cmake --build build-ortools -j4
+
+./build-ortools/fabtest            # 56/56, cpsat contract tests now real
+./build-ortools/fabtest --bench 5  # CP-SAT vs greedy
 ```
+
+The plain `make` targets build greedy-only; that is the fallback path and is
+worth keeping runnable. CMake is the path for any run whose numbers you intend
+to quote.
+
+Other backends: HiGHS (free MILP, reads the LP text `SolverExporter::to_lp()`
+already emits) and Gurobi (commercial, needs `GUROBI_HOME` and a license daemon
+in the fab zone). Neither is linked here.
 
 ## Acceptance gate
 

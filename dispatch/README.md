@@ -322,21 +322,47 @@ through one `score()` function.
 
 ### The operational number you need
 
-At 400 lots, a **0.25s budget returns no incumbent at all** — CP-SAT falls back
-to greedy. At 1s it is optimal.
+At 400 lots, measured against the linked C++ build:
 
 ```
-budget 0.25s   cpsat UNKNOWN, 0 assigned  -> fallback fires
-budget 1.0s    cpsat OPTIMAL, +31.7% vs greedy
+budget 0.25s   no incumbent -> fallback to greedy
+budget 1.0s    no incumbent -> fallback to greedy   <-- previously documented as OPTIMAL
+budget 2.0s    +21.3% vs greedy
+budget 5.0s    +21.3% vs greedy
 ```
 
-So the tactical cycle must allow **≥1s of solve time at this scale**, and the
-greedy fallback is load-bearing rather than decorative. That is a concrete
-tuning constraint, and it only exists because the experiment was run.
+So the tactical cycle must allow **≥2s of solve time at this scale**, not the
+≥1s previously stated here. The earlier figure came from the Python harness on a
+sparser instance and does not hold for the shipping code.
 
-### Still true
+This is the failure mode that matters: a cycle tuned to 1s runs greedy on every
+tick while the backend table honestly reports `cpsat linked`. You would see no
+error, no warning, and no CP-SAT. Re-measure this number per deployment; do not
+inherit it. The greedy fallback is load-bearing rather than decorative.
 
-The C++ CP-SAT path compiles but has **not been linked against OR-Tools** here.
-The Python implementation is what produced every number above. Building the C++
-with `-DFAB_HAVE_ORTOOLS` and confirming it reproduces these results is the
-next step, and the JSON export exists precisely so that comparison is exact.
+### Superseded: the C++ has now been linked and run
+
+Every number in this section came from a Python implementation that has since
+been deleted (two implementations of one model is a bug factory). The C++ path
+has now been built against OR-Tools v9.15 and run. See
+`bench/results/2026-08-29-ortools-linked.txt` for the full output.
+
+**The formulation is sound.** CP-SAT beats greedy at every scale tested, 0
+hard-constraint violations on both sides, strictly more lots assigned at
+strictly lower cost:
+
+| lots | tools | pairs | lift over greedy | extra lots |
+|---|---|---|---|---|
+| 50 | 20 | 307 | +29.9% | +4 |
+| 100 | 25 | 714 | +24.2% | +5 |
+| 200 | 50 | 1,625 | +25.9% | +8 |
+| 400 | 100 | 3,116 | +21.3% | +15 |
+| 800 | 200 | 6,626 | +26.6% | +43 |
+
+Two corrections that only linking could have produced:
+
+1. **The +34.4% above is not comparable to the +25.9% here.** Different
+   instances: the Python harness reported 859 feasible pairs at 200x60, the C++
+   generator produces 1,625 at 200x50. Denser feasibility gives greedy more good
+   choices. Neither number is wrong; they were never measuring the same thing.
+2. **The 1s budget figure below was wrong.** Corrected in place.

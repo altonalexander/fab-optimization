@@ -17,6 +17,15 @@
 
 #include "fab/machine_config.hpp"
 
+// Third-party solver headers must be included at FILE SCOPE. They were
+// previously inside `namespace fab`, which nests all of abseil and protobuf --
+// and libstdc++ -- inside fab::, so <utility> stops seeing std::. The CP-SAT
+// path therefore never compiled, let alone linked.
+#ifdef FAB_HAVE_ORTOOLS
+#include "ortools/sat/cp_model.h"
+#include "ortools/sat/cp_model_solver.h"
+#endif
+
 #include <chrono>
 #include <memory>
 #include <string>
@@ -154,11 +163,6 @@ public:
 //
 // Build: -DFAB_HAVE_ORTOOLS, link ortools.
 // ---------------------------------------------------------------------------
-
-#ifdef FAB_HAVE_ORTOOLS
-#include "ortools/sat/cp_model.h"
-#include "ortools/sat/cp_model_solver.h"
-#endif
 
 class CpSatSolver : public SolverBackend {
 public:

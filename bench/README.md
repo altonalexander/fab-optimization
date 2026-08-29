@@ -3,24 +3,31 @@
 The comparison only means something if both sides read `data/smt2020/`. That is
 the invariant this directory exists to protect.
 
-## Not yet built
+## Status
 
-The harness is empty on purpose. It cannot be written honestly until the C++
-CP-SAT path is linked against OR-Tools and shown to reproduce the numbers in
-`dispatch/README.md` (+34.4% cost reduction over greedy, 200 lots x 60 tools).
-Until then there is nothing to compare that is known to be correct.
+Step 1 is done. OR-Tools v9.15 is linked, the C++ CP-SAT path has been run for
+the first time, and the formulation is sound: it beats greedy at every scale
+with 0 violations. Full output and the two corrections it forced are in
+`results/2026-08-29-ortools-linked.txt`.
 
-Order of work:
+Remaining:
 
-1. Link OR-Tools, run `make bench`, check it against the recorded numbers below.
-2. If it matches, commit the C++ output to `results/` as the new source of truth.
-3. If it does not match, the formulation has a bug and the recorded numbers are
-   wrong. Fix that before writing any harness.
+- Reconcile the instance generators. The C++ generator and the deleted Python
+  one produce different feasibility densities (1,625 vs 859 pairs at ~200 lots),
+  which is why the lift figures differ. Until they agree, cross-harness numbers
+  cannot be quoted together.
+- Map PySCFabSim's metrics (throughput, cycle time, tardiness under FIFO/CR/PPO)
+  onto the dispatcher's assignment objective. This is a real modelling question,
+  not glue code: the baseline optimises a schedule over time, the dispatcher
+  optimises an assignment at an instant. Deciding what a fair comparison even
+  means is the work.
+- Only then is there a harness worth writing.
 
 ## Recorded numbers, and their provenance
 
 Everything below came from a Python implementation (`tools/cpsat_bench.py`) that
-was **deliberately deleted** — keeping two implementations of one model is the
+was **deliberately deleted**, and is SUPERSEDED by
+`results/2026-08-29-ortools-linked.txt`. Kept for provenance. Everything below — keeping two implementations of one model is the
 dual-implementation problem the port to `src/test_main.cpp` removed. So these
 are the claim to be reproduced, not evidence.
 

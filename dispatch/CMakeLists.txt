@@ -15,8 +15,14 @@ option(FAB_HAVE_HIGHS   "Build with HiGHS MILP solver"      OFF)
 add_executable(fabdisp src/e2e_main.cpp)
 target_include_directories(fabdisp PRIVATE include)
 
+# The test/benchmark binary. It is the thing that has to prove CP-SAT beats
+# greedy, so it must be buildable with the same backend flags as the dispatcher.
+add_executable(fabtest src/test_main.cpp)
+target_include_directories(fabtest PRIVATE include)
+
 find_package(Threads REQUIRED)
 target_link_libraries(fabdisp PRIVATE Threads::Threads)
+target_link_libraries(fabtest PRIVATE Threads::Threads)
 
 if(FAB_HAVE_RDKAFKA)
   # apt install librdkafka-dev
@@ -27,8 +33,10 @@ endif()
 if(FAB_HAVE_ORTOOLS)
   # https://developers.google.com/optimization/install/cpp
   find_package(ortools CONFIG REQUIRED)
-  target_compile_definitions(fabdisp PRIVATE FAB_HAVE_ORTOOLS)
-  target_link_libraries(fabdisp PRIVATE ortools::ortools)
+  foreach(t fabdisp fabtest)
+    target_compile_definitions(${t} PRIVATE FAB_HAVE_ORTOOLS)
+    target_link_libraries(${t} PRIVATE ortools::ortools)
+  endforeach()
 endif()
 
 if(FAB_HAVE_GUROBI)
