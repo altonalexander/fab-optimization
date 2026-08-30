@@ -155,7 +155,8 @@ populated the moment it starts rather than filling in over the next hour.
 
 ## Running it
 
-**The dashboard.** The simulator runs in two modes:
+**The dashboard.** The simulator runs in two modes — the same run loop
+(`bench/tools/sim_runner.py`) with a different plugin riding it:
 
 *Mode 1 — headless.* No broker, no feed, no pacing, as fast as possible.
 This is what you use for KPIs and parameter tuning:
@@ -197,12 +198,19 @@ Ctrl-C the producer to pause; rerun it to resume. The API consumer starts at
 **Tests:**
 
 ```bash
-cd dispatch && make test     # 56/56, the C++ suite
-scripts/smoke.sh             # 15 assertions over the API, producer, floorplan
+cd dispatch && make test        # 56/56, the C++ suite
+scripts/smoke.sh                # 16 assertions over the API, producer, floorplan
+python3 bench/tools/t_sim_runner.py   # the shared dispatch loop, any interpreter
 ```
 
 `smoke.sh` runs on :8111 so it can stand beside a running dev API. Every
 assertion in it corresponds to a bug that actually shipped.
+
+`t_sim_runner.py` is the one test here that needs nothing — no venv, no
+dataset, no broker. It fakes the instance to pin the loop in
+`bench/tools/sim_runner.py`, which both `tool_probe.py` and `sim_feed.py` run
+on, so a break there would take out the measurements and the dashboard feed
+together. `smoke.sh` runs it first for that reason.
 
 **The full four-zone stack:**
 
