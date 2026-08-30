@@ -281,8 +281,17 @@ public:
             cp.AddEquality(LinearExpr::Sum(by_lot[l]), 0).OnlyEnforceIf(unassigned);
             cp.AddEquality(LinearExpr::Sum(by_lot[l]), 1).OnlyEnforceIf(Not(unassigned));
             // Urgency then orders WHICH lots win when capacity is short.
-            const double urgency = m.lot_priority[l] *
-                (1.0 + 3600.0 / std::max(m.lot_slack_s[l], 60.0));
+            //
+            // Floored at 1.0, and that floor is load-bearing. Anchoring to
+            // max_cost only guarantees "running beats idling" while the
+            // multiplier is >= 1. Priority below 1 is legal -- producer_sim
+            // draws from 0.8 -- and with generous slack the 3600/slack term
+            // decays to ~0, leaving urgency ~= priority < 1. The penalty then
+            // falls BELOW the worst-tool cost and the solver correctly prefers
+            // to leave that lot unrun: the same silent idle the max_cost anchor
+            // above was introduced to eliminate, surviving in a narrow band.
+            const double urgency = std::max(1.0, m.lot_priority[l] *
+                (1.0 + 3600.0 / std::max(m.lot_slack_s[l], 60.0)));
             obj += static_cast<int64_t>(max_cost * 100 * urgency) * unassigned;
         }
         cp.Minimize(obj);

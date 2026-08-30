@@ -1,11 +1,11 @@
 """
 sim_feed -- run PySCFabSim as a producer for the dashboard.
 
-This is the missing producer. infra/docker-compose.yml expects a `mes_producer`
-binary built from src/mes_producer_main.cpp, which does not exist -- the
-Dockerfile compiles it with `|| true`, so the failure is silent and the live
-panels stay empty. Rather than write a synthetic C++ producer, use the
-simulator we already trust as the source of events.
+This is the producer. Compose once expected a C++ `mes_producer` built from
+src/mes_producer_main.cpp, which never existed -- the Dockerfile compiled it
+with `|| true`, so the failure was silent and the live panels stayed empty.
+That build step and the service are gone: driving the feed from the simulator
+gives real routes, setups and breakdowns rather than a synthetic stand-in.
 
 Two modes, matching how the simulator is meant to be used:
 
@@ -20,16 +20,23 @@ API cannot tell this apart from Kafka:
 
   {"topic": "fab.lot.events", "payload": "type=LOT_STARTED;lot=...;tool=..."}
 
-Usage:
+Two sinks, same events either way:
 
-  # terminal 1
+  # file -- local dev, no broker needed
   DEMO_LOTS=1 FEED_FILE=/tmp/fab-feed.jsonl scripts/dev-up.sh
-  # terminal 2
   baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
       --out /tmp/fab-feed.jsonl --days 5 --speed 600
 
+  # kafka -- the real transport, once `make infra-up` is running
+  baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+      --kafka localhost:9092 --days 5 --speed 600
+
 --speed is sim-seconds per wall-second: 600 is ten minutes a second. Use 0 to
 emit as fast as the sim runs (fills the dashboard immediately, no pacing).
+
+--from-day / --to-day record a window. A full 730-day run is ~39M events and
+4.3 GB; a window is megabytes. The simulation still runs from t=0 either way,
+so the window changes what is recorded, never what is simulated.
 """
 import argparse
 import json
@@ -56,6 +63,59 @@ def envelope(**kv):
     return ';'.join(f'{k}={v}' for k, v in kv.items() if v is not None)
 
 
+class FileSink:
+    """JSONL to a file the API tails. The line-buffered flush matters: the
+    reader is following the file, and buffering would stall the dashboard."""
+
+    def __init__(self, path, truncate):
+        self.f = open(path, 'w' if truncate else 'a', buffering=1)
+        self.label = path
+
+    def write(self, topic, payload):
+        self.f.write(json.dumps({'topic': topic, 'payload': payload}) + '\n')
+        self.f.flush()
+
+    def close(self):
+        self.f.close()
+
+
+class KafkaSink:
+    """The same events onto the real transport.
+
+    Topic and payload are identical to the file path, so api/main.py's Kafka
+    consumer and its FEED_FILE tail decode the same bytes -- that equivalence
+    is the point, and it is what lets the file mode be a shortcut rather than a
+    fork.
+    """
+
+    def __init__(self, brokers):
+        from confluent_kafka import Producer
+        self.p = Producer({
+            'bootstrap.servers': brokers,
+            # A dashboard feed must never block the simulation; drop before
+            # stalling, and say so at the end rather than silently.
+            'queue.buffering.max.messages': 200000,
+            'linger.ms': 50,
+        })
+        self.label = brokers
+        self.dropped = 0
+
+    def write(self, topic, payload):
+        try:
+            self.p.produce(topic, payload.encode('utf-8'))
+        except BufferError:
+            self.dropped += 1
+            self.p.poll(0)
+            return
+        self.p.poll(0)
+
+    def close(self):
+        self.p.flush(10)
+        if self.dropped:
+            print(f'  WARNING: dropped {self.dropped} events (producer queue '
+                  f'full)', file=sys.stderr)
+
+
 class FeedPlugin(IPlugin):
     """Turns simulator callbacks into the two streams the dashboard reads.
 
@@ -64,16 +124,34 @@ class FeedPlugin(IPlugin):
     separate so a slow equipment view never gates the decision ranking.
     """
 
-    def __init__(self, out, speed, tool_filter=None):
-        self.out = out
+    def __init__(self, sink, speed, tool_filter=None, from_day=None, to_day=None):
+        self.sink = sink
         self.speed = speed
         self.tool_filter = tool_filter
+        # A 730-day run is ~39M events and 4.3 GB. Recording a window instead
+        # turns that into megabytes without changing the simulation: the sim
+        # still runs from t=0, we just stop writing outside the window.
+        self.from_s = None if from_day is None else from_day * 86400
+        self.to_s = None if to_day is None else to_day * 86400
         self.last_sim_t = None
         self.emitted = 0
+        self.skipped = 0
+
+    def _in_window(self):
+        t = getattr(self, '_now', None)
+        if t is None:
+            return True
+        if self.from_s is not None and t < self.from_s:
+            return False
+        if self.to_s is not None and t > self.to_s:
+            return False
+        return True
 
     def _write(self, topic, payload):
-        self.out.write(json.dumps({'topic': topic, 'payload': payload}) + '\n')
-        self.out.flush()          # the API tails this; buffering would stall it
+        if not self._in_window():
+            self.skipped += 1
+            return
+        self.sink.write(topic, payload)
         self.emitted += 1
 
     def _pace(self, sim_t):
@@ -89,6 +167,7 @@ class FeedPlugin(IPlugin):
         return f'{machine.family}_{machine.idx}'
 
     def on_sim_init(self, instance):
+        self._now = instance.current_time
         # Announce every tool once so the dashboard has a roster before any
         # lot moves; otherwise tools only appear as they are first used.
         for m in instance.machines:
@@ -98,6 +177,7 @@ class FeedPlugin(IPlugin):
                 type='TOOL_STATUS', tool=self._name(m), online=1))
 
     def on_dispatch(self, instance, machine, lots, machine_end_time, lot_end_time):
+        self._now = instance.current_time
         if self.tool_filter and not self._name(machine).startswith(self.tool_filter):
             return
         self._pace(instance.current_time)
@@ -112,9 +192,11 @@ class FeedPlugin(IPlugin):
             setup=machine.current_setup or '-'))
 
     def on_lot_done(self, instance, lot):
+        self._now = instance.current_time
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=lot.name))
 
     def on_lots_release(self, instance, lots):
+        self._now = instance.current_time
         for lot in lots:
             self._write(LOT_TOPIC, envelope(
                 type='LOT_READY', lot=lot.name,
@@ -149,8 +231,10 @@ class FeedPlugin(IPlugin):
 
 def main():
     p = argparse.ArgumentParser(description='run PySCFabSim as a dashboard feed')
-    p.add_argument('--out', required=True,
-                   help='JSONL file the API tails (its FEED_FILE)')
+    sink = p.add_mutually_exclusive_group(required=True)
+    sink.add_argument('--out', help='JSONL file the API tails (its FEED_FILE)')
+    sink.add_argument('--kafka', metavar='BROKERS',
+                      help='publish to Kafka instead, e.g. localhost:9092')
     p.add_argument('--dataset', default='SMT2020_HVLM')
     p.add_argument('--days', type=int, default=5)
     p.add_argument('--dispatcher', default='fifo')
@@ -159,7 +243,11 @@ def main():
                    help='sim-seconds per wall-second; 0 = unpaced')
     p.add_argument('--tool-prefix', default=None,
                    help='only emit for tools whose name starts with this '
-                        '(e.g. Litho) -- the full fab is ~22k events/sim-day')
+                        '(e.g. Litho) -- the full fab is ~53k events/sim-day')
+    p.add_argument('--from-day', type=float, default=None,
+                   help='only emit from this simulated day onward')
+    p.add_argument('--to-day', type=float, default=None,
+                   help='stop emitting after this simulated day')
     p.add_argument('--truncate', action='store_true',
                    help='start the feed file fresh')
     p.add_argument('--batch-strat', default='Demand',
@@ -168,6 +256,9 @@ def main():
 
     if not a.dataset.startswith('SMT2020_'):
         a.dataset = 'SMT2020_' + a.dataset
+    if (a.from_day is not None and a.to_day is not None
+            and a.from_day > a.to_day):
+        p.error('--from-day must not exceed --to-day')
 
     from dispatching.dispatcher import dispatcher_map
     from file_instance import FileInstance
@@ -175,19 +266,31 @@ def main():
     from read import read_all
     from greedy import get_lots_to_dispatch_by_machine
 
-    mode = 'w' if a.truncate else 'a'
-    out = open(a.out, mode, buffering=1)
-    print(f'  feeding {a.out}  ({a.dataset}, {a.days}d, {a.dispatcher}, '
+    if a.kafka:
+        try:
+            out = KafkaSink(a.kafka)
+        except ImportError:
+            p.error('confluent-kafka is not installed in this interpreter')
+        except Exception as e:
+            p.error(f'cannot reach Kafka at {a.kafka}: {e}')
+    else:
+        out = FileSink(a.out, a.truncate)
+
+    print(f'  feeding {out.label}  ({a.dataset}, {a.days}d, {a.dispatcher}, '
           f'speed={a.speed:g})', file=sys.stderr)
     if a.tool_prefix:
         print(f'  filtered to tools starting with {a.tool_prefix!r}',
+              file=sys.stderr)
+    if a.from_day is not None or a.to_day is not None:
+        print(f'  window: day {a.from_day if a.from_day is not None else 0}'
+              f' .. {a.to_day if a.to_day is not None else a.days}',
               file=sys.stderr)
 
     files = read_all('datasets/' + a.dataset)
     run_to = 3600 * 24 * a.days
     Randomizer().random.seed(a.seed)
 
-    feed = FeedPlugin(out, a.speed, a.tool_prefix)
+    feed = FeedPlugin(out, a.speed, a.tool_prefix, a.from_day, a.to_day)
     instance = FileInstance(files, run_to, True, [feed], None, a.batch_strat)
     rule = dispatcher_map[a.dispatcher]
 
@@ -207,8 +310,11 @@ def main():
               file=sys.stderr)
 
     out.close()
-    print(f'  emitted {feed.emitted} events through '
-          f'day {instance.current_time/86400:.2f}', file=sys.stderr)
+    msg = (f'  emitted {feed.emitted} events through '
+           f'day {instance.current_time/86400:.2f}')
+    if feed.skipped:
+        msg += f' ({feed.skipped} outside the window)'
+    print(msg, file=sys.stderr)
 
 
 if __name__ == '__main__':

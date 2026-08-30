@@ -874,6 +874,8 @@ def start_feeds():
 
 if __name__ == "__main__":
     start_feeds()
-    app.run(host="0.0.0.0", port=8000, threaded=True)
+    # PORT so a test run can stand beside a dev API instead of fighting it for
+    # :8000. The container path pins 8000 and does not set this.
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), threaded=True)
 else:
     start_feeds()

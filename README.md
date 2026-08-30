@@ -121,11 +121,26 @@ Run `dev-up.sh` directly, not through a pipe — see the note in the script.
 live panels stay empty and `DEMO_LOTS=1` is what keeps the scenario button
 working.
 
+**Tests:**
+
+```bash
+cd dispatch && make test     # 56/56, the C++ suite
+scripts/smoke.sh             # 15 assertions over the API, producer, floorplan
+```
+
+`smoke.sh` runs on :8111 so it can stand beside a running dev API. Every
+assertion in it corresponds to a bug that actually shipped.
+
 **The full four-zone stack:**
 
 ```bash
 cd dispatch
 make infra-up     # docker compose, four networks
+
+# or one zone at a time — profiles: equipment · realtime · data · enterprise
+cd infra && docker compose --profile data up -d
+# containers are named fab-<zone>-<service>, e.g. fab-data-kafka
+
 make verify       # zone declarations
 make reach        # reachability — proves the isolation is real
 make logs
@@ -170,13 +185,23 @@ Honest accounting, because the numbers here have been wrong before:
   and the headline +34.4% lift measures 21–30% across the two harnesses. The
   KPI mapping is an open modelling question, not glue. `bench/INTEGRATION.md`
   proposes the fix: run the dispatcher *inside* PySCFabSim.
-- `dispatch/README.md`'s "at 400 lots a 1s budget is optimal" is **wrong** on
-  the measured build; the threshold is between 1s and 2s. A 1s-tuned cycle would
-  silently run greedy while reporting cpsat linked.
-- `src/mes_producer_main.cpp` and `src/equipment_sim_main.cpp` **do not exist**,
-  but `infra/Dockerfile.simulator` compiles them with `|| true`. The Docker
-  `mes-producer` service therefore cannot supply data. `bench/tools/sim_feed.py`
-  is the working producer; the C++ one has never existed.
+- The tactical cycle needs **≥2s of solve time at 400 lots**, not the ≥1s once
+  stated. A 1s-tuned cycle runs greedy on every tick while the backend table
+  honestly reports `cpsat linked` — no error, no warning, no CP-SAT. Measured
+  and corrected in `dispatch/README.md`; re-measure per deployment rather than
+  inheriting the number.
+- The producer is `bench/tools/sim_feed.py`, which publishes to Kafka or to a
+  file. There was never a C++ `mes_producer`: `Dockerfile.simulator` built it
+  from a source file that does not exist and hid the failure with `|| true`.
+  That build step and the broken compose service are gone.
 - Gurobi and HiGHS are declared backends that fall through to greedy.
+- **The Kafka broker in compose does not start.** `apache/kafka:3.9.0` fails at
+  its storage-format step with `advertised.listeners cannot use the nonroutable
+  meta-address 0.0.0.0`, and it reproduces on a minimal `docker run` with a
+  fully routable `KAFKA_ADVERTISED_LISTENERS`, so it is the image's own
+  env handling, not this compose file. Everything else in the data profile is
+  fine. `sim_feed.py --kafka` is written against the same wire format and is
+  untested end to end until this is resolved — either pin a different image or
+  mount a `server.properties`. Until then use `--out` and `FEED_FILE`.
 
 See `BUILD.md` for the toolchain and the OR-Tools recipe.

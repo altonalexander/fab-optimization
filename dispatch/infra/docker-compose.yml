@@ -62,6 +62,8 @@ services:
   # =========================================================================
 
   amhs-controller:
+    container_name: fab-equipment-amhs-controller
+    profiles: ["all", "equipment"]
     # Stands in for the Murata/Daifuku OHT controller. Speaks HSMS over TCP.
     # >>> PLACEHOLDER: replace with the real controller's IP. This container
     #     exists so the topology is complete and testable.
@@ -71,11 +73,10 @@ services:
     # NOTE: attached to ONE network. It cannot reach Kafka, the UI, or the
     # internet. This is how it must be in production.
 
-  equipment-sim:
-    # Process tools emitting SECS-II events.
-    build: { context: .., dockerfile: infra/Dockerfile.simulator }
-    command: ["/app/equipment_sim", "--hsms", "amhs-controller:5000"]
-    networks: [equipment-net]
+  # equipment-sim REMOVED: it ran /app/equipment_sim, built from
+  # src/equipment_sim_main.cpp, which does not exist. The build hid that with
+  # `|| true`. amhs-controller (hsms_sim) already emits SECS-II traffic on this
+  # network, so the zone stays testable without it.
 
   # =========================================================================
   # ZONE 0 <-> ZONE 1 BOUNDARY — THE ONLY CROSSING
@@ -84,6 +85,8 @@ services:
   # =========================================================================
 
   amhs-adapter:
+    container_name: fab-equipment-amhs-adapter
+    profiles: ["all", "equipment"]
     build: { context: .., dockerfile: infra/Dockerfile.adapter }
     command:
       - /app/amhs_adapter
@@ -107,6 +110,8 @@ services:
   # =========================================================================
 
   dispatcher:
+    container_name: fab-realtime-dispatcher
+    profiles: ["all", "realtime"]
     build: { context: .., dockerfile: infra/Dockerfile.dispatcher }
     command:
       - /app/fabdisp
@@ -142,6 +147,8 @@ services:
   # =========================================================================
 
   kafka:
+    container_name: fab-data-kafka
+    profiles: ["all", "data"]
     image: apache/kafka:3.9.0
     networks: [data-net]
     volumes:
@@ -165,6 +172,8 @@ services:
       retries: 10
 
   kafka-init:
+    container_name: fab-data-kafka-init
+    profiles: ["all", "data"]
     image: apache/kafka:3.9.0
     networks: [data-net]
     depends_on:
@@ -174,13 +183,17 @@ services:
       - ./create-topics.sh:/init/create-topics.sh:ro
     restart: "no"
 
-  mes-producer:
-    # Stands in for the MES lot-tracking feed.
-    build: { context: .., dockerfile: infra/Dockerfile.simulator }
-    command: ["/app/mes_producer", "--brokers", "kafka:9092"]
-    networks: [data-net]
-    depends_on:
-      kafka-init: { condition: service_completed_successfully }
+  # mes-producer REMOVED: it ran /app/mes_producer, built from
+  # src/mes_producer_main.cpp, which does not exist -- also hidden by
+  # `|| true`. The MES feed is bench/tools/sim_feed.py, run from the host
+  # against the published broker:
+  #
+  #   baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+  #       --kafka localhost:9092 --days 3 --speed 400
+  #
+  # Driving it from the simulator gives real routes, setups and breakdowns
+  # instead of a synthetic stand-in, which is why it is not being replaced by
+  # another C++ producer.
 
   # =========================================================================
   # ZONE 2 <-> ZONE 3 BOUNDARY
@@ -189,6 +202,8 @@ services:
   # =========================================================================
 
   api:
+    container_name: fab-data-api
+    profiles: ["all", "data"]
     build: { context: .., dockerfile: infra/Dockerfile.api }
     networks: [data-net, enterprise-net]   # <-- DUAL HOMED, zones 2+3
     environment:
@@ -224,6 +239,8 @@ services:
   # =========================================================================
 
   ui:
+    container_name: fab-enterprise-ui
+    profiles: ["all", "enterprise"]
     build: { context: .., dockerfile: infra/Dockerfile.ui }
     networks: [enterprise-net]
     ports: ["8080:80"]     # the ONLY published port in the whole stack
