@@ -68,7 +68,7 @@ integrity      0 malformed, 0 seq gaps, 0 unknown tools
 | `machine_config.hpp` | Tool class hierarchy, `SolverExporter` (model + LP) |
 | `json.hpp` | Minimal JSON parser (→ nlohmann/simdjson) |
 | `tool_factory.hpp` | Builder registry, config load, validation |
-| `config/fab_tools.json` | Tool master |
+| `config/fab_tools.json` | Tool master — symlink to `fab_tools_lvhm.json` |
 | `events.hpp` | Wire schema, per-source sequencing |
 | `transport.hpp` | `Producer`/`Consumer`; Kafka + in-memory |
 | `state.hpp` | Single-writer `FabState` |
@@ -255,6 +255,26 @@ guidelines and are hard to reproduce.
 Related: **SMAT2022** (`github.com/kwoo-lee/SMAT2022`) extends SMT2020 with the
 AMHS detail our transport layer actually needs. **Minifab** is fine for unit
 tests, too small for performance work.
+
+**Use `tools/smt2020_tool_master.py` for the data in `data/smt2020/`.** It reads
+the authors' tab-separated distribution, which is what this repo ships, and
+derives each tool's kind from behaviour in the data (BATCHMN/BATCHMX for
+furnaces, StepPercent for sampled metrology) rather than from keywords in its
+name. `load_smt2020.py` below expects a JSON repackaging we do not have, and its
+keyword rules match none of SMT2020's abbreviated family names — it would
+silently classify the whole fab as SINGLE_WAFER.
+
+```bash
+python3 tools/smt2020_tool_master.py --scenario LVHM   # -> config/fab_tools_lvhm.json
+```
+
+Produces **913 tools across 105 station families** for LVHM: 10 BATCH_FURNACE
+(Diffusion), 13 METROLOGY (the *_Met areas), 11 LITHO_SCANNER, 71 SINGLE_WAFER.
+SMT2020's 400 `Delay_*` queue-time pseudo-tools are excluded, as `tool_probe.py`
+excludes them. Read the script's header before trusting the numbers: reticles,
+the setup matrix, and per-step process times are all approximated there.
+
+For a JSON repackaging of SMT2020 from elsewhere:
 
 ```bash
 python3 tools/load_smt2020.py --inspect path/to/smt2020.json   # check mapping first
