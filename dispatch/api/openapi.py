@@ -127,6 +127,36 @@ ENRICH = {
                                   "groups": _ARR_OBJ,
                                   "total": {"type": "integer"}}})}},
     },
+    "GET /api/tools/availability": {
+        "responses": {"200": {
+            "description": "Online-tool count over time. Parallel arrays, not "
+                           "objects -- at 2,880 points the object form is "
+                           "several times the bytes, and the strip polls every "
+                           "few seconds. `total` is historical, so early-run "
+                           "roster growth does not read as an outage. Tools "
+                           "restored by inference rather than observation are "
+                           "counted in `recovered`; a climbing number there is "
+                           "a bug to chase, not a healthy steady state.",
+            **_json({"type": "object", "properties": {
+                "ts": {"type": "array", "items": {"type": "number"}},
+                "online": {"type": "array", "items": {"type": "integer"}},
+                "total": {"type": "array", "items": {"type": "integer"}},
+                "now": {"type": "object", "properties": {
+                    "online": {"type": "integer"},
+                    "total": {"type": "integer"},
+                    "down": {"type": "integer"}}},
+                "down_now": {"type": "integer",
+                             "description": "Tools currently held down with no "
+                                            "recovery seen."},
+                "recovered": {"type": "object",
+                              "description": "Count per inference source that "
+                                             "restored a tool.",
+                              "additionalProperties": {"type": "integer"}},
+                "ttl_s": {"type": "number",
+                          "description": "Watchdog TOOL_DOWN_TTL_S."},
+                "sample_s": {"type": "number",
+                             "description": "Availability sampling interval."}}})}},
+    },
     "GET /api/tools/<path:tool_id>": {
         "responses": {
             "200": {"description": "Tool row with recent decisions and events.",
