@@ -310,6 +310,26 @@ export default function CohortBurndown() {
           )
         })}
 
+        {/* Due dates as dots on the zero line: a lot is finished when its
+            burndown reaches y=0, so the dot marks where the line has to land
+            to be on time. Drawn in both modes -- in envelope mode the
+            per-lot due rules are not drawn, and without these the chart shows
+            no deadline at all. Lots in one cohort do not share a due date:
+            they release hours apart, and the weekly prio-20 stream lands in
+            the same product-day bucket with a much tighter allowance. */}
+        {view && view.lots.map((l, i) => {
+          if (!l.due || l.due < view.d0 || l.due > view.d1) return null
+          const dim = focus && focus !== l.lot
+          return (
+            <g key={`due${l.lot}`}>
+              <circle cx={view.x(l.due)} cy={view.y(0)} r={dim ? 2.5 : 3.5}
+                      fill="#dc2626" fillOpacity={dim ? 0.3 : 0.9}
+                      stroke="#fff" strokeWidth="1" />
+              <title>{`${l.lot} due d${(l.due / 86400).toFixed(1)}`}</title>
+            </g>
+          )
+        })}
+
         {view && envelope && (() => {
           // Split the band at the warm-up line and draw each side in its own
           // ink, so the same shape reads as two eras rather than one history.
@@ -455,6 +475,7 @@ export default function CohortBurndown() {
         <span><i style={{ background: '#7c3aed', opacity: 0.3 }} />batch step (observed)</span>
         <span><i style={{ background: HISTORIC }} />warm-up (before sim start)</span>
         <span><i style={{ background: '#6b7280' }} />projected (naive)</span>
+        <span><i style={{ background: '#dc2626', borderRadius: '50%' }} />due date (on zero line)</span>
         <span><i style={{ background: '#b45309' }} />rework jog</span>
         <span><i style={{ background: '#b91c1c' }} />scrapped (&times;)</span>
         <span className="muted">coloured dash = required rate · vertical dash = due date</span>
