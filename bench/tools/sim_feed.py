@@ -52,6 +52,7 @@ import json
 import os
 import sys
 import time
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -68,11 +69,95 @@ LOT_TOPIC = 'fab.lot.events'
 BURNDOWN_TOPIC = 'fab.lot.burndown'
 TOOL_TOPIC = 'fab.tool.events'
 DECISION_TOPIC = 'fab.dispatch.decisions'
+# Compacted. One record per key = the fab as it stands, not its history.
+LOT_STATE_TOPIC = 'fab.lot.state'
+TOOL_STATE_TOPIC = 'fab.tool.state'
+
+# Warm-up is ~3 minutes of CPU per 30 simulated days, so a snapshot is worth
+# keeping. Keyed by everything that changes the trajectory; a cache hit makes a
+# dashboard restart instant instead of re-simulating.
+CACHE_DIR = os.path.join(REPO, 'bench', 'snapshots')
 
 
 def envelope(**kv):
     """events.hpp wire format: k=v;k=v. Values must not contain ; or =."""
     return ';'.join(f'{k}={v}' for k, v in kv.items() if v is not None)
+
+
+def cache_path(dataset, seed, dispatcher, day, batch_strat):
+    name = f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}_day{day:g}.json'
+    return os.path.join(CACHE_DIR, name)
+
+
+def load_snapshot(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        print(f'  cache unreadable ({e}); will re-simulate', file=sys.stderr)
+        return None
+
+
+def save_snapshot(path, snap):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(snap, f)
+    os.replace(tmp, path)      # atomic: a half-written cache is worse than none
+
+
+def snapshot_of(instance, lot_id, machine_name):
+    """The fab as it stands: one record per lot in WIP, one per tool.
+
+    This is what fixes cold start. A mirror rebuilt from the event stream alone
+    only learns a lot exists when that lot next moves, and the lots loaded from
+    WIP.txt are never released at all -- so at any start point, the dashboard
+    under-reports WIP for as long as it takes every lot to touch a tool. A
+    snapshot states the position of everything at once.
+
+    Deliberately positionless about time: the consumer applies it as "this is
+    now", not as history to replay.
+    """
+    # A lot is on a tool iff a LotDoneEvent for it is still pending. The sim
+    # keeps no "currently processing" list -- that fact lives only in the event
+    # queue, so this reads it there rather than inventing a parallel one that
+    # could drift.
+    running = {}
+    for ev in getattr(instance.events, 'arr', []) or []:
+        lots_on = getattr(ev, 'lots', None)
+        machines_on = getattr(ev, 'machines', None)
+        if not lots_on or not machines_on:
+            continue
+        tool = machine_name(machines_on[0])
+        for lot in lots_on:
+            running[lot_id(lot)] = tool
+
+    lots = []
+    for lot in instance.active_lots:
+        lid = lot_id(lot)
+        step = getattr(lot, 'actual_step', None)
+        lots.append({
+            'lot': lid,
+            'product': lot.name,
+            'step': getattr(step, 'step_name', '') if step else '',
+            'setup': getattr(step, 'setup_needed', '') if step else '',
+            'tool': running.get(lid),          # None => waiting, not running
+            'done_steps': len(getattr(lot, 'processed_steps', []) or []),
+        })
+
+    # The sim has no broken flag either; a tool being down is expressed by its
+    # events being pushed out. Snapshot every tool as online and let the
+    # breakdown/PM stream correct it -- a wrong-but-converging roster beats an
+    # invented one, and the deltas arrive within the same cycle.
+    tools = [{'tool': machine_name(m), 'online': 1} for m in instance.machines]
+
+    return {
+        'day': round(instance.current_time / 86400, 4),
+        'lots': lots,
+        'tools': tools,
+    }
 
 
 class FileSink:
@@ -83,8 +168,11 @@ class FileSink:
         self.f = open(path, 'w' if truncate else 'a', buffering=1)
         self.label = path
 
-    def write(self, topic, payload):
-        self.f.write(json.dumps({'topic': topic, 'payload': payload}) + '\n')
+    def write(self, topic, payload, key=None):
+        rec = {'topic': topic, 'payload': payload}
+        if key is not None:
+            rec['key'] = key
+        self.f.write(json.dumps(rec) + '\n')
         self.f.flush()
 
     def close(self):
@@ -120,9 +208,14 @@ class KafkaSink:
         else:
             self.failed += 1
 
-    def write(self, topic, payload):
+    def write(self, topic, payload, key=None):
+        # The key is what makes compaction work: the state topics keep one
+        # record per key, so a keyless write to them would be retained forever
+        # as unrelated history instead of superseding the previous state.
         try:
-            self.p.produce(topic, payload.encode('utf-8'), callback=self._ack)
+            self.p.produce(topic, payload.encode('utf-8'),
+                           key=None if key is None else key.encode('utf-8'),
+                           callback=self._ack)
         except BufferError:
             self.dropped += 1
             self.p.poll(0)
@@ -192,6 +285,15 @@ class FeedPlugin(IPlugin):
         # must redo them. Keeping route fixed is what makes that readable on
         # the chart as a step back up rather than a moving target.
         self._route_len = {}
+        # Identity of this simulation run.
+        #
+        # The burndown topic outlives any one run: restart the feed and Kafka
+        # still holds the previous run's points, with the same lot ids on a
+        # different timeline. Replayed together they interleave into nonsense --
+        # a lot reads as finished at t=773838 and 96 steps from done at
+        # t=817550. Stamping the run lets the consumer drop everything from an
+        # older one instead of drawing both.
+        self.run_id = uuid.uuid4().hex[:8]
 
     def _in_window(self):
         t = getattr(self, '_now', None)
@@ -203,11 +305,11 @@ class FeedPlugin(IPlugin):
             return False
         return True
 
-    def _write(self, topic, payload):
+    def _write(self, topic, payload, key=None):
         if not self._in_window():
             self.skipped += 1
             return
-        self.sink.write(topic, payload)
+        self.sink.write(topic, payload, key)
         self.emitted += 1
 
     def _pace(self, sim_t):
@@ -301,6 +403,7 @@ class FeedPlugin(IPlugin):
 
         self._write(BURNDOWN_TOPIC, envelope(
             type='LOT_PROGRESS',
+            run=self.run_id,
             lot=self._lot_id(lot),
             cohort=self._cohort(lot),
             part=lot.part_name,
@@ -374,6 +477,34 @@ class FeedPlugin(IPlugin):
             # appearing only once it first completes a step.
             self._burn(instance, lot, 'released', reason='none')
 
+    def emit_snapshot(self, snap):
+        """Publish a snapshot to the compacted state topics, keyed.
+
+        Sent before any deltas so the mirror has the whole fab before the first
+        live event lands. Keys are what let compaction collapse this to one
+        record per lot; without them the topic would grow forever and a
+        bootstrapping consumer would read history instead of state.
+        """
+        n = 0
+        for L in snap['lots']:
+            if self.tool_filter and L['tool'] and \
+                    not L['tool'].startswith(self.tool_filter):
+                continue
+            self.sink.write(LOT_STATE_TOPIC, envelope(
+                type='LOT_STATE', lot=L['lot'], product=L['product'],
+                step=L['step'], tool=L['tool'], done_steps=L['done_steps']),
+                key=L['lot'])
+            n += 1
+        for T in snap['tools']:
+            if self.tool_filter and not T['tool'].startswith(self.tool_filter):
+                continue
+            self.sink.write(TOOL_STATE_TOPIC, envelope(
+                type='TOOL_STATE', tool=T['tool'], online=T['online']),
+                key=T['tool'])
+            n += 1
+        self.emitted += n
+        return n
+
     def on_breakdown(self, *args):
         self._tool_event(args, online=0)
 
@@ -419,6 +550,13 @@ def main():
     p.add_argument('--tool-prefix', default=None,
                    help='only emit for tools whose name starts with this '
                         '(e.g. Litho) -- the full fab is ~53k events/sim-day')
+    p.add_argument('--warmup-days', type=float, default=None,
+                   help='simulate this many days first (unpaced, silent), '
+                        'publish a full WIP snapshot, then stream live from '
+                        'there. ~3 min CPU per 30 days; the snapshot is cached')
+    p.add_argument('--snapshot-only', action='store_true',
+                   help='publish the cached snapshot for --warmup-days and '
+                        'exit; no simulation, instant')
     p.add_argument('--from-day', type=float, default=None,
                    help='only emit from this simulated day onward')
     p.add_argument('--to-day', type=float, default=None,
@@ -478,7 +616,37 @@ def main():
     run_to = 3600 * 24 * a.days
     Randomizer().random.seed(a.seed)
 
-    feed = FeedPlugin(out, a.speed, a.tool_prefix, a.from_day, a.to_day,
+    warm_s = None if a.warmup_days is None else a.warmup_days * 86400
+    warmed = warm_s is None
+    cpath = cache_path(a.dataset, a.seed, a.dispatcher,
+                       a.warmup_days or 0, a.batch_strat)
+
+    if a.snapshot_only:
+        if a.warmup_days is None:
+            p.error('--snapshot-only needs --warmup-days to know which cache')
+        snap = load_snapshot(cpath)
+        if snap is None:
+            p.error(f'no cached snapshot at {cpath}; run once without '
+                    f'--snapshot-only to build it')
+        feed = FeedPlugin(out, 0, a.tool_prefix,
+                          burndown=not a.no_burndown, cohort_mode=a.cohort_mode)
+        n = feed.emit_snapshot(snap)
+        out.close()
+        print(f'  published cached snapshot: day {snap["day"]}, '
+              f'{len(snap["lots"])} lots, {n} records', file=sys.stderr)
+        return
+
+    # Suppress emission until the warm-up line, reusing the window machinery:
+    # the sim still runs from t=0 (it must -- it is discrete-event), we simply
+    # do not publish the first N days.
+    from_day = a.warmup_days if warm_s is not None else a.from_day
+    speed = 0.0 if warm_s is not None else a.speed
+    if warm_s is not None:
+        print(f'  warming up to day {a.warmup_days:g} (unpaced, silent) — '
+              f'about {a.warmup_days * 3 / 30:.0f} min of CPU',
+              file=sys.stderr)
+
+    feed = FeedPlugin(out, speed, a.tool_prefix, from_day, a.to_day,
                       burndown=not a.no_burndown, cohort_mode=a.cohort_mode)
     instance = FileInstance(files, run_to, True, [feed], None, a.batch_strat)
     rule = dispatcher_map[a.dispatcher]
@@ -489,6 +657,25 @@ def main():
                 break
             if instance.current_time > run_to:
                 break
+
+            # Cross the warm-up line exactly once: snapshot the fab, start
+            # emitting, and start pacing. Everything before this ran unpaced
+            # with emission suppressed, which is why it takes minutes of CPU
+            # rather than hours of wall clock.
+            if warm_s is not None and not warmed \
+                    and instance.current_time >= warm_s:
+                warmed = True
+                snap = snapshot_of(instance, feed._lot_id, feed._name)
+                save_snapshot(cpath, snap)
+                feed.from_s = None            # stop suppressing
+                feed.speed = a.speed          # start pacing
+                feed.last_sim_t = instance.current_time
+                n = feed.emit_snapshot(snap)
+                print(f'  warm-up complete at day {snap["day"]}: '
+                      f'{len(snap["lots"])} lots in WIP, {n} snapshot records '
+                      f'published (cached to {os.path.relpath(cpath, REPO)})',
+                      file=sys.stderr)
+
             machine, lots = get_lots_to_dispatch_by_machine(instance, rule)
             if lots is None:
                 instance.usable_machines.remove(machine)

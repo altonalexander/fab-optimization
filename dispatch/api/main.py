@@ -116,6 +116,7 @@ class FabMirror:
         # otherwise be repeated on every point.
         self.burndown = deque(maxlen=BURNDOWN_MAX)
         self.lot_meta = {}
+        self.burndown_run = None   # which simulation run the ring belongs to
         self.sim_t = None        # latest simulated time seen, for the "now" rule
 
     def apply(self, topic, ev):
@@ -157,6 +158,25 @@ class FabMirror:
         """
         lot = ev.get("lot")
         if not lot:
+            return
+
+        # A restarted feed republishes onto the same topic with the same lot
+        # ids on a fresh timeline, and the topic outlives any one run. Two
+        # histories for one lot interleave into fiction -- a lot reading as
+        # finished at t=182871 and 21 steps from done at t=221108, which is
+        # what this guard was written for.
+        #
+        # An unstamped point cannot be attributed to a run, so once any run is
+        # known, unstamped points are dropped rather than merged. They come
+        # from a feed older than this field and are always the stale side.
+        run = ev.get("run")
+        if run:
+            if run != self.burndown_run:
+                self.burndown_run = run
+                self.burndown.clear()
+                self.lot_meta.clear()
+                self.sim_t = None
+        elif self.burndown_run is not None:
             return
 
         def f(key, default=0.0):
@@ -308,6 +328,100 @@ def parse_envelope(payload: str) -> dict:
     return out
 
 
+def bootstrap_from_state(Consumer):
+    """Rebuild WIP from the compacted state topics before tailing events.
+
+    Without this the mirror starts empty and learns a lot exists only when that
+    lot next moves. Lots sitting in a long queue stay invisible for hours of
+    simulated time, and the lots loaded from WIP.txt are never released at all,
+    so they never announce themselves. The dashboard then under-reports WIP for
+    as long as it takes every lot to touch a tool.
+
+    Reading these topics from the beginning is cheap precisely because they are
+    compacted: the log holds one record per live key, so "from the beginning"
+    is the current fab, not its history. This is what the compaction setting in
+    create-topics.sh was for.
+    """
+    from confluent_kafka import TopicPartition, OFFSET_BEGINNING
+
+    topics = ["fab.lot.state", "fab.tool.state"]
+    c = Consumer({
+        "bootstrap.servers": KAFKA_BROKERS,
+        # A fresh group every time: this is a rebuild, not a resumable read, so
+        # it must not inherit a committed offset from a previous process.
+        "group.id": f"fab-api-bootstrap-{os.getpid()}",
+        "auto.offset.reset": "earliest",
+        "enable.auto.commit": False,
+    })
+
+    # assign(), not subscribe(). A subscribing consumer returns None for
+    # several seconds while the group rebalances, which is indistinguishable
+    # from "topic is empty" -- the first version of this read 0 records from a
+    # topic holding 3,451 of them. Explicit assignment starts reading
+    # immediately and lets us stop at a known end rather than at a guess.
+    parts, ends = [], {}
+    md = c.list_topics(timeout=10)
+    for t in topics:
+        tmd = md.topics.get(t)
+        if tmd is None or tmd.error is not None:
+            continue
+        for pid in tmd.partitions:
+            tp = TopicPartition(t, pid, OFFSET_BEGINNING)
+            parts.append(tp)
+            _lo, hi = c.get_watermark_offsets(TopicPartition(t, pid), timeout=10)
+            ends[(t, pid)] = hi
+    if not parts:
+        print("[bootstrap] no state topics; starting cold", file=sys.stderr, flush=True)
+        c.close()
+        return
+    c.assign(parts)
+
+    remaining = sum(ends.values())
+    lots = tools = 0
+    idle = 0
+    try:
+        # Read to the high watermark captured above -- a definite end, so this
+        # cannot hang behind a live producer still appending.
+        while remaining > 0 and idle < 20:
+            msg = c.poll(0.5)
+            if msg is None or msg.error():
+                idle += 1
+                continue
+            idle = 0
+            remaining -= 1
+            ev = parse_envelope(msg.value().decode("utf-8", "replace"))
+            if msg.topic() == "fab.lot.state":
+                lot = ev.get("lot")
+                if not lot:
+                    continue
+                tool = ev.get("tool")
+                with mirror.lock:
+                    # A snapshot record is authoritative: it replaces whatever
+                    # the mirror believed, in both directions.
+                    mirror.lots_ready.pop(lot, None)
+                    mirror.in_flight.pop(lot, None)
+                    if tool:
+                        mirror.in_flight[lot] = tool
+                    else:
+                        mirror.lots_ready[lot] = ev
+                lots += 1
+            else:
+                tool = ev.get("tool")
+                if tool:
+                    with mirror.lock:
+                        mirror.tools[tool] = {
+                            "online": ev.get("online") != "0",
+                            "last_seen": time.time(),
+                        }
+                    tools += 1
+    except Exception as e:
+        print(f"[bootstrap] {e!r}", file=sys.stderr, flush=True)
+    finally:
+        c.close()
+    print(f"[bootstrap] {lots} lots, {tools} tools from compacted state",
+          file=sys.stderr, flush=True)
+
+
 def kafka_consumer_loop():
     """Consume-only. This function never produces."""
     try:
@@ -322,8 +436,9 @@ def kafka_consumer_loop():
         "auto.offset.reset": "latest",
         "enable.auto.commit": True,      # a mirror may lose its place safely
     })
+    bootstrap_from_state(Consumer)
     c.subscribe(["fab.lot.events", "fab.tool.events", "fab.dispatch.decisions",
-                     "fab.lot.burndown"])
+                 "fab.lot.burndown"])
     app.logger.info("kafka mirror attached to %s", KAFKA_BROKERS)
 
     while True:
