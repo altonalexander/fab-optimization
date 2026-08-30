@@ -56,6 +56,21 @@ SIM_CONTROL_FILE = os.getenv(
 # What the dashboard offers. 0 would mean unpaced, which floods the browser,
 # so it is deliberately not on the menu.
 SIM_SPEEDS = [1, 10, 20, 50, 100, 400]
+# Tool recovery watchdog. TOOL_STATUS is the only thing that marks a tool
+# down, so a lost, filtered, or never-emitted online=1 leaves it down forever
+# and the roster decays to all-down -- which is what it did before the feed
+# learned to emit recoveries. Two cheap guards, neither of which invents a
+# state the fab has not shown us:
+#   * activity beats status. A tool that starts a lot is running, whatever its
+#     last status said, so we mark it back up.
+#   * nothing stays down forever. Past TOOL_DOWN_TTL_S of wall clock with no
+#     word either way we assume up and say so in the row.
+# Both are deliberately blunt. This is a dashboard, not the MES.
+TOOL_DOWN_TTL_S = float(os.getenv("TOOL_DOWN_TTL_S", "900"))
+# Availability ring for the tool-index sparkline. One point per sample, so
+# 5s x 2880 is four hours of history at a fixed, tiny memory cost.
+AVAIL_SAMPLE_S  = float(os.getenv("AVAIL_SAMPLE_S", "5"))
+AVAIL_MAX       = int(os.getenv("AVAIL_MAX", "2880"))
 
 # ---------------------------------------------------------------------------
 # Live state, rebuilt from the Kafka event stream.
@@ -129,6 +144,13 @@ class FabMirror:
         self.burndown = deque(maxlen=BURNDOWN_MAX)
         self.lot_meta = {}
         self.sim_t = None        # latest simulated time seen, for the "now" rule
+        # tool_id -> wall clock when it was last marked down, for the watchdog.
+        self.down_since = {}
+        # tool_id -> why it came back ("status" | "activity" | "watchdog"),
+        # so a restored tool is auditable rather than just quietly online.
+        self.recovered_by = {}
+        # (ts, online, total) samples for the tool-index availability chart.
+        self.availability = deque(maxlen=AVAIL_MAX)
 
     def apply(self, topic, ev):
         with self.lock:
@@ -144,6 +166,9 @@ class FabMirror:
                 self.in_flight[lot] = ev.get("tool")
                 if ev.get("tool"):
                     self.tool_stats[ev["tool"]]["started"] += 1
+                    # A tool that just started a lot is up, whatever the last
+                    # status event claimed.
+                    self._mark_up(ev["tool"], "activity")
             elif t == "LOT_COMPLETE":
                 # Credit the completion to whichever tool was running it, which
                 # only in_flight knows -- the event itself carries no tool.
@@ -154,11 +179,67 @@ class FabMirror:
             elif t == "LOT_PROGRESS":
                 self._apply_progress(ev)
             elif t == "TOOL_STATUS":
-                self.tools[ev.get("tool")] = {
-                    "online": ev.get("online") != "0",
+                tool = ev.get("tool")
+                online = ev.get("online") != "0"
+                self.tools[tool] = {
+                    "online": online,
                     "last_seen": time.time(),
+                    "reason": ev.get("reason"),
+                    # Advertised outage length, when the feed knows it. Lets
+                    # the UI say "back in ~40 min" instead of just "down".
+                    "down_s": _as_float(ev.get("down_s")),
                 }
+                if online:
+                    self._mark_up(tool, "status")
+                else:
+                    self.down_since.setdefault(tool, time.time())
+                    self.recovered_by.pop(tool, None)
         self._fanout({"kind": "event", "topic": topic, "event": ev})
+
+    def _mark_up(self, tool, how):
+        """Put a tool back online. Called with the lock held.
+
+        Idempotent, and a no-op for a tool that was never down, so the ordinary
+        path (every LOT_STARTED) costs one dict lookup.
+        """
+        if not tool:
+            return
+        was_down = tool in self.down_since or \
+            not self.tools.get(tool, {}).get("online", True)
+        if not was_down:
+            return
+        self.down_since.pop(tool, None)
+        meta = self.tools.setdefault(tool, {})
+        meta["online"] = True
+        meta["last_seen"] = time.time()
+        meta.pop("reason", None)
+        meta.pop("down_s", None)
+        # "status" is the fab telling us; the other two are us inferring it.
+        # Only the inferences are worth flagging in the UI.
+        if how == "status":
+            self.recovered_by.pop(tool, None)
+        else:
+            self.recovered_by[tool] = how
+
+    def sweep_and_sample(self):
+        """Watchdog tick: restore anything stuck down, then record a point.
+
+        One thread does both because they read the same state, and doing them
+        together means the chart never shows a fab that the sweep is about to
+        change.
+        """
+        now = time.time()
+        with self.lock:
+            for tool, since in list(self.down_since.items()):
+                if now - since >= TOOL_DOWN_TTL_S:
+                    self._mark_up(tool, "watchdog")
+            ids = set(self.tools) | set(self.tool_stats)
+            total = len(ids)
+            online = sum(1 for t in ids
+                         if self.tools.get(t, {}).get("online", True))
+            if total:
+                self.availability.append((now, online, total))
+            return online, total
 
     def _apply_progress(self, ev):
         """One burndown point. Called with the lock held.
@@ -391,11 +472,20 @@ def bootstrap_from_state(Consumer):
             else:
                 tool = ev.get("tool")
                 if tool:
+                    online = ev.get("online") != "0"
                     with mirror.lock:
                         mirror.tools[tool] = {
-                            "online": ev.get("online") != "0",
+                            "online": online,
                             "last_seen": time.time(),
                         }
+                        # Snapshots restore down tools too. Arm the watchdog
+                        # for them, or a tool that was offline when the
+                        # snapshot was taken is never swept.
+                        if online:
+                            mirror.down_since.pop(tool, None)
+                            mirror.recovered_by.pop(tool, None)
+                        else:
+                            mirror.down_since.setdefault(tool, time.time())
                     tools += 1
     except Exception as e:
         print(f"[bootstrap] {e!r}", file=sys.stderr, flush=True)
@@ -642,11 +732,20 @@ def _tool_row(tool_id):
         meta = mirror.tools.get(tool_id, {})
         s = dict(mirror.tool_stats.get(tool_id, {}))
         running = [l for l, t in mirror.in_flight.items() if t == tool_id]
+        down_since = mirror.down_since.get(tool_id)
+        recovered = mirror.recovered_by.get(tool_id)
     return {
         "id": tool_id,
         "group": tool_group(tool_id),
         "online": meta.get("online", True),
         "last_seen": meta.get("last_seen"),
+        "down_reason": meta.get("reason"),
+        "down_s": meta.get("down_s"),
+        "down_since": down_since,
+        # Set only when the mirror inferred the recovery rather than being
+        # told: "activity" (the tool started a lot) or "watchdog" (down past
+        # the TTL with no word). Absent on a normal online status event.
+        "recovered_by": recovered,
         "dispatches": s.get("dispatches", 0),
         "lots": s.get("lots", 0),
         "started": s.get("started", 0),
@@ -746,6 +845,38 @@ def layout_state():
         })
 
     return jsonify({"ts": time.time(), "cells": cells, "delays": delays})
+
+
+@app.get("/api/tools/availability")
+def tools_availability():
+    """Online-tool count over time, for the strip at the top of the index.
+
+    Returned as parallel arrays rather than objects: at 2,880 points the object
+    form is several times the bytes for the same numbers, and this polls every
+    few seconds. `total` is the roster size -- the reference line the series
+    should be sitting on.
+    """
+    with mirror.lock:
+        pts = list(mirror.availability)
+        stuck = len(mirror.down_since)
+        inferred = Counter(mirror.recovered_by.values())
+        ids = set(mirror.tools) | set(mirror.tool_stats)
+        total = len(ids)
+        online = sum(1 for t in ids
+                     if mirror.tools.get(t, {}).get("online", True))
+    return jsonify({
+        "ts":      [round(p[0], 1) for p in pts],
+        "online":  [p[1] for p in pts],
+        # Historical, not just current: the roster grows as tools announce
+        # themselves, so a flat line drawn at today's total would misread the
+        # early part of the run as an outage.
+        "total":   [p[2] for p in pts],
+        "now":     {"online": online, "total": total, "down": total - online},
+        "down_now": stuck,
+        "recovered": dict(inferred),
+        "ttl_s":   TOOL_DOWN_TTL_S,
+        "sample_s": AVAIL_SAMPLE_S,
+    })
 
 
 @app.get("/api/tools")
@@ -1206,10 +1337,28 @@ def chat():
     return jsonify(result)
 
 
+def availability_loop():
+    """Watchdog + sampler.
+
+    Cheap enough to run unconditionally and independent of the transport: one
+    pass over the roster every AVAIL_SAMPLE_S, which even for the full LVHM
+    fab is a few thousand dict lookups. It runs whether the feed is Kafka, a
+    file, or nothing at all -- a stalled feed is exactly when a tool is most
+    likely to be stranded offline.
+    """
+    while True:
+        try:
+            mirror.sweep_and_sample()
+        except Exception as e:
+            print(f"[availability] {e!r}", file=sys.stderr, flush=True)
+        time.sleep(AVAIL_SAMPLE_S)
+
+
 def start_feeds():
     """FEED_FILE replaces Kafka rather than supplementing it: running both
     would interleave two sources into one mirror and make the state
     unattributable."""
+    threading.Thread(target=availability_loop, daemon=True).start()
     if FEED_FILE:
         threading.Thread(target=feed_file_loop, daemon=True).start()
     else:

@@ -3,6 +3,7 @@ import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
+import ToolAvailability from './ToolAvailability.jsx'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
@@ -483,6 +484,7 @@ function ToolIndex({ query, setQuery, toolHref }) {
 
   return (
     <div>
+      <ToolAvailability />
       <div className="tool-index-head">
         <p className="muted">
           {data.total} tools in {data.groups.length} groups, busiest first.
