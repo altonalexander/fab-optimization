@@ -741,7 +741,14 @@ export default function App() {
       <header>
         <div>
           <h1>Fab Dispatch</h1>
-          <div className="sub">zone 3 · enterprise · read-only mirror</div>
+          <div className="sub">
+            zone 3 · enterprise · read-only mirror ·{' '}
+            {/* Served by the API, not the SPA, so it is a real navigation
+                rather than a router link -- target=_blank keeps the dashboard
+                and its live stream up while you read. */}
+            <a className="sub-link" href="/docs" target="_blank" rel="noreferrer"
+               title="Swagger UI, generated from the API's URL map">API docs</a>
+          </div>
         </div>
         <SpeedControl connected={connected} />
       </header>

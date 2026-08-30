@@ -10,6 +10,15 @@ const target = process.env.VITE_API_TARGET || 'http://localhost:8000'
 export default defineConfig({
   plugins: [react()],
   server: {
-    proxy: { '/api': target, '/health': target }
+    // /docs, /redoc and /openapi.json sit outside /api, so they need naming
+    // explicitly -- without them the SPA fallback answers and the docs link
+    // quietly renders the dashboard again instead of the API reference.
+    proxy: {
+      '/api': target,
+      '/health': target,
+      '/docs': target,
+      '/redoc': target,
+      '/openapi.json': target,
+    }
   }
 })
