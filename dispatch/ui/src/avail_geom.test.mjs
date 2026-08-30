@@ -1,31 +1,46 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { W, H, M, view, points, areaPath } from './avail_geom.js'
+import { W, H, M, WINDOW, view, points, areaPath } from './avail_geom.js'
 
 const seq = (n, f) => Array.from({ length: n }, (_, i) => f(i))
 
-test('a full roster draws flat on the reference line', () => {
-  const v = view(seq(5, i => i), seq(5, () => 100), seq(5, () => 100), 100)
-  assert.equal(v.yMax, 100)
-  // Every point sits at the top of the plot, which is where the dashed total
-  // line is -- so "all online" reads as the series touching the cap.
-  for (let i = 0; i < 5; i++) assert.equal(v.y(100), M.t)
+test('the axis windows to WINDOW below the roster, not to zero', () => {
+  const v = view(seq(5, i => i), seq(5, () => 1300), seq(5, () => 1313), 1313)
+  assert.equal(v.yMax, 1313)
+  assert.equal(v.yMin, 1313 - WINDOW)
+  // The whole point: 13 tools down has to be visibly off the reference line.
+  // Zero-based this was 1% of the plot; windowed it is 13%.
+  const gap = (v.y(1300) - v.y(1313)) / v.ih
+  assert.ok(gap > 0.1, `13 down rendered as ${(100 * gap).toFixed(1)}% of height`)
 })
 
-test('the axis is zero-based, so a small dip stays small', () => {
-  const v = view(seq(2, i => i), [100, 98], [100, 100], 100)
-  const drop = v.y(98) - v.y(100)
-  // 2% of the plot height, not a cliff. A min-based axis would put this at
-  // 100% of the height.
-  assert.ok(Math.abs(drop / v.ih - 0.02) < 1e-9, `drop was ${drop / v.ih}`)
+test('a full roster sits on the reference line at the top', () => {
+  const v = view(seq(3, i => i), seq(3, () => 1313), seq(3, () => 1313), 1313)
+  assert.equal(v.y(1313), M.t)
 })
 
-test('a growing roster is tracked, not flattened to the latest total', () => {
-  // Tools announce themselves over the first samples: online tracks total, so
-  // the chart must not read the warm-up as a 40% outage.
-  const v = view(seq(3, i => i), [60, 80, 100], [60, 80, 100], 100)
-  assert.equal(v.yMax, 100)
-  assert.ok(v.y(60) > v.y(100), 'early samples sit lower on the plot')
+test('an outage deeper than the window pushes the floor down, not off-plot', () => {
+  // 300 down is well past WINDOW. Clamping instead of expanding would draw a
+  // flat line along the bottom and hide the very event worth seeing.
+  const online = [1313, 1013]
+  const v = view([0, 1], online, [1313, 1313], 1313)
+  assert.ok(v.yMin <= 1013, `floor ${v.yMin} must reach the deepest point`)
+  assert.ok(v.y(1013) <= H - M.b + 1e-9, 'deepest point stays on the plot')
+  assert.ok(v.y(1013) > v.y(1313), 'and is below the top')
+})
+
+test('the floor never goes negative on a small fab', () => {
+  const v = view([0, 1], [8, 6], [10, 10], 10)
+  assert.equal(v.yMin, 0, 'a 10-tool fab windows to zero, not to -90')
+  assert.ok(v.y(0) <= H - M.b + 1e-9)
+})
+
+test('values outside the window clamp onto the plot', () => {
+  const v = view([0, 1], [1300, 1310], [1313, 1313], 1313)
+  // Nothing may render above the top or below the bottom of the plot box.
+  for (const val of [-50, 0, 99999]) {
+    assert.ok(v.y(val) >= M.t - 1e-9 && v.y(val) <= H - M.b + 1e-9, `y(${val})`)
+  }
 })
 
 test('x spans the plot and a single sample pins to the right edge', () => {
@@ -36,25 +51,31 @@ test('x spans the plot and a single sample pins to the right edge', () => {
   assert.equal(v1.x(0), W - M.r, 'newest point lives at the right edge')
 })
 
-test('y clamps, so a bad sample cannot draw outside the plot', () => {
-  const v = view([0, 1], [10, 999], [10, 10], 10)
-  assert.ok(v.y(999) >= M.t && v.y(999) <= H - M.b)
-  assert.ok(v.y(-5) <= H - M.b)
+test('a growing roster is tracked rather than read as an outage', () => {
+  // Tools announce themselves over the first samples, so online tracks total.
+  // Each point must sit on its own roster line, not below a fixed cap.
+  const v = view(seq(3, i => i), [1200, 1280, 1313], [1200, 1280, 1313], 1313)
+  assert.equal(v.yMax, 1313)
+  for (const [on, tot] of [[1200, 1200], [1280, 1280], [1313, 1313]]) {
+    assert.equal(v.y(on), v.y(tot), 'online sits exactly on the roster line')
+  }
 })
 
-test('the area closes on the baseline and needs two points', () => {
-  const v = view([0, 1, 2], [5, 4, 5], [5, 5, 5], 5)
-  const d = areaPath(v, [5, 4, 5])
-  assert.ok(d.startsWith(`M${M.l.toFixed(1)},`), 'opens on the baseline')
-  assert.ok(d.endsWith('Z'), 'closed path')
-  assert.equal(areaPath(view([0], [5], [5], 5), [5]), null)
+test('the area closes on the floor, not on zero', () => {
+  const v = view([0, 1, 2], [1310, 1300, 1305], [1313, 1313, 1313], 1313)
+  const base = v.y(v.yMin).toFixed(1)
+  const d = areaPath(v, [1310, 1300, 1305])
+  assert.ok(d.startsWith(`M${M.l.toFixed(1)},${base}`), `opens on the floor: ${d.slice(0, 30)}`)
+  assert.ok(d.endsWith(`,${base} Z`), 'closes on the floor')
+  assert.ok(Number(base) <= H - M.b + 1e-9, 'floor is inside the plot')
+  assert.equal(areaPath(view([0], [5], [5], 5), [5]), null, 'needs two points')
 })
 
 test('empty input yields no view rather than NaN geometry', () => {
   assert.equal(view([], [], [], 0), null)
 })
 
-test('points are finite for a realistic LVHM series', () => {
+test('points are finite and on-plot for a realistic LVHM series', () => {
   const total = seq(60, () => 1313)
   const online = seq(60, i => 1313 - (i > 20 && i < 40 ? 300 : 27))
   const v = view(seq(60, i => i), online, total, 1313)
