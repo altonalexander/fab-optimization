@@ -30,6 +30,7 @@ export default function ToolAvailability() {
   const pct = 100 * nOnline / total
   const v = view(d.ts, d.online, d.total, total)
   const n = v ? v.n : 0
+  const last = n ? d.online[n - 1] : 0
 
   const inferred = Object.entries(d.recovered || {})
   const state = down === 0 ? 'ok' : (down / total > 0.1 ? 'bad' : 'warn')
@@ -65,7 +66,8 @@ export default function ToolAvailability() {
         <svg viewBox={`0 0 ${W} ${H}`} className="avail-svg" role="img"
              preserveAspectRatio="none"
              aria-label={`${nOnline} of ${total} tools online`}>
-          <line x1={M.l} x2={W - M.r} y1={v.y(0)} y2={v.y(0)} stroke="#e5e7eb" />
+          <line x1={M.l} x2={W - M.r} y1={v.y(v.yMin)} y2={v.y(v.yMin)}
+                stroke="#e5e7eb" />
           <path d={areaPath(v, d.online)} fill="#2563eb" fillOpacity="0.10" />
           {/* The roster itself moves as tools announce themselves, so the
               reference is a series too, not one flat line at today's total. */}
@@ -76,12 +78,20 @@ export default function ToolAvailability() {
           <text x={W - M.r + 6} y={v.y(v.yMax) + 4} fontSize="11" fill="#6b7280">
             {v.yMax.toLocaleString()} total
           </text>
-          <text x={W - M.r + 6} y={v.y(d.online[n - 1]) + 4} fontSize="11"
-                fill={stroke} fontWeight="600">
-            {d.online[n - 1].toLocaleString()}
-          </text>
-          <text x={M.l - 6} y={v.y(0) + 4} textAnchor="end" fontSize="10"
-                fill="#6b7280">0</text>
+          {/* Skipped when it would sit on top of the total label. At full
+              availability the two coincide, and the header already states the
+              number -- an overlapped pair of numbers is worse than one. */}
+          {Math.abs(v.y(last) - v.y(v.yMax)) > 11 && (
+            <text x={W - M.r + 6} y={v.y(last) + 4} fontSize="11"
+                  fill={stroke} fontWeight="600">
+              {last.toLocaleString()}
+            </text>
+          )}
+          {/* The floor is labelled because the axis does NOT include zero --
+              that window is what makes a 25-of-1,313 outage visible at all,
+              and an unlabelled non-zero axis is the misleading version. */}
+          <text x={M.l - 6} y={v.y(v.yMin) + 4} textAnchor="end" fontSize="10"
+                fill="#6b7280">{v.yMin.toLocaleString()}</text>
         </svg>
       )}
     </div>

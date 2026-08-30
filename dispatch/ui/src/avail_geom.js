@@ -6,8 +6,21 @@
 export const W = 900, H = 92
 export const M = { t: 10, r: 56, b: 16, l: 40 }
 
+// How far below the roster the axis reaches by default. A zero-based axis is
+// the textbook choice, but at LVHM scale it is useless: 25 tools down out of
+// 1,313 is 2% of the plot height, so the line pins to the top and every real
+// movement is invisible. The window is what makes an outage legible. It is a
+// fixed count rather than a percentage so the same vertical distance means the
+// same number of tools whatever the fab size.
+export const WINDOW = 100
+
 /**
  * Build the scale and the two series.
+ *
+ * The y-axis spans [yMax - WINDOW, yMax] and does NOT include zero. That is a
+ * deliberate trade: it makes ordinary variation readable at the cost of
+ * exaggerating it, so the axis is labelled at both ends -- an unlabelled
+ * non-zero axis is the actually misleading version.
  *
  * @param {number[]} ts     sample timestamps (seconds)
  * @param {number[]} online tools online at each sample
@@ -20,16 +33,20 @@ export function view(ts, online, total, now) {
   if (!n) return null
   const iw = W - M.l - M.r
   const ih = H - M.t - M.b
-  // Zero-based, always. An axis starting at the series minimum turns a 2% dip
-  // into a visual collapse, which is the single easiest way to misread an
-  // availability chart. yMax is the roster, so the reference line is the top
-  // of the plot and the gap beneath it is the outage, to scale.
   const yMax = Math.max(now || 0, ...total, 1)
-  const y = v => M.t + ih - (Math.max(0, Math.min(v, yMax)) / yMax) * ih
+  // The window is a floor on the range, not a clamp on the data: a big outage
+  // pushes the axis down to keep the line on the plot rather than clipping it
+  // flat against the bottom, which would hide exactly the event that matters
+  // most. Never below zero -- a negative tool count is not a thing.
+  const lowest = Math.min(...online, yMax)
+  const yMin = Math.max(0, Math.min(yMax - WINDOW, lowest - 2))
+  const span = Math.max(1, yMax - yMin)
+  const y = v => M.t + ih -
+    ((Math.max(yMin, Math.min(v, yMax)) - yMin) / span) * ih
   // A single sample has no span to interpolate across; pin it to the right
   // edge, where the newest point always lives.
   const x = i => n < 2 ? M.l + iw : M.l + (i / (n - 1)) * iw
-  return { n, yMax, x, y, iw, ih }
+  return { n, yMax, yMin, span, x, y, iw, ih }
 }
 
 export function points(v, series) {
@@ -38,8 +55,11 @@ export function points(v, series) {
 
 export function areaPath(v, series) {
   if (v.n < 2) return null
-  return `M${v.x(0).toFixed(1)},${v.y(0).toFixed(1)} L${points(v, series)}` +
-         ` L${v.x(v.n - 1).toFixed(1)},${v.y(0).toFixed(1)} Z`
+  // Closes on yMin, the bottom of the plot, not on zero -- zero is off the
+  // axis now, so filling to it would run the shape off the bottom of the SVG.
+  const base = v.y(v.yMin).toFixed(1)
+  return `M${v.x(0).toFixed(1)},${base} L${points(v, series)}` +
+         ` L${v.x(v.n - 1).toFixed(1)},${base} Z`
 }
 
 export function fmtClock(ts) {

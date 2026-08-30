@@ -93,14 +93,19 @@ function useLiveState() {
   return { state, feed, connected, history, link }
 }
 
-function Stat({ label, value, sub, accent }) {
-  return (
-    <div className="stat">
+// `href` makes a tile a link to the view that explains it. A plain <a> rather
+// than an onClick so the hash router, middle-click, and copy-link all keep
+// working for free -- the tile becomes a real URL, not a click handler.
+function Stat({ label, value, sub, accent, href, title }) {
+  const body = (
+    <>
       <div className="stat-label">{label}</div>
       <div className="stat-value" style={accent ? { color: accent } : undefined}>{value}</div>
       {sub && <div className="stat-sub">{sub}</div>}
-    </div>
+    </>
   )
+  if (!href) return <div className="stat">{body}</div>
+  return <a className="stat stat-link" href={href} title={title}>{body}</a>
 }
 
 // Derives the flow graph from the boundary policy itself, so these counts
@@ -749,7 +754,9 @@ export default function App() {
               sub="lots/hr" />
         <Stat label="tools down" value={offline.length}
               accent={offline.length ? '#b91c1c' : undefined}
-              sub={offline.join(', ') || 'all up'} />
+              sub={offline.join(', ') || 'all up'}
+              href={linkTo('/tools')}
+              title="open the tool index" />
       </div>
 
       <div className={assistantOpen ? 'shell' : 'shell shell-collapsed'}>

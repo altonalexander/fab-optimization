@@ -46,6 +46,13 @@ button.live:not(:disabled):hover{border-color:#9ca3af}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
 .stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
 .stat-value{font-size:24px;font-weight:600;margin-top:2px}
+/* A stat tile that links somewhere. Inherits colour so the accent on the
+   value still shows through, and only the border moves on hover -- a stats
+   row that reflows on mouseover is worse than one that does not react. */
+.stat-link{display:block;text-decoration:none;color:inherit;cursor:pointer;
+  transition:border-color .12s,background .12s}
+.stat-link:hover{border-color:#9ca3af;background:#f9fafb}
+.stat-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
 .stat-sub{font-size:11px;color:var(--mut);margin-top:2px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
