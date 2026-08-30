@@ -28,5 +28,15 @@ $K --bootstrap-server $B --create --if-not-exists \
    --topic fab.tool.state --partitions 6 --replication-factor 1 \
    --config cleanup.policy=compact
 
+# Lot state snapshot: same idea, keyed by lot id. This is what solves cold
+# start. Rebuilding WIP from fab.lot.events cannot work -- the mirror only
+# learns a lot exists when it next moves, and the lots loaded from WIP.txt are
+# never released at all, so they emit nothing until they happen to dispatch.
+# Compaction keeps exactly one record per live lot, so a consumer starting from
+# the beginning of this topic reads the fab, not its history.
+$K --bootstrap-server $B --create --if-not-exists \
+   --topic fab.lot.state --partitions 12 --replication-factor 1 \
+   --config cleanup.policy=compact
+
 echo "--- topics ---"
 $K --bootstrap-server $B --list
