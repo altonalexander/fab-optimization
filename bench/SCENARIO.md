@@ -3,11 +3,13 @@
 **Decision (2026-08-30):** every entry point in this repo defaults to the
 SMT2020 **LVHM** scenario. HVLM still runs when passed explicitly.
 
-**Status:** the reasoning below is an argument, not a result. Section 5 lists
-the evidence actually in hand, and one piece of it already pushes back on the
-main rationale. Section 4 gives the tests that would settle it. Nobody should
-quote this document as proof that LVHM is the right load; quote it as the
-statement of what we assumed and how we agreed to find out.
+**Status:** the reasoning below is an argument, and measurement has already
+gone against part of it. Section 5 records a 60-day probe that **falsifies
+assumption 3 and casts serious doubt on assumption 1** — the two mechanisms
+section 2 leads with. LVHM remains the default on a narrower argument. Section 4
+gives the tests that would settle the rest. Do not quote this document as proof
+that LVHM is the right load; quote it as what we assumed and how we agreed to
+find out.
 
 ---
 
@@ -35,6 +37,10 @@ load per process, and each scenario carries its own `tool.txt.1l`. Running
 "both at once" would mean one fab with two contradictory tool sets.
 
 ## 2. Why we picked LVHM
+
+> **Read section 5 first.** The batching and setup mechanisms argued here are
+> the ones measurement has since undermined. This section is kept as written so
+> the original reasoning stays auditable, not because it still stands.
 
 **The argument.** A scenario only tests a dispatcher where the dispatcher's
 decisions are binding. `dispatch/include/fab/solver.hpp` decides: which tool
@@ -85,7 +91,7 @@ Each of these is load-bearing. If one is false, the choice weakens or fails.
    spend most of their queue time waiting for a tool rather than for batch
    partners, the 21-hour accumulation figure is arithmetic without consequence.
 3. **Setups are frequent enough in LVHM to matter.** Ten products sharing tools
-   should thrash setups more than two. Untested.
+   should thrash setups more than two. **Falsified under FIFO — see section 5.**
 4. **The two scenarios can rank dispatch policies differently.** If FIFO, CR and
    the solver rank identically on both, scenario choice is irrelevant and this
    decision is harmless but also pointless.
@@ -169,17 +175,41 @@ bounds; the same-product-and-step batching key; the synchronised release
 cohorts. These are arithmetic over `order.txt`, `tool.txt.1l` and the route
 files, not simulation output.
 
-**From a 30-day LVHM probe (FIFO, seed 0) — transient included:** the five
-busiest tools are all lithography or litho-metrology, at 93.2–93.7% busy, with
-queues up to 140 lots. Their `setup` column reads **0.0%**.
+**From a 60-day LVHM probe (FIFO, seed 0, top 60 tools) — transient included:**
 
-This is the awkward part. It is early, short, and covers only the top five
-tools by utilisation, but as far as it goes it points at **T3's second branch**:
-a capacity bottleneck at litho, not furnaces starved of batch partners. If a
-longer run over all tools confirms it, then assumption 1 is wrong, LVHM is
-testing tool assignment under litho pressure rather than batching, and the
-argument in section 2 needs rewriting even if LVHM survives as the choice for a
-different reason. Do not let that finding quietly disappear.
+| | |
+|---|---|
+| Busiest families | LithoMet (mean 91.1% busy, n=17), Litho (89.5%, n=18), DE (89.0%, n=20), Diffusion (88.3%, n=3) |
+| Setup | max **5.6%**, and only **2 of 60** tools above 1% |
+| Block (idle with lots queued) | max 8.3%, only 3 of 60 above 1% |
+| Queues | `Litho_BE_110` q_avg ~58, q_max ~143 |
+
+**T2 comes back negative: assumption 3 is falsified.** Setup time is essentially
+not incurred in LVHM under FIFO. The "ten products thrash setups more than two"
+story is not supported by the data and should not be repeated.
+
+**T3 comes back on its second branch, and assumption 1 is in serious doubt.**
+The binding constraint is lithography and litho-metrology capacity, not furnaces
+waiting for batch partners. Tools are near-saturated rather than blocked, which
+is the signature of a capacity-bound fab rather than a synchronisation-bound one.
+
+Read honestly, that removes *both* mechanisms section 2 leads with. What survives
+of the case for LVHM is narrower and should be stated as such: ten products give
+a more diverse assignment problem than two, and batch formation still takes ~21
+hours per product whether or not furnaces are currently the tightest constraint.
+That is a weaker argument than the one originally made.
+
+Three caveats before treating this as settled. The run is 60 days, under the
+365-day threshold, so it includes the fill-up transient. It is FIFO only — a
+dispatcher that deliberately groups by setup would change the setup column,
+which is precisely what we would be measuring. And it covers the 60 busiest
+tools, so it says little about the other ~850, including most furnaces (only 3
+Diffusion tools appear in the sample).
+
+**Open action:** re-run T1 (`--batch_strat Min|Max|Demand`) and T2 at 730 days
+before publishing any comparison that leans on LVHM. If T1 also comes back flat,
+the batching rationale is gone entirely and this decision must be re-argued on
+assignment diversity alone — or reversed.
 
 ## 6. The tool master derived from this decision
 
