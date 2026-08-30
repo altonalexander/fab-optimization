@@ -831,14 +831,14 @@ export default function App() {
             ? <ToolDetail id={openTool} backHref={linkTo('/tools')} />
             : <><h3>Tools</h3>
                 <ToolIndex query={query} setQuery={setQuery}
-                           toolHref={id => linkTo(`/tools/${id}`)} /></>}
+                           toolHref={id => linkTo(['tools', id])} /></>}
         </section>
       )}
 
       {tab === 'floor' && (
         <section>
           <h3>Cleanroom floor</h3>
-          <FloorMap onOpenTool={(id) => navigate(`/tools/${id}`)}
+          <FloorMap onOpenTool={(id) => navigate(['tools', id])}
                     sel={query.bay || null}
                     onSel={(k) => setQuery({ bay: k || undefined })}
                     heat={query.heat === '1'}
