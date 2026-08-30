@@ -345,7 +345,7 @@ class Follower:
 def main():
     p = argparse.ArgumentParser(
         description='per-tool behaviour from a PySCFabSim run')
-    p.add_argument('--dataset', default='SMT2020_HVLM')
+    p.add_argument('--dataset', default='SMT2020_LVHM')
     p.add_argument('--days', type=int, default=400)
     p.add_argument('--dispatcher', default='fifo')
     p.add_argument('--seed', type=int, default=0)

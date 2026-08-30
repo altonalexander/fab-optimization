@@ -284,7 +284,7 @@ def main():
     # no broker. Not the operational path -- hidden from --help so it is not
     # reached for by accident.
     sink.add_argument('--out', help=argparse.SUPPRESS)
-    p.add_argument('--dataset', default='SMT2020_HVLM')
+    p.add_argument('--dataset', default='SMT2020_LVHM')
     p.add_argument('--days', type=int, default=5)
     p.add_argument('--dispatcher', default='fifo')
     p.add_argument('--seed', type=int, default=0)

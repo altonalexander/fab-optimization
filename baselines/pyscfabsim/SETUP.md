@@ -14,7 +14,8 @@
 > doi:10.1109/TSM.2020.3001933
 
 Two fab models ship in `datasets/`: **HVLM** (high volume, low mix) and
-**LVHM** (low volume, high mix).
+**LVHM** (low volume, high mix). **This project standardises on LVHM** — it is
+the default everywhere, and HVLM is only used when passed explicitly.
 
 ## The situation being modelled
 
@@ -67,7 +68,7 @@ Sweep size is controlled by environment variables:
 ```bash
 PYSCFABSIM_DAYS=730 \
 PYSCFABSIM_SEEDS=0,1 \
-PYSCFABSIM_MATRIX=HVLM:fifo,HVLM:cr,LVHM:fifo,LVHM:cr \
+PYSCFABSIM_MATRIX=LVHM:fifo,LVHM:cr \
   ./reproduce_dispatcher_experiments.sh
 ```
 
@@ -149,7 +150,7 @@ multiplies sim seconds by 1000); the parser divides them back out.
 Generate the timeline data with:
 
 ```bash
-.venv/bin/python main.py --days 1 --dataset HVLM --dispatcher fifo --seed 0 --chart
+.venv/bin/python main.py --days 1 --dataset LVHM --dispatcher fifo --seed 0 --chart
 ```
 
 A short run is the right choice here — the Gantt is a qualitative view of

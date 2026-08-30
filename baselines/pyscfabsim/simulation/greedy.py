@@ -193,7 +193,7 @@ def run_greedy():
     # Defaults are applied only where the caller did not pass a flag, so the
     # command line actually takes effect.
     if a.dataset is None:
-        a.dataset = 'SMT2020_HVLM'  # 'SMT2020_LVHM' #'SMT2020_HVLM'
+        a.dataset = 'SMT2020_LVHM'
     elif not a.dataset.startswith('SMT2020_'):
         a.dataset = 'SMT2020_' + a.dataset
     if a.days is None:

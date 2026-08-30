@@ -10,10 +10,10 @@ import time
 PYTHON = os.environ.get('PYSCFABSIM_PYTHON') or sys.executable
 DAYS = int(os.environ.get('PYSCFABSIM_DAYS', 365 * 2))
 SEEDS = [int(x) for x in os.environ.get('PYSCFABSIM_SEEDS', '0,1,2,3,4,5,6,7,8,9').split(',')]
-# dataset:dispatcher pairs to sweep. The upstream default runs one rule per
-# dataset; set e.g. 'HVLM:fifo,HVLM:cr' to compare rules on the same fab.
+# dataset:dispatcher pairs to sweep. We standardise on LVHM, so the default
+# compares dispatch rules on the same fab; override to bring HVLM back in.
 MATRIX = [tuple(p.split(':')) for p in
-          os.environ.get('PYSCFABSIM_MATRIX', 'HVLM:fifo,LVHM:cr').split(',')]
+          os.environ.get('PYSCFABSIM_MATRIX', 'LVHM:fifo,LVHM:cr').split(',')]
 os.environ.setdefault('WANDB_MODE', 'offline')
 os.environ.setdefault('WANDB_SILENT', 'true')
 

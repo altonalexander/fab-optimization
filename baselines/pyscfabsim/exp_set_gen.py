@@ -12,7 +12,7 @@ stngrps = [
 ]
 
 for seed in [0]:
-    for dataset, dispatcher in [('HVLM', 'fifo')]:
+    for dataset, dispatcher in [('LVHM', 'fifo')]:
         for action_count in [9]:
             for training_period in [730]:
                 for reward in [2]:
