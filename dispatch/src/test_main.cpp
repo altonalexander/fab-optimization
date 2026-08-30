@@ -37,7 +37,9 @@
 #include <iostream>
 #include <map>
 #include <random>
+#include <fstream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -358,9 +360,33 @@ void test_evaluate_admit_consistency() {
     }
 
     std::mt19937 rng(42);
-    std::vector<std::string> recipes = {"POLY_ETCH","METAL_ETCH","GATE_OX",
-                                        "NITRIDE","OXIDE","M1_EXPOSE",
-                                        "CD_MEASURE","SORT_HOT"};
+
+    // Recipes come from the tool master, not from a hardcoded list. They used
+    // to be literals from the old 12-tool demo fab; when the master was
+    // rederived from LVHM those names stopped existing, nothing was eligible,
+    // and the invariant below passed VACUOUSLY. The admitted>100 guard is what
+    // caught it -- keep both, but remove the reason it can drift.
+    std::vector<std::string> recipes;
+    std::set<std::string> litho_recipes;   // these are the ones needing a reticle
+    {
+        std::ifstream f("config/fab_tools.json");
+        std::stringstream ss; ss << f.rdbuf();
+        auto root = json::parse(ss.str());
+        for (const auto& r : root["active_recipes"].string_list())
+            recipes.push_back(r);
+        // Which recipes carry a reticle is the config's business, not this
+        // test's: any recipe a LITHO_SCANNER is qualified for needs one.
+        for (const auto& j : root["tools"].as_array())
+            if (j["kind"].as_string() == "LITHO_SCANNER")
+                for (const auto& r : j["recipes"].string_list())
+                    litho_recipes.insert(r);
+    }
+    if (recipes.empty()) {
+        t::check(false, "tool master lists active_recipes",
+                 "config/fab_tools.json has no active_recipes to test with");
+        return;
+    }
+
     std::uniform_int_distribution<int> pick(0, (int)recipes.size()-1);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
 
@@ -368,7 +394,7 @@ void test_evaluate_admit_consistency() {
     for (int iter = 0; iter < 4000; ++iter) {
         const std::string rc = recipes[pick(rng)];
         Lot lot = mk("L" + std::to_string(iter), rc,
-                     rc == "M1_EXPOSE" ? "RET_M1_77" : "");
+                     litho_recipes.count(rc) ? ("RET_" + rc) : "");
 
         for (auto* tool : reg.all()) {
             // Randomly perturb tool state so we exercise edge conditions.
