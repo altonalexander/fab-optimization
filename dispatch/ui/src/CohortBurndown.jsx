@@ -156,8 +156,26 @@ export default function CohortBurndown() {
   }, [cohort])
 
   // --- geometry -------------------------------------------------------------
-  const W = 900, H = 420, M = { t: 16, r: 18, b: 40, l: 56 }
-  const iw = W - M.l - M.r, ih = H - M.t - M.b
+  // The chart is drawn at its container's real width rather than at a fixed
+  // 900px scaled down by CSS: scaling the whole SVG shrinks the axis labels
+  // and strokes with it, and on a wide screen it left the panel half empty.
+  // Only the width is measured -- height stays fixed, so the aspect ratio
+  // changes with the window instead of the chart growing unboundedly tall.
+  const wrapRef = useRef(null)
+  const [W, setW] = useState(900)
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([e]) => {
+      const w = Math.round(e.contentRect.width)
+      if (w > 0) setW(prev => (Math.abs(prev - w) >= 1 ? w : prev))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const H = 420, M = { t: 16, r: 18, b: 40, l: 56 }
+  const iw = Math.max(120, W - M.l - M.r), ih = H - M.t - M.b
 
   const view = useMemo(() => {
     if (!data || !data.lots || !data.lots.length) return null
@@ -211,7 +229,7 @@ export default function CohortBurndown() {
   const row = index.cohorts.find(c => c.cohort === cohort)
 
   return (
-    <div className="burndown">
+    <div className="burndown" ref={wrapRef}>
       <div className="burndown-controls">
         <select value={cohort || ''} onChange={e => setCohort(e.target.value)}>
           {index.cohorts.map(c => (
@@ -256,8 +274,9 @@ export default function CohortBurndown() {
         </p>
       )}
 
-      <svg width={W} height={H} className="burndown-svg" role="img"
-           aria-label="cohort burndown">
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`}
+           preserveAspectRatio="xMidYMid meet"
+           className="burndown-svg" role="img" aria-label="cohort burndown">
         {/* batch-step bands: flat spots at these Y values are expected */}
         {batchBands.map(v => (
           <line key={`b${v}`} x1={M.l} x2={W - M.r} y1={view.y(v)} y2={view.y(v)}
@@ -282,8 +301,11 @@ export default function CohortBurndown() {
         })}
         {view && [0, 0.25, 0.5, 0.75, 1].map(f => {
           const t = view.d0 + f * (view.d1 - view.d0)
+          // End ticks anchor inward: centred, the first and last labels hang
+          // past the plot area and get clipped by the SVG viewport.
+          const anchor = f === 0 ? 'start' : f === 1 ? 'end' : 'middle'
           return (
-            <text key={`x${f}`} x={view.x(t)} y={H - 22} textAnchor="middle"
+            <text key={`x${f}`} x={view.x(t)} y={H - 22} textAnchor={anchor}
                   fontSize="10" fill="#6b7280">{fmtDay(t)}</text>
           )
         })}
