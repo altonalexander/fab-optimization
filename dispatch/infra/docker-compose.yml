@@ -52,6 +52,7 @@ networks:
 volumes:
   kafka-data:
   fab-ipc:
+  pg-data:
 
 services:
 
@@ -202,6 +203,39 @@ services:
   # ZONE 2 <-> ZONE 3 BOUNDARY
   # Read-only mirror. This is the ONLY path from fab data to the enterprise.
   # It has NO write path back. A React button must never reach the dispatcher.
+  # =========================================================================
+  # ZONE 2 — RUN STORE
+  # Not live fab state: that is Kafka's compacted topics, and duplicating them
+  # here would give the same fact two homes. This answers the question Kafka
+  # is bad at — comparing RUNS across dispatchers, seeds and scenarios, which
+  # is what bench/ needs and text files stop serving around the fifth run.
+  # =========================================================================
+
+  postgres:
+    container_name: fab-data-postgres
+    profiles: ["all", "data"]
+    image: postgres:16-alpine
+    networks: [data-net]
+    environment:
+      POSTGRES_DB: fab
+      POSTGRES_USER: fab
+      # >>> PLACEHOLDER: a secret, not a literal, outside local dev.
+      POSTGRES_PASSWORD: fab
+      # Schema init only runs on an empty data directory, so editing
+      # postgres-init.sql after first start does nothing until the volume is
+      # dropped. That is a migration, and it should be a deliberate one.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fab -d fab"]
+      interval: 10s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
   # =========================================================================
 
   api:

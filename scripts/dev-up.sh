@@ -96,6 +96,43 @@ if (( missing )); then
   exit 1
 fi
 
+# -------------------------------------------------------------- data zone --
+# Kafka and Postgres, via the dev override that publishes host listeners.
+# Optional on purpose: the API runs without them (empty live panels, DEMO_LOTS
+# keeps the scenario button working), so a missing Docker should degrade the
+# stack rather than stop it.
+info 'data zone'
+DOCKER_OK=0
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  DOCKER_OK=1
+elif command -v docker >/dev/null; then
+  c_warn 'docker present but not reachable (WSL integration? docker group?)'
+else
+  c_warn 'no docker'
+fi
+
+if (( DOCKER_OK )) && [[ "${SKIP_INFRA:-0}" != "1" ]]; then
+  ( cd "$DISPATCH/infra" && docker compose \
+      -f docker-compose.yml -f docker-compose.dev.yml \
+      --profile data up -d kafka kafka-init postgres ) \
+      >"$RUN/infra.log" 2>&1 \
+    && c_ok 'kafka + postgres up' \
+    || c_warn "compose failed, see $RUN/infra.log -- continuing without them"
+  for _ in $(seq 1 30); do
+    docker exec fab-data-postgres pg_isready -U fab -d fab >/dev/null 2>&1 \
+      && { c_ok 'postgres ready on :25432'; break; }
+    sleep 1
+  done
+  # A broker that is up but has no topics looks identical to a broken feed.
+  docker exec fab-data-kafka /usr/bin/kafka-topics \
+      --bootstrap-server localhost:9092 --list 2>/dev/null \
+      | grep -q 'fab.lot.state' \
+    && c_ok 'kafka topics present (incl. compacted state)' \
+    || c_warn 'kafka topics missing -- cold-start bootstrap will find nothing'
+else
+  c_warn 'skipping data zone (SKIP_INFRA=1 or docker unavailable)'
+fi
+
 # ------------------------------------------------------------- api deps ----
 info 'api dependencies'
 API_VENV="$DISPATCH/api/.venv"
@@ -145,7 +182,16 @@ else
   # setsid + </dev/null detaches fully. Without it the child inherits this
   # script's stdout, and a caller piping us (dev-up.sh | tail) blocks forever
   # waiting for a pipe the server is still holding open.
-  ( cd "$DISPATCH" && setsid nohup make api >"$RUN/api.log" 2>&1 </dev/null & echo $! >"$RUN/api.pid" )
+  # Point the mirror at the broker only if one is actually up; otherwise leave
+  # it unset so the API is honestly feedless rather than retrying a dead host.
+  API_ENV=(DEMO_LOTS="${DEMO_LOTS:-1}")
+  if (( DOCKER_OK )) && [[ "${SKIP_INFRA:-0}" != "1" ]]; then
+    API_ENV+=(KAFKA_BROKERS="${KAFKA_BROKERS:-localhost:29092}"
+              PGHOST="${PGHOST:-localhost}" PGPORT="${PGPORT:-25432}"
+              PGDATABASE=fab PGUSER=fab PGPASSWORD=fab)
+  fi
+  ( cd "$DISPATCH" && setsid nohup env "${API_ENV[@]}" make api \
+      >"$RUN/api.log" 2>&1 </dev/null & echo $! >"$RUN/api.pid" )
   c_ok "api starting (log $RUN/api.log)"
 fi
 if [[ -n "$(port_pid "$UI_PORT")" ]]; then
@@ -173,14 +219,28 @@ wait_for "http://localhost:$UI_PORT/api/state"        'ui -> api proxy'    15 ||
 info 'urls'
 echo "    dashboard   http://localhost:$UI_PORT/"
 echo "    api         http://localhost:$API_PORT/health"
+if (( DOCKER_OK )) && [[ "${SKIP_INFRA:-0}" != "1" ]]; then
+  echo "    kafka       localhost:29092"
+  echo "    postgres    postgresql://fab:fab@localhost:25432/fab"
+fi
 echo "    stop        scripts/dev-up.sh --stop"
 
 info 'note'
 cat <<'TXT'
-    The API reads live state from Kafka (KAFKA_BROKERS, default kafka:9092),
-    which this local mode does not start. /api/state stays zeroed and
-    /api/stream stays silent until you run `make infra-up` in dispatch/.
-    Everything above still verifies that the stack is wired and serving.
+    The dashboard is empty until something produces. The API consumer starts
+    at `latest`, and cold start is solved by a snapshot rather than by
+    replaying history:
+
+      # once: simulate 90 days, publish a full WIP snapshot, then stream live
+      baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+          --days 93 --warmup-days 90 --speed 10
+
+      # afterwards: republish that snapshot from cache in ~2s
+      baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+          --warmup-days 90 --snapshot-only
+
+    Postgres is the run store for comparing runs, not live state -- that
+    stays in Kafka's compacted topics.
 TXT
 echo
 exit $rc
