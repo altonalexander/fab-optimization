@@ -337,6 +337,63 @@ it, cite:
 This project standardises on the **LVHM** scenario; HVLM works when passed
 explicitly. See `docs/adr/0001-lvhm-default-scenario.md`.
 
+The copy in `data/smt2020/` is redistributed here with attribution. It
+carries **no licence of its own** — the distribution states no terms at
+all — so read [`data/smt2020/PROVENANCE.md`](data/smt2020/PROVENANCE.md)
+before redistributing it further.
+
+## Citing this work
+
+Machine-readable metadata is in [`CITATION.cff`](CITATION.cff) — GitHub renders
+it as a **Cite this repository** button, and it lists the dependencies below as
+formal references.
+
+```bibtex
+@software{alexander_fab_optimization,
+  author  = {Alexander, Alton},
+  title   = {{fab-optimization}: predictive lot dispatching for a
+             300mm semiconductor fab},
+  year    = {2026},
+  license = {Apache-2.0},
+  url     = {https://github.com/altonalexander/fab-optimization}
+}
+```
+
+If you publish results, cite the two works underneath this one as well. They
+are not incidental: PySCFabSim produced every baseline number reported here,
+and SMT2020 is the load both it and the dispatcher read.
+
+```bibtex
+@article{kopp2020smt2020,
+  author  = {Kopp, Denny and Hassoun, Michael and Kalir, Adar
+             and M\"{o}nch, Lars},
+  title   = {{SMT2020} --- A Semiconductor Manufacturing Testbed},
+  journal = {IEEE Transactions on Semiconductor Manufacturing},
+  year    = {2020},
+  doi     = {10.1109/TSM.2020.3001933}
+}
+
+@software{perron_ortools,
+  author  = {Perron, Laurent and Furnon, Vincent},
+  title   = {{OR-Tools}},
+  version = {9.15.6755},
+  url     = {https://developers.google.com/optimization/}
+}
+
+@software{pyscfabsim,
+  title  = {{PySCFabSim}},
+  note   = {Research Group Production Systems. MIT licence},
+  url    = {https://github.com/prosysscience/PySCFabSim-release}
+}
+```
+
+Quote the `RUN CONFIG` block (below) with any benchmark number, and state the
+OR-Tools version — an unversioned CP-SAT result is not reproducible.
+
+There is no DOI for this repository. If you need a citable, archived version,
+mint one with [Zenodo](https://zenodo.org/), which snapshots a GitHub release
+and issues a DOI; add it to `CITATION.cff` as a `doi:` field afterwards.
+
 ## Quoting benchmark numbers
 
 CP-SAT performance changes between OR-Tools releases, so a solver number

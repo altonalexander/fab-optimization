@@ -93,9 +93,15 @@ REGISTRY = {
       name="SMT2020 Semiconductor Manufacturing Testbed", license="SEE-SOURCE",
       copyright="Kopp, Hassoun, Kalir & Moench (2020); FernUniversitaet in Hagen",
       url="https://p2schedgen.fernuni-hagen.de/index.php/downloads/simulation",
-      note="Dataset, not software. Distributed under its own terms; cite "
-           "doi:10.1109/TSM.2020.3001933. Verify redistribution rights "
-           "before publishing data/smt2020/."),
+      note="Dataset, not software, and NOT covered by this project's "
+           "Apache-2.0 licence. Cite doi:10.1109/TSM.2020.3001933 for any "
+           "published result derived from it. The source distribution states "
+           "NO licence and NO terms of use -- verified against the download "
+           "page and the contents of the official SMT2020.zip, neither of "
+           "which carries any permission language. Redistributed here with "
+           "attribution, following the precedent of the upstream simulator, "
+           "but absence of a licence is not a grant of one. See "
+           "data/smt2020/PROVENANCE.md."),
 }
 
 # Python and JS deps: name -> (licence, copyright)

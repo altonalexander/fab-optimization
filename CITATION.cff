@@ -1,0 +1,73 @@
+cff-version: 1.2.0
+title: >-
+  fab-optimization: predictive lot dispatching for a 300mm
+  semiconductor fab
+message: >-
+  If you use this software or its results, please cite it using the
+  metadata below. Please also cite the two works it depends on: the
+  PySCFabSim baseline simulator and the SMT2020 testbed, both listed
+  under references.
+type: software
+authors:
+  - given-names: Alton
+    family-names: Alexander
+    email: alton@frontanalytics.com
+repository-code: https://github.com/altonalexander/fab-optimization
+license: Apache-2.0
+date-released: 2026-08-30
+keywords:
+  - semiconductor manufacturing
+  - lot dispatching
+  - scheduling
+  - constraint programming
+  - CP-SAT
+  - discrete event simulation
+abstract: >-
+  A predictive lot dispatching system for a 300mm semiconductor fab.
+  Tactical assignment is formulated as a CP-SAT model solved with
+  Google OR-Tools; the contribution is the decomposition and the
+  ranking reformulation -- priority ranking rather than scheduling,
+  tool-group rather than per-tool granularity, and a four-hour
+  horizon -- not the solver. Results are measured against a pinned
+  PySCFabSim baseline reading the same SMT2020 load, so the
+  dispatcher and the baseline are always compared on identical input.
+references:
+  - type: software
+    title: OR-Tools
+    authors:
+      - given-names: Laurent
+        family-names: Perron
+      - given-names: Vincent
+        family-names: Furnon
+    url: https://developers.google.com/optimization/
+    repository-code: https://github.com/google/or-tools
+    version: 9.15.6755
+    notes: >-
+      Provides the CP-SAT solver used for the tactical layer. Pin the
+      version when quoting any benchmark number -- solver performance
+      changes between releases.
+  - type: software
+    title: PySCFabSim
+    url: https://github.com/prosysscience/PySCFabSim-release
+    license: MIT
+    notes: >-
+      The baseline simulator, vendored and modified in
+      baselines/pyscfabsim/. Every comparison number this project
+      reports was produced by it.
+  - type: article
+    title: SMT2020 -- A Semiconductor Manufacturing Testbed
+    authors:
+      - given-names: Denny
+        family-names: Kopp
+      - given-names: Michael
+        family-names: Hassoun
+      - given-names: Adar
+        family-names: Kalir
+      - given-names: Lars
+        family-names: "Mönch"
+    journal: IEEE Transactions on Semiconductor Manufacturing
+    year: 2020
+    doi: 10.1109/TSM.2020.3001933
+    notes: >-
+      The fab dataset both the dispatcher and the baseline read.
+      Cite this for any published result derived from it.
