@@ -1,16 +1,23 @@
-# Dev-only override: publish a Kafka listener to the host.
+# Dev-only override: reach Kafka from the host.
 #
-# WHY THIS IS A SEPARATE FILE
+# WHY THIS IS A SEPARATE FILE, AND WHY IT NEEDS A WHOLE NETWORK
 #
-# The base topology deliberately publishes no broker port. Kafka lives on
-# data-net and is reachable only from inside the fab zones; verify-zones.sh
-# counts published ports and treats them as a violation, which is the whole
-# point of the zone model. In production the MES producer runs INSIDE the data
-# zone -- that is what the (now removed) mes-producer service was for.
+# data-net is declared `internal: true`. That is not incidental -- it is the
+# zone model doing its job: zone 2 has no egress and no ingress. Docker
+# enforces it by disabling external connectivity on the network entirely,
+# which includes port publishing. A `ports:` entry on an internal-only service
+# is accepted into HostConfig.PortBindings and then silently never
+# materialises: NetworkSettings.Ports stays empty, `docker port` prints
+# nothing, and the host gets connection refused with no error anywhere. That
+# silence cost an hour of misdiagnosis; it is the network, not compose.
 #
-# bench/tools/sim_feed.py runs on the host. To let it publish, the broker needs
-# a listener the host can route to. That is a real weakening of the isolation
-# claim, so it is opt-in, named, and never loaded by default:
+# So reaching the broker from the host means giving it a second, non-internal
+# network. That is a real hole in the isolation, which is why it lives here
+# and never in the base file. `make verify` will flag the published port while
+# this override is in use, and it is right to.
+#
+# In production the MES producer runs INSIDE the data zone -- that is what the
+# (now removed) mes-producer service was for -- so none of this exists there.
 #
 #   cd dispatch/infra
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
@@ -21,33 +28,17 @@
 #
 #   KAFKA_BROKERS=localhost:29092 make api
 #
-# Expect `make verify` to flag the published port while this override is in
-# use. That is correct -- it is reporting a real hole, and you asked for it.
-#
 # A second listener rather than a changed one: services inside the zones keep
 # resolving kafka:9092 exactly as before, so the in-cluster path is untouched.
-#
-# STATUS: UNVERIFIED on the machine this was written on. Under Docker Desktop
-# + WSL2 here, compose accepts the binding (HostConfig.PortBindings is set) but
-# it never materialises: NetworkSettings.Ports stays empty, `docker port`
-# prints nothing, and the host gets connection refused. A plain
-# `docker run -p 29099:80 nginx` on the same daemon publishes fine, so it is
-# specific to compose in this setup, not to this file. Adding `expose` did not
-# help; neither did a different host port.
-#
-# The in-cluster path IS verified: a producer and consumer on data-net round
-# trip the real wire format through kafka:9092. So if this override does not
-# work for you either, run the producer inside the zone rather than chasing
-# the port -- that is the production shape anyway.
+
+networks:
+  devhost-net:
+    name: fab-devhost
+    driver: bridge          # deliberately NOT internal -- that is the point
 
 services:
   kafka:
-    # cp-kafka's image EXPOSEs 9092/9093 only. Without this, the 29092 binding
-    # is accepted into HostConfig.PortBindings and then never materialises:
-    # NetworkSettings.Ports stays empty, `docker port` prints nothing, and the
-    # host gets connection refused with no error anywhere.
-    expose:
-      - "29092"
+    networks: [data-net, devhost-net]
     ports:
       - "29092:29092"
     environment:
