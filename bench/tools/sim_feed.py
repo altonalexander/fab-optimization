@@ -55,6 +55,7 @@ import json
 import os
 import sys
 import time
+import uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -106,6 +107,37 @@ def write_control(speed, paused=False):
         os.replace(tmp, CONTROL_FILE)   # atomic: no half-read by the poller
     except OSError:
         pass                            # pacing control is a convenience
+# Warm-up history points kept per lot in the snapshot. The raw history is one
+# point per completed step, so a 583-step route would carry 583 of them and the
+# compacted state topic would hold megabytes per run. Decimated to this many,
+# always keeping the first point, the last, and every rework jog -- the jogs
+# are the informative part and averaging them away would flatten the one thing
+# the history is worth drawing for.
+HIST_POINTS = int(os.environ.get('SIM_FEED_HIST_POINTS', '60'))
+
+
+def decimate(points, cap=HIST_POINTS):
+    """Thin a per-lot history to `cap` points, keeping the shape.
+
+    Endpoints and rework jogs are pinned first, then the remainder is filled
+    evenly. A jog is a point where steps remaining went *up*: the lot was sent
+    back in the line, and that is exactly what a reader is looking for.
+    """
+    if len(points) <= cap:
+        return points
+    keep = {0, len(points) - 1}
+    for i in range(1, len(points)):
+        if points[i][1] > points[i - 1][1]:
+            keep.add(i - 1)
+            keep.add(i)
+    room = cap - len(keep)
+    if room > 0:
+        stride = max(1, len(points) // (room + 1))
+        for i in range(0, len(points), stride):
+            if len(keep) >= cap:
+                break
+            keep.add(i)
+    return [points[i] for i in sorted(keep)]
 
 
 def envelope(**kv):
@@ -137,7 +169,7 @@ def save_snapshot(path, snap):
     os.replace(tmp, path)      # atomic: a half-written cache is worse than none
 
 
-def snapshot_of(instance, lot_id, machine_name):
+def snapshot_of(instance, lot_id, machine_name, history=None):
     """The fab as it stands: one record per lot in WIP, one per tool.
 
     This is what fixes cold start. A mirror rebuilt from the event stream alone
@@ -170,10 +202,20 @@ def snapshot_of(instance, lot_id, machine_name):
         lots.append({
             'lot': lid,
             'product': lot.name,
+            # lot.name is the order stream ("Lot_9", "HotLot_9"); part_name is
+            # the product ("part_9"). The burndown groups cohorts by product,
+            # so it needs the latter -- carrying only `product` here made a
+            # snapshot lot's part disagree with its own cohort id.
+            'part': getattr(lot, 'part_name', '') or lot.name,
             'step': getattr(step, 'step_name', '') if step else '',
             'setup': getattr(step, 'setup_needed', '') if step else '',
             'tool': running.get(lid),          # None => waiting, not running
             'done_steps': len(getattr(lot, 'processed_steps', []) or []),
+            # The burndown this lot walked during warm-up. Without it an active
+            # lot's line can only start at the moment the feed goes live, so
+            # every lot appears to have been created at day N with no past --
+            # the opposite of what a WIP snapshot is for.
+            'hist': decimate(history.get(lid, [])) if history else [],
         })
 
     # The sim has no broken flag either; a tool being down is expressed by its
@@ -184,6 +226,10 @@ def snapshot_of(instance, lot_id, machine_name):
 
     return {
         'day': round(instance.current_time / 86400, 4),
+        # Where history ends and the live stream begins. The chart draws one
+        # side of this line differently from the other, so it has to be a
+        # published fact rather than something the browser guesses.
+        'warm_t': round(instance.current_time, 1),
         'lots': lots,
         'tools': tools,
     }
@@ -308,6 +354,54 @@ class FeedPlugin(IPlugin):
         # spent on. Keyed by lot idx and dropped when the lot completes, so it
         # is bounded by WIP rather than by total lots released.
         self._last_split = {}
+        # Tools taken down by a breakdown or a PM, and the simulated time each
+        # one comes back. PySCFabSim fires a plugin hook when an outage STARTS
+        # but none when it ends -- it just shifts the machine's events forward
+        # by the sampled length -- so without this the feed is one-way and the
+        # dashboard's tool roster decays monotonically to all-down.
+        self._down_until = {}
+        # Last (breakdown, PM) seconds seen per machine. BreakdownEvent.handle
+        # adds the sampled outage length to these counters *before* calling the
+        # plugin, so the delta is the exact length without resampling the
+        # distribution (which would give a different number every time).
+        self._wear = {}
+        # Route length, captured once per lot and reused.
+        #
+        # It cannot be recomputed per event: on the last step the simulator
+        # never appends the final step to processed_steps (the while loop in
+        # instance.py exits before doing so), so processed+remaining reads one
+        # short exactly at completion. Deriving it each time made the route
+        # appear to shrink by 1 on 103 of 2,274 lots -- every completion.
+        #
+        # Rework does NOT change this number. It moves already-processed steps
+        # back onto the front of remaining_steps, so the lot has more steps
+        # *left* but the same total route; it has gone back in the line and
+        # must redo them. Keeping route fixed is what makes that readable on
+        # the chart as a step back up rather than a moving target.
+        self._route_len = {}
+        # Identity of this simulation run.
+        #
+        # The burndown topic outlives any one run: restart the feed and Kafka
+        # still holds the previous run's points, with the same lot ids on a
+        # different timeline. Replayed together they interleave into nonsense --
+        # a lot reads as finished at t=773838 and 96 steps from done at
+        # t=817550. Stamping the run lets the consumer drop everything from an
+        # older one instead of drawing both.
+        self.run_id = uuid.uuid4().hex[:8]
+        # Warm-up burndown, kept rather than thrown away.
+        #
+        # Warm-up runs with emission suppressed, so these points are computed
+        # and then dropped by _write. Recording them here costs nothing extra
+        # and is the only chance to capture them: the simulator does not keep
+        # a lot's step history, so once warm-up has passed, that shape is gone
+        # for good. Keyed by lot id and dropped when a lot completes, so it is
+        # bounded by WIP rather than by every lot ever released.
+        self._hist = {}
+        # Cohort per lot, recorded as lots are seen. A snapshot record has no
+        # release time, and the cohort is defined from it, so it cannot be
+        # recomputed at snapshot time.
+        self._cohort_by_lot = {}
+        self._warm_t = None
 
     def _in_window(self):
         t = getattr(self, '_now', None)
@@ -376,6 +470,23 @@ class FeedPlugin(IPlugin):
                 time.sleep(min(delta, 2.0))
         self.last_sim_t = sim_t
 
+    def _recover_due(self, now):
+        """Bring back every tool whose outage has elapsed.
+
+        Called from the hooks that already carry a simulated clock, so recovery
+        rides the existing event stream rather than needing a timer of its own.
+        A tool with no further activity anywhere in the fab therefore recovers
+        on the next event from any tool -- close enough for a dashboard, and it
+        cannot leave a tool down forever.
+        """
+        if not self._down_until:
+            return
+        due = [t for t, at in self._down_until.items() if at <= now]
+        for tool in due:
+            del self._down_until[tool]
+            self._write(TOOL_TOPIC, envelope(
+                type='TOOL_STATUS', tool=tool, online=1))
+
     def _name(self, machine):
         return f'{machine.family}_{machine.idx}'
 
@@ -437,6 +548,9 @@ class FeedPlugin(IPlugin):
             return
         remaining = len(lot.remaining_steps) + (1 if lot.actual_step is not None else 0)
         done = len(lot.processed_steps)
+        route = self._route_len.get(lot.idx)
+        if route is None:
+            route = self._route_len[lot.idx] = done + remaining
 
         # Attribute the flat run that preceded this point. The simulator keeps
         # cumulative per-lot totals; the delta since this lot's last event is
@@ -453,15 +567,32 @@ class FeedPlugin(IPlugin):
                       'queue' if dq > 0 else
                       'proc' if dp > 0 else 'none')
 
+        self._cohort_by_lot[self._lot_id(lot)] = self._cohort(lot)
+
+        if not self._in_window():
+            # Suppressed: warm-up. Keep the shape instead of discarding it.
+            h = self._hist.setdefault(self._lot_id(lot), [])
+            # Cap defensively. A route is at most 583 steps, but rework can add
+            # to that, and an unbounded list here would be a slow leak.
+            if len(h) < 1500:
+                h.append((round(instance.current_time, 1), remaining))
+            return
+
         self._write(BURNDOWN_TOPIC, envelope(
             type='LOT_PROGRESS',
+            run=self.run_id,
             lot=self._lot_id(lot),
             cohort=self._cohort(lot),
             part=lot.part_name,
             t=round(instance.current_time, 1),
             left=remaining,
             idx=done,
-            route=done + remaining,
+            route=route,
+            # Lot type. SMT2020 gives hot lots priority 20 against 10 for the
+            # rest, and they are released on their own much slower stream, so
+            # they see the fab differently: a rate learned from regular lots
+            # does not describe them.
+            hot=1 if (lot.priority or 0) >= 20 or lot.name.startswith('HotLot') else 0,
             state=state,
             reason=reason,
             # Seconds in the preceding segment, split by cause. Lets the client
@@ -477,6 +608,7 @@ class FeedPlugin(IPlugin):
 
     def on_step_done(self, instance, lot, step):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         self._burn(instance, lot, 'active')
 
     def on_sim_init(self, instance):
@@ -491,6 +623,7 @@ class FeedPlugin(IPlugin):
 
     def on_dispatch(self, instance, machine, lots, machine_end_time, lot_end_time):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         if self.tool_filter and not self._name(machine).startswith(self.tool_filter):
             return
         self._pace(instance.current_time)
@@ -506,12 +639,16 @@ class FeedPlugin(IPlugin):
 
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
         self._burn(instance, lot, 'done')
         self._last_split.pop(lot.idx, None)
+        self._route_len.pop(lot.idx, None)
+        self._hist.pop(self._lot_id(lot), None)
 
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         for lot in lots:
             self._write(LOT_TOPIC, envelope(
                 type='LOT_READY', lot=self._lot_id(lot),
@@ -522,6 +659,16 @@ class FeedPlugin(IPlugin):
             # appearing only once it first completes a step.
             self._burn(instance, lot, 'released', reason='none')
 
+    def _cohort_of(self, lot_id):
+        """Cohort for a snapshot lot.
+
+        Recorded as each lot is first seen during warm-up, because the snapshot
+        record itself carries no release time and the cohort is defined from
+        it. Falls back to the product, which still groups lots that could batch
+        together even if the day bucket is unknown.
+        """
+        return self._cohort_by_lot.get(lot_id) or '?'
+
     def emit_snapshot(self, snap):
         """Publish a snapshot to the compacted state topics, keyed.
 
@@ -531,13 +678,23 @@ class FeedPlugin(IPlugin):
         bootstrapping consumer would read history instead of state.
         """
         n = 0
+        self._warm_t = snap.get('warm_t')
         for L in snap['lots']:
             if self.tool_filter and L['tool'] and \
                     not L['tool'].startswith(self.tool_filter):
                 continue
+            # History rides on the compacted state topic rather than the
+            # burndown stream: compaction keeps exactly one record per lot, so
+            # an API starting up later rebuilds the full picture from it, which
+            # is the whole point of the snapshot. On the burndown topic it
+            # would age out with the deltas.
+            hist = ','.join(f'{int(t)}:{v}' for t, v in (L.get('hist') or []))
             self.sink.write(LOT_STATE_TOPIC, envelope(
                 type='LOT_STATE', lot=L['lot'], product=L['product'],
-                step=L['step'], tool=L['tool'], done_steps=L['done_steps']),
+                part=L.get('part') or L['product'],
+                step=L['step'], tool=L['tool'], done_steps=L['done_steps'],
+                run=self.run_id, warm_t=self._warm_t,
+                cohort=self._cohort_of(L['lot']), hist=hist or None),
                 key=L['lot'])
             n += 1
         for T in snap['tools']:
@@ -551,29 +708,58 @@ class FeedPlugin(IPlugin):
         return n
 
     def on_breakdown(self, *args):
-        self._tool_event(args, online=0)
+        self._tool_down(args, kind='breakdown')
 
     def on_preventive_maintenance(self, *args):
-        self._tool_event(args, online=0)
+        self._tool_down(args, kind='pm')
 
-    def _tool_event(self, args, online):
+    def _outage_length(self, machine, kind):
+        """Seconds this outage will last, taken from the simulator's own books.
+
+        BreakdownEvent.handle() samples the length once and adds it to
+        machine.bred_time (breakdown) or machine.pmed_time (PM) before calling
+        us, so the delta since the last outage on this machine is that exact
+        sample. Resampling event.length instead would give a recovery time
+        unrelated to the one the simulator is actually running.
+        """
+        attr = 'bred_time' if kind == 'breakdown' else 'pmed_time'
+        total = float(getattr(machine, attr, 0.0) or 0.0)
+        key = (id(machine), attr)
+        prev = self._wear.get(key, 0.0)
+        self._wear[key] = total
+        return max(0.0, total - prev)
+
+    def _tool_down(self, args, kind):
         # interface.py declares on_breakdown(machine, event) but events.py
         # calls it as (instance, event) -- accept either rather than trusting
         # the signature.
-        machine = None
+        machine, now = None, getattr(self, '_now', None)
         for a in args:
-            if hasattr(a, 'machine'):
+            if hasattr(a, 'current_time'):
+                now = a.current_time
+            if machine is None and hasattr(a, 'machine'):
                 machine = a.machine
-                break
-            if hasattr(a, 'idx') and hasattr(a, 'family'):
+            elif machine is None and hasattr(a, 'idx') and hasattr(a, 'family'):
                 machine = a
-                break
         if machine is None:
             return
-        if self.tool_filter and not self._name(machine).startswith(self.tool_filter):
+        tool = self._name(machine)
+        if self.tool_filter and not tool.startswith(self.tool_filter):
             return
+        length = self._outage_length(machine, kind)
+        self._now = now
         self._write(TOOL_TOPIC, envelope(
-            type='TOOL_STATUS', tool=self._name(machine), online=online))
+            type='TOOL_STATUS', tool=tool, online=0, reason=kind,
+            down_s=round(length, 1)))
+        if now is not None:
+            # A second outage while already down extends rather than shortens:
+            # whichever end is later is when the tool is actually usable again.
+            self._down_until[tool] = max(self._down_until.get(tool, 0.0),
+                                         now + length)
+        else:
+            # No clock to schedule against. Recover on the next event rather
+            # than stranding the tool offline for the rest of the run.
+            self._down_until[tool] = 0.0
 
 
 def main():
@@ -714,7 +900,8 @@ def main():
             if warm_s is not None and not warmed \
                     and instance.current_time >= warm_s:
                 warmed = True
-                snap = snapshot_of(instance, feed._lot_id, feed._name)
+                snap = snapshot_of(instance, feed._lot_id, feed._name,
+                                   history=feed._hist)
                 save_snapshot(cpath, snap)
                 feed.from_s = None            # stop suppressing
                 feed.speed = a.speed          # start pacing

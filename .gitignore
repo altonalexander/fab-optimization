@@ -5,7 +5,9 @@ dispatch/hsms_sim
 dispatch/amhs_adapter
 dispatch/fabtest
 dispatch/build/
-dispatch/ui/node_modules/
+# No trailing slash: in a git worktree this is usually a symlink to the main
+# checkout's node_modules, and a trailing slash matches only a real directory.
+dispatch/ui/node_modules
 dispatch/ui/dist/
 
 # python

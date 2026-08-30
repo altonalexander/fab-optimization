@@ -79,12 +79,14 @@ const MemoGeometry = /* @__PURE__ */ (() => {
   }
 })()
 
-export default function FloorMap({ onOpenTool }) {
+// sel ("bay,seg") and heat are lifted into the URL by App, so a specific bay
+// with the heatmap on is a link rather than a set of clicks to describe.
+export default function FloorMap({ onOpenTool, sel, onSel, heat, onHeat }) {
   const [layout, setLayout] = useState(null)
   const [state, setState] = useState(null)
-  const [sel, setSel] = useState(null)          // "bay,seg"
+  const setSel = onSel
   const [hover, setHover] = useState(null)
-  const [heat, setHeat] = useState(false)
+  const setHeat = onHeat
   const [err, setErr] = useState(null)
 
   useEffect(() => {

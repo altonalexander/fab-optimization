@@ -79,6 +79,55 @@ integrity      0 malformed, 0 seq gaps, 0 unknown tools
 | `producer_sim.hpp` | Lot/tool event generator |
 | `equipment_sim.hpp` | Closes the start/complete loop |
 
+## Tool availability and recovery
+
+The tool index opens with an availability strip: online tools over time, with
+the roster drawn as a dashed reference line above it. The series should be
+sitting just under the line; the gap is the outage.
+
+It exists because the roster used to decay to nothing and nobody could see it
+happening. `TOOL_STATUS` was a one-way street:
+
+- PySCFabSim fires `on_breakdown` / `on_preventive_maintenance` when an outage
+  *starts*. There is no end-of-outage hook — `BreakdownEvent.handle()` just
+  shifts the machine's pending events forward by the sampled length
+  (`simulation/events.py:71`, `instance.py:260`).
+- So `sim_feed.py` emitted `online=0` and never `online=1`, and the mirror,
+  which trusts the feed absolutely, only ever removed tools from service.
+
+Over a 3-day LVHM run that read **75.8% online and still falling** — 318 of
+1,313 tools stranded, none of which had actually failed. Extrapolated, the
+dashboard shows a dead fab inside a fortnight.
+
+Three guards now, in order of how much they are trusted:
+
+1. **The feed closes its own loop.** `_tool_down` records when the tool is due
+   back and `_recover_due` emits the matching `online=1`. The outage length is
+   read from the simulator's own `bred_time` / `pmed_time` counters, which
+   `handle()` increments *before* calling the plugin — resampling
+   `event.length` instead would schedule a recovery unrelated to the outage the
+   simulator is actually running. Overlapping outages extend rather than
+   double-recover.
+2. **Activity beats status.** A tool that starts a lot is running, whatever its
+   last status event said, so the mirror marks it back up. This alone holds the
+   roster at 97.6% on a feed that emits *zero* recoveries.
+3. **Nothing stays down forever.** Past `TOOL_DOWN_TTL_S` (default 900s wall
+   clock) with no word either way, the watchdog assumes up. This is the one
+   that catches a dropped partition or a `--tool-prefix` filter.
+
+(2) and (3) are inferences, not observations, so a tool restored by either is
+tagged `recovered_by` and the count is shown in the strip. A number that climbs
+there means the feed is lying and the mirror is papering over it — that is a
+bug to chase, not a healthy steady state.
+
+After: **97.8% online, low water 96.7%**, and the outage books balance — every
+down period either closed or is still open at the run horizon.
+
+Guarded by `scripts/smoke.sh` (`tool recovery` and `/api/tools/availability`),
+which fails on the old one-way feed. `dispatch/api/t_feed_recovery.py <feed>`
+checks the producer; `t_watchdog_replay.py <feed>` strips the recoveries back
+out and checks the mirror holds the roster without them.
+
 ## The lots view (cohort burndown)
 
 Remaining route steps per lot against simulated time, one line per lot,
@@ -102,6 +151,97 @@ deliberate and easy to break:
   separately from general queueing, so a horizontal run can be labelled
   *waiting on cohort* from measurement rather than inference.
 
+### Warm-up history
+
+With `--warmup-days N` the feed simulates N days unpaced with emission
+suppressed, then publishes a WIP snapshot and streams live from there. Without
+history, every active lot's burndown would begin at the warm-up line with no
+past -- 2,138 lots all apparently created at day 5, which is the opposite of
+what a WIP snapshot is for.
+
+So warm-up points are recorded rather than discarded. They are computed anyway
+(suppression happens in `_write`, after `_burn`), and this is the only chance to
+capture them: the simulator keeps no per-lot step history, so once warm-up has
+passed the shape is gone.
+
+The history rides on `fab.lot.state`, **not** the burndown stream, because that
+topic is compacted: one record per lot, so an API starting up long after the
+feed still rebuilds every active lot's past. On the burndown topic it would age
+out with the deltas.
+
+Each lot's history is decimated to at most `SIM_FEED_HIST_POINTS` (default 60),
+pinning the endpoints and **every rework jog** first, then filling evenly. The
+jogs are the informative part; thinning them away would flatten the one thing
+the history is worth drawing.
+
+The chart draws warm-up in near-black and everything after the `sim start` rule
+in the live palette. They are separate arrays in the payload (`history` and
+`points`) rather than one merged series, because the distinction is the point:
+a stall during warm-up is not something the run being watched caused.
+`allPoints()` joins them for anything reasoning about shape -- the envelope, the
+y-domain, a value lookup.
+
+A lot released after warm-up simply has no history, and a lot that has not moved
+since the snapshot is drawn from history alone rather than dropped, which is
+what keeps a stalled lot visible.
+
+### The projected line
+
+Each active lot gets a gray dashed ray to a naive completion date:
+
+```
+eta = now + steps_remaining x median_seconds_per_step(product, lot type)
+```
+
+The rate is **learned from what the fab has done**, not from the route's
+nominal process times. Nominal times omit queueing, which is most of the cycle,
+and would project every lot finishing far too early. A sample is one observed
+forward move: elapsed simulated time divided by steps completed. Backward moves
+(rework) are skipped -- they are not progress -- but their cost still lands in
+the model, because the steps a reworked lot redoes are themselves sampled.
+
+Buckets are tried in order and the first with enough samples wins, with the
+`basis` reported alongside every projection so a thin cell is visible rather
+than silently averaged away:
+
+| basis | key | why it is a parameter |
+|---|---|---|
+| `part+type` | product x hot/regular | the default |
+| `part` | product | LVHM routes run 242-583 steps through different families |
+| `type` | hot/regular | hot lots hold priority 20 against 10 and jump queues |
+| `fab` | everything | last resort |
+
+`RATE_MIN_SAMPLES` (default 8) is the threshold for using a narrower bucket.
+
+The ray starts at **now**, not at the lot's last move: a lot that has been
+sitting for two days is still sitting, and starting the ray where it stopped
+would quietly forgive that wait. It assumes no further rework, no tool downtime
+and unchanged queueing -- a reference line to read the real one against, not a
+forecast.
+
+The **due date** is drawn as a vertical dashed rule in the lot's own colour, so
+"ray crosses zero to the right of the rule" means projected late, with nothing
+to read off a legend.
+
+### Rework and scrap
+
+**Rework does not lengthen the route.** The simulator moves already-processed
+steps back onto the front of `remaining_steps`, so the lot has more steps
+*left* while `route` is unchanged -- it has gone back in the line and must redo
+them. `route == steps_done + steps_left` is asserted in the geometry tests.
+Jogs are ringed in amber with the step count on hover.
+
+Getting this wrong is easy: deriving `route` per event undercounts by one
+exactly at completion, because the simulator never appends the final step to
+`processed_steps`. That made the route appear to shrink on 103 of 2,274 lots.
+It is now captured once per lot and reused.
+
+**Scrap** ends a lot's line with a red x and draws no projection, because a
+scrapped lot is not going to complete. Nothing in SMT2020 or PySCFabSim ever
+scraps a lot -- there is no scrap or yield column and no code path -- so this
+is plumbing for a real MES feed, exercised in the tests with a synthetic lot.
+Emit `state=scrapped` on a `LOT_PROGRESS` event to drive it.
+
 A **cohort** is not an SMT2020 concept, so `--cohort-mode` defines it:
 
 | mode | grouping | use |
@@ -114,7 +254,7 @@ Endpoints:
 | Route | Returns |
 |---|---|
 | `GET /api/lots` | cohort index, ranked by last movement, with min/median/max steps left and the spread |
-| `GET /api/lots/<cohort>` | per-lot series for one cohort |
+| `GET /api/lots/<cohort>` | per-lot series, plus a `projection` and a `stats` block per lot |
 
 Points are held in one bounded ring (`BURNDOWN_MAX`, default 150k) rather than
 per-lot series with an eviction policy: LVHM emits ~23k progress events per

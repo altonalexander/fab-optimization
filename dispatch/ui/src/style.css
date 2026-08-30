@@ -46,6 +46,13 @@ button.live:not(:disabled):hover{border-color:#9ca3af}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
 .stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
 .stat-value{font-size:24px;font-weight:600;margin-top:2px}
+/* A stat tile that links somewhere. Inherits colour so the accent on the
+   value still shows through, and only the border moves on hover -- a stats
+   row that reflows on mouseover is worse than one that does not react. */
+.stat-link{display:block;text-decoration:none;color:inherit;cursor:pointer;
+  transition:border-color .12s,background .12s}
+.stat-link:hover{border-color:#9ca3af;background:#f9fafb}
+.stat-link:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
 .stat-sub{font-size:11px;color:var(--mut);margin-top:2px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
@@ -120,6 +127,20 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 
 /* --- assistant ---------------------------------------------------------- */
 /* Tool index / detail ----------------------------------------------------- */
+/* Availability strip above the tool index. Fixed height so the groups below
+   it do not jump as points arrive. */
+.avail{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px 6px;margin-bottom:14px}
+.avail-head{display:flex;justify-content:space-between;align-items:baseline;
+  gap:16px;flex-wrap:wrap}
+.avail-pct{font-size:20px;font-weight:600}
+.avail-ok{color:#15803d}
+.avail-warn{color:#b45309}
+.avail-bad{color:#b91c1c}
+.avail-notes{display:flex;gap:14px;font-size:12px;flex-wrap:wrap}
+.avail-svg{width:100%;height:92px;display:block;margin-top:4px}
+.avail-empty{height:92px;display:flex;align-items:center;font-size:12px}
+
 .tool-index-head{display:flex;justify-content:space-between;align-items:center;
   gap:16px;flex-wrap:wrap}
 .tool-search{padding:7px 11px;border:1px solid var(--line);border-radius:6px;
@@ -270,3 +291,12 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   margin-right: 5px; vertical-align: -1px; border-radius: 2px; }
 .burndown-note { font-size: 11px; line-height: 1.5; margin-top: 8px;
   max-width: 900px; }
+
+
+.burndown-stats { margin-top: 10px; max-width: 560px; }
+.burndown-stats h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: #6b7280; }
+.burndown-stats table { width: 100%; font-size: 12px; }
+.burndown-stats th { text-align: left; font-weight: 500; color: #6b7280;
+  padding: 2px 10px 2px 0; white-space: nowrap; width: 45%; }
+.burndown-stats td { padding: 2px 0; font-variant-numeric: tabular-nums; }

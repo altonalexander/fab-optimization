@@ -57,6 +57,21 @@ SIM_CONTROL_FILE = os.getenv(
 # What the dashboard offers. 0 would mean unpaced, which floods the browser,
 # so it is deliberately not on the menu.
 SIM_SPEEDS = [1, 10, 20, 50, 100, 400]
+# Tool recovery watchdog. TOOL_STATUS is the only thing that marks a tool
+# down, so a lost, filtered, or never-emitted online=1 leaves it down forever
+# and the roster decays to all-down -- which is what it did before the feed
+# learned to emit recoveries. Two cheap guards, neither of which invents a
+# state the fab has not shown us:
+#   * activity beats status. A tool that starts a lot is running, whatever its
+#     last status said, so we mark it back up.
+#   * nothing stays down forever. Past TOOL_DOWN_TTL_S of wall clock with no
+#     word either way we assume up and say so in the row.
+# Both are deliberately blunt. This is a dashboard, not the MES.
+TOOL_DOWN_TTL_S = float(os.getenv("TOOL_DOWN_TTL_S", "900"))
+# Availability ring for the tool-index sparkline. One point per sample, so
+# 5s x 2880 is four hours of history at a fixed, tiny memory cost.
+AVAIL_SAMPLE_S  = float(os.getenv("AVAIL_SAMPLE_S", "5"))
+AVAIL_MAX       = int(os.getenv("AVAIL_MAX", "2880"))
 
 # ---------------------------------------------------------------------------
 # Live state, rebuilt from the Kafka event stream.
@@ -129,7 +144,19 @@ class FabMirror:
         # otherwise be repeated on every point.
         self.burndown = deque(maxlen=BURNDOWN_MAX)
         self.lot_meta = {}
+        self.burndown_run = None   # which simulation run the ring belongs to
+        # Where warm-up ends and the live stream begins. Published by the feed
+        # rather than inferred, because the chart draws the two sides
+        # differently and a guessed boundary would mislabel real history.
+        self.warm_t = None
         self.sim_t = None        # latest simulated time seen, for the "now" rule
+        # tool_id -> wall clock when it was last marked down, for the watchdog.
+        self.down_since = {}
+        # tool_id -> why it came back ("status" | "activity" | "watchdog"),
+        # so a restored tool is auditable rather than just quietly online.
+        self.recovered_by = {}
+        # (ts, online, total) samples for the tool-index availability chart.
+        self.availability = deque(maxlen=AVAIL_MAX)
 
     def apply(self, topic, ev):
         with self.lock:
@@ -145,6 +172,9 @@ class FabMirror:
                 self.in_flight[lot] = ev.get("tool")
                 if ev.get("tool"):
                     self.tool_stats[ev["tool"]]["started"] += 1
+                    # A tool that just started a lot is up, whatever the last
+                    # status event claimed.
+                    self._mark_up(ev["tool"], "activity")
             elif t == "LOT_COMPLETE":
                 # Credit the completion to whichever tool was running it, which
                 # only in_flight knows -- the event itself carries no tool.
@@ -154,12 +184,125 @@ class FabMirror:
                 self.throughput.append((time.time(), self.counts["LOT_COMPLETE"]))
             elif t == "LOT_PROGRESS":
                 self._apply_progress(ev)
+            elif t == "LOT_STATE":
+                self._apply_lot_state(ev)
             elif t == "TOOL_STATUS":
-                self.tools[ev.get("tool")] = {
-                    "online": ev.get("online") != "0",
+                tool = ev.get("tool")
+                online = ev.get("online") != "0"
+                self.tools[tool] = {
+                    "online": online,
                     "last_seen": time.time(),
+                    "reason": ev.get("reason"),
+                    # Advertised outage length, when the feed knows it. Lets
+                    # the UI say "back in ~40 min" instead of just "down".
+                    "down_s": _as_float(ev.get("down_s")),
                 }
+                if online:
+                    self._mark_up(tool, "status")
+                else:
+                    self.down_since.setdefault(tool, time.time())
+                    self.recovered_by.pop(tool, None)
         self._fanout({"kind": "event", "topic": topic, "event": ev})
+
+    def _mark_up(self, tool, how):
+        """Put a tool back online. Called with the lock held.
+
+        Idempotent, and a no-op for a tool that was never down, so the ordinary
+        path (every LOT_STARTED) costs one dict lookup.
+        """
+        if not tool:
+            return
+        was_down = tool in self.down_since or \
+            not self.tools.get(tool, {}).get("online", True)
+        if not was_down:
+            return
+        self.down_since.pop(tool, None)
+        meta = self.tools.setdefault(tool, {})
+        meta["online"] = True
+        meta["last_seen"] = time.time()
+        meta.pop("reason", None)
+        meta.pop("down_s", None)
+        # "status" is the fab telling us; the other two are us inferring it.
+        # Only the inferences are worth flagging in the UI.
+        if how == "status":
+            self.recovered_by.pop(tool, None)
+        else:
+            self.recovered_by[tool] = how
+
+    def sweep_and_sample(self):
+        """Watchdog tick: restore anything stuck down, then record a point.
+
+        One thread does both because they read the same state, and doing them
+        together means the chart never shows a fab that the sweep is about to
+        change.
+        """
+        now = time.time()
+        with self.lock:
+            for tool, since in list(self.down_since.items()):
+                if now - since >= TOOL_DOWN_TTL_S:
+                    self._mark_up(tool, "watchdog")
+            ids = set(self.tools) | set(self.tool_stats)
+            total = len(ids)
+            online = sum(1 for t in ids
+                         if self.tools.get(t, {}).get("online", True))
+            if total:
+                self.availability.append((now, online, total))
+            return online, total
+
+    def _apply_lot_state(self, ev):
+        """A snapshot record: the lot's position, and how it got there.
+
+        The warm-up history rides on this topic because it is compacted -- one
+        record per lot, so an API starting up long after the feed still rebuilds
+        every active lot's past. Called with the lock held.
+        """
+        lot = ev.get("lot")
+        if not lot:
+            return
+
+        run = ev.get("run")
+        if run and run != self.burndown_run:
+            self.burndown_run = run
+            self.burndown.clear()
+            self.lot_meta.clear()
+            self.sim_t = None
+
+        try:
+            self.warm_t = float(ev.get("warm_t")) if ev.get("warm_t") else self.warm_t
+        except (TypeError, ValueError):
+            pass
+
+        raw = ev.get("hist") or ""
+        history = []
+        for chunk in raw.split(","):
+            if not chunk:
+                continue
+            t, _, v = chunk.partition(":")
+            try:
+                history.append({"t": float(t), "left": int(v)})
+            except ValueError:
+                continue
+
+        m = self.lot_meta.setdefault(lot, {})
+        m.setdefault("part", ev.get("part") or ev.get("product") or "?")
+        m.setdefault("cohort", ev.get("cohort") or "?")
+        m.setdefault("release", history[0]["t"] if history else 0.0)
+        m.setdefault("due", 0.0)
+        m.setdefault("prio", 0.0)
+        m.setdefault("hot", False)
+        if history:
+            m["history"] = history
+            # Seed position from the snapshot so a lot that has not moved since
+            # warm-up still has a length and a place on the chart. A later
+            # LOT_PROGRESS overwrites all of this with live truth.
+            m.setdefault("left", history[-1]["left"])
+            m.setdefault("last_t", history[-1]["t"])
+            try:
+                done = int(float(ev.get("done_steps") or 0))
+                m.setdefault("route", done + history[-1]["left"])
+            except (TypeError, ValueError):
+                pass
+        m.setdefault("state", "active")
 
     def _apply_progress(self, ev):
         """One burndown point. Called with the lock held.
@@ -170,6 +313,25 @@ class FabMirror:
         """
         lot = ev.get("lot")
         if not lot:
+            return
+
+        # A restarted feed republishes onto the same topic with the same lot
+        # ids on a fresh timeline, and the topic outlives any one run. Two
+        # histories for one lot interleave into fiction -- a lot reading as
+        # finished at t=182871 and 21 steps from done at t=221108, which is
+        # what this guard was written for.
+        #
+        # An unstamped point cannot be attributed to a run, so once any run is
+        # known, unstamped points are dropped rather than merged. They come
+        # from a feed older than this field and are always the stale side.
+        run = ev.get("run")
+        if run:
+            if run != self.burndown_run:
+                self.burndown_run = run
+                self.burndown.clear()
+                self.lot_meta.clear()
+                self.sim_t = None
+        elif self.burndown_run is not None:
             return
 
         def f(key, default=0.0):
@@ -190,10 +352,13 @@ class FabMirror:
                 "release": f("rel"),
                 "due": f("due"),
                 "prio": f("prio"),
+                "hot": ev.get("hot") == "1",
             }
-        # Route length can grow: rework splices processed steps back onto the
-        # front of the route, so this is a running maximum, not a constant.
-        meta["route"] = max(int(meta.get("route", 0)), int(f("route")))
+        # Route length is constant for the life of the lot. Rework moves already
+        # processed steps back onto the front of the route: the lot has more
+        # steps *left*, but the total it must pass through is unchanged. It has
+        # gone back in the line, not been given extra work.
+        meta["route"] = int(f("route")) or meta.get("route", 0)
         meta["left"] = left
         meta["state"] = state
         meta["last_t"] = t
@@ -213,12 +378,19 @@ class FabMirror:
             for k in done[:2000]:
                 self.lot_meta.pop(k, None)
 
-    def burndown_view(self, cohorts=None, max_lots=400):
+    def burndown_view(self, cohorts=None, max_lots=400, want_points=False):
         """Group the ring into per-lot series. Takes the lock only to copy."""
         with self.lock:
             points = list(self.burndown)
             meta = {k: dict(v) for k, v in self.lot_meta.items()}
             sim_t = self.sim_t
+            warm_t = self.warm_t
+
+        if want_points:
+            # The rate model is fitted over the whole ring, not just the
+            # requested cohort: one cohort is 4-6 lots, far too few samples to
+            # estimate a per-product rate from.
+            self._all_points = points
 
         wanted = set(cohorts) if cohorts else None
         series = {}
@@ -235,7 +407,7 @@ class FabMirror:
                 s = series[lot] = []
             s.append({"t": t, "left": left, "reason": reason,
                       "wq": wq, "wb": wb, "wp": wp, "rem_s": rem_s})
-        return series, meta, sim_t
+        return series, meta, sim_t, warm_t
 
     def add_decision(self, d):
         with self.lock:
@@ -388,15 +560,27 @@ def bootstrap_from_state(Consumer):
                         mirror.in_flight[lot] = tool
                     else:
                         mirror.lots_ready[lot] = ev
+                    # Same record also carries the warm-up burndown, which is
+                    # the only place an active lot's past exists.
+                    mirror._apply_lot_state(ev)
                 lots += 1
             else:
                 tool = ev.get("tool")
                 if tool:
+                    online = ev.get("online") != "0"
                     with mirror.lock:
                         mirror.tools[tool] = {
-                            "online": ev.get("online") != "0",
+                            "online": online,
                             "last_seen": time.time(),
                         }
+                        # Snapshots restore down tools too. Arm the watchdog
+                        # for them, or a tool that was offline when the
+                        # snapshot was taken is never swept.
+                        if online:
+                            mirror.down_since.pop(tool, None)
+                            mirror.recovered_by.pop(tool, None)
+                        else:
+                            mirror.down_since.setdefault(tool, time.time())
                     tools += 1
     except Exception as e:
         print(f"[bootstrap] {e!r}", file=sys.stderr, flush=True)
@@ -421,7 +605,8 @@ def kafka_consumer_loop():
         "enable.auto.commit": True,      # a mirror may lose its place safely
     })
     bootstrap_from_state(Consumer)
-    c.subscribe(["fab.lot.events", "fab.tool.events", "fab.dispatch.decisions"])
+    c.subscribe(["fab.lot.events", "fab.tool.events", "fab.dispatch.decisions",
+                 "fab.lot.burndown"])
     app.logger.info("kafka mirror attached to %s", KAFKA_BROKERS)
 
     while True:
@@ -645,11 +830,20 @@ def _tool_row(tool_id):
         meta = mirror.tools.get(tool_id, {})
         s = dict(mirror.tool_stats.get(tool_id, {}))
         running = [l for l, t in mirror.in_flight.items() if t == tool_id]
+        down_since = mirror.down_since.get(tool_id)
+        recovered = mirror.recovered_by.get(tool_id)
     return {
         "id": tool_id,
         "group": tool_group(tool_id),
         "online": meta.get("online", True),
         "last_seen": meta.get("last_seen"),
+        "down_reason": meta.get("reason"),
+        "down_s": meta.get("down_s"),
+        "down_since": down_since,
+        # Set only when the mirror inferred the recovery rather than being
+        # told: "activity" (the tool started a lot) or "watchdog" (down past
+        # the TTL with no word). Absent on a normal online status event.
+        "recovered_by": recovered,
         "dispatches": s.get("dispatches", 0),
         "lots": s.get("lots", 0),
         "started": s.get("started", 0),
@@ -751,6 +945,38 @@ def layout_state():
     return jsonify({"ts": time.time(), "cells": cells, "delays": delays})
 
 
+@app.get("/api/tools/availability")
+def tools_availability():
+    """Online-tool count over time, for the strip at the top of the index.
+
+    Returned as parallel arrays rather than objects: at 2,880 points the object
+    form is several times the bytes for the same numbers, and this polls every
+    few seconds. `total` is the roster size -- the reference line the series
+    should be sitting on.
+    """
+    with mirror.lock:
+        pts = list(mirror.availability)
+        stuck = len(mirror.down_since)
+        inferred = Counter(mirror.recovered_by.values())
+        ids = set(mirror.tools) | set(mirror.tool_stats)
+        total = len(ids)
+        online = sum(1 for t in ids
+                     if mirror.tools.get(t, {}).get("online", True))
+    return jsonify({
+        "ts":      [round(p[0], 1) for p in pts],
+        "online":  [p[1] for p in pts],
+        # Historical, not just current: the roster grows as tools announce
+        # themselves, so a flat line drawn at today's total would misread the
+        # early part of the run as an outage.
+        "total":   [p[2] for p in pts],
+        "now":     {"online": online, "total": total, "down": total - online},
+        "down_now": stuck,
+        "recovered": dict(inferred),
+        "ttl_s":   TOOL_DOWN_TTL_S,
+        "sample_s": AVAIL_SAMPLE_S,
+    })
+
+
 @app.get("/api/tools")
 def tools_index():
     """Every tool we have heard of, grouped by type.
@@ -817,6 +1043,135 @@ def decisions():
         return jsonify(list(mirror.decisions)[-n:])
 
 
+# Rate model. Days per step, learned from what this fab has actually done
+# rather than from the route's nominal process times: the nominal numbers omit
+# queueing, which is most of the cycle, and would project every lot finishing
+# far too early.
+#
+# Keyed by (product, lot type) with an explicit fallback chain, because those
+# are the two parameters that visibly change the rate here. Hot lots hold
+# priority 20 against 10 and jump queues, so a rate learned from regular lots
+# does not describe them; and LVHM's ten products have routes from 242 to 583
+# steps through different tool families, so per-product is not the same as
+# fab-wide. `basis` is reported with every projection so a thin cell is
+# visible rather than quietly averaged away.
+RATE_MIN_SAMPLES = int(os.getenv("RATE_MIN_SAMPLES", "8"))
+
+
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if not n:
+        return None
+    return xs[n // 2] if n % 2 else 0.5 * (xs[n // 2 - 1] + xs[n // 2])
+
+
+def rate_model(points, meta):
+    """Seconds per step, bucketed by (part, hot), (part), (hot) and overall.
+
+    A sample is one observed forward move: the wall of simulated time between
+    two consecutive points, divided by the steps actually completed between
+    them. Backward moves (rework) are skipped -- they are not progress, and
+    dividing by a negative step count would make the rate meaningless. Their
+    cost still lands in the model, because the extra steps a reworked lot
+    subsequently redoes are themselves sampled.
+    """
+    buckets = {}
+    prev = {}
+    for lot, t, left, *_ in points:
+        p = prev.get(lot)
+        prev[lot] = (t, left)
+        if p is None:
+            continue
+        dt, dsteps = t - p[0], p[1] - left
+        if dsteps <= 0 or dt <= 0:
+            continue
+        m = meta.get(lot)
+        if m is None:
+            continue
+        per_step = dt / dsteps
+        hot = bool(m.get("hot"))
+        for key in ((m["part"], hot), (m["part"], None), (None, hot), (None, None)):
+            buckets.setdefault(key, []).append(per_step)
+
+    return {k: {"rate_s": _median(v), "n": len(v)} for k, v in buckets.items()}
+
+
+def project(meta_row, rates, now):
+    """Naive completion estimate for one lot.
+
+    Naive is the point: it assumes the lot keeps moving at the rate its own
+    product and lot type have shown, with no further rework, no tool
+    downtime, and no change in queueing. It is a straight-line reference to
+    read the real line against, not a forecast.
+    """
+    left = meta_row.get("left")
+    if left is None or meta_row.get("state") in ("done", "scrapped"):
+        return None
+
+    part, hot = meta_row["part"], bool(meta_row.get("hot"))
+    for key, basis in (((part, hot), "part+type"), ((part, None), "part"),
+                       ((None, hot), "type"), ((None, None), "fab")):
+        r = rates.get(key)
+        if r and r["rate_s"] and r["n"] >= (RATE_MIN_SAMPLES if basis != "fab" else 1):
+            # Project from now, not from the last event: a lot that has been
+            # sitting for two days is still sitting, and starting the ray at
+            # its last move would quietly forgive that wait.
+            start = max(meta_row.get("last_t", 0.0), now or 0.0)
+            eta = start + left * r["rate_s"]
+            due = meta_row.get("due")
+            return {
+                "rate_s": round(r["rate_s"], 1),
+                "basis": basis,
+                "n": r["n"],
+                "start_t": start,
+                "eta_t": eta,
+                "due_t": due,
+                # Positive = projected to finish before its due date.
+                "slack_s": (due - eta) if due else None,
+            }
+    return None
+
+
+def lot_stats(m, pts, now):
+    """Summary for one lot, computed here so the chart and the table cannot
+    disagree about the same number."""
+    route = m.get("route") or 0
+    left = m.get("left") or 0
+    done = max(route - left, 0)
+
+    # Rework shows as the burndown going back up: steps already completed are
+    # put back in front of the lot. Count the jogs and the steps re-queued --
+    # the route length itself never changes.
+    rework_events = 0
+    rework_steps = 0
+    for a, b in zip(pts, pts[1:]):
+        if b["left"] > a["left"]:
+            rework_events += 1
+            rework_steps += b["left"] - a["left"]
+
+    wq = sum(p.get("wq", 0) for p in pts)
+    wb = sum(p.get("wb", 0) for p in pts)
+    wp = sum(p.get("wp", 0) for p in pts)
+
+    last_t = m.get("last_t", 0.0)
+    return {
+        "route": route,
+        "steps_done": done,
+        "steps_left": left,
+        "pct_complete": round(100.0 * done / route, 1) if route else None,
+        "rework_events": rework_events,
+        "rework_steps": rework_steps,
+        "queue_s": round(wq, 1),
+        "batch_wait_s": round(wb, 1),
+        "process_s": round(wp, 1),
+        # How long since this lot last moved. A large value with state=active
+        # is the whole point of extending the flat line to now.
+        "idle_s": round(max((now or 0.0) - last_t, 0.0), 1),
+        "elapsed_s": round(max((now or 0.0) - m.get("release", 0.0), 0.0), 1),
+    }
+
+
 def _cohort_rows(meta):
     """One row per cohort, ranked by how recently it moved."""
     by = {}
@@ -855,10 +1210,11 @@ def lots_index():
     client picks which to expand; series come from /api/lots/<cohort> so the
     index stays small even with hundreds of cohorts in a long run.
     """
-    _, meta, sim_t = mirror.burndown_view(cohorts=[])
+    _, meta, sim_t, warm_t = mirror.burndown_view(cohorts=[])
     rows = _cohort_rows(meta)
     return jsonify({
         "now_t": sim_t,
+        "warm_t": warm_t,
         "cohorts": rows[:int(request.args.get("limit", 60))],
         "total_cohorts": len(rows),
         "lots_tracked": len(meta),
@@ -876,10 +1232,20 @@ def lots_cohort(cohort):
     the route -- and nothing here clamps it, because an upward jog is the most
     informative thing this chart shows.
     """
-    series, meta, sim_t = mirror.burndown_view(cohorts=[cohort])
+    series, meta, sim_t, warm_t = mirror.burndown_view(cohorts=[cohort],
+                                                       want_points=True)
+    # A lot can have warm-up history and no live points yet -- it has not moved
+    # since the snapshot. Dropping those would hide exactly the stalled lots
+    # worth looking at, so they are drawn from history alone.
+    for lot, m in meta.items():
+        if m.get("cohort") == cohort and m.get("history") and lot not in series:
+            series[lot] = []
+
     if not series:
-        return jsonify({"cohort": cohort, "now_t": sim_t, "lots": [],
-                        "note": "no points held for this cohort"}), 200
+        return jsonify({"cohort": cohort, "now_t": sim_t, "warm_t": warm_t,
+                        "lots": [], "note": "no points held for this cohort"}), 200
+
+    rates = rate_model(getattr(mirror, "_all_points", []), meta)
 
     lots = []
     for lot, pts in series.items():
@@ -892,11 +1258,23 @@ def lots_cohort(cohort):
             "release": m["release"],
             "due": m["due"],
             "prio": m["prio"],
+            "hot": bool(m.get("hot")),
             "state": m.get("state", "active"),
+            # Warm-up history and live points are kept apart rather than
+            # concatenated: the chart draws them differently, and merging them
+            # here would throw away the distinction the user asked to see.
+            "history": m.get("history", []),
             "points": pts,
+            "projection": project(m, rates, sim_t),
+            "stats": lot_stats(m, pts, sim_t),
         })
     lots.sort(key=lambda r: r["lot"])
-    return jsonify({"cohort": cohort, "now_t": sim_t, "lots": lots})
+    return jsonify({"cohort": cohort, "now_t": sim_t, "warm_t": warm_t,
+                    "lots": lots,
+                    "rate_basis_counts": {
+                        f"{k[0] or 'fab'}/{'hot' if k[1] else ('reg' if k[1] is False else 'any')}": v["n"]
+                        for k, v in sorted(rates.items(), key=lambda kv: -kv[1]["n"])[:8]
+                    }})
 
 
 @app.get("/api/stream")
@@ -1213,10 +1591,28 @@ def chat():
     return jsonify(result)
 
 
+def availability_loop():
+    """Watchdog + sampler.
+
+    Cheap enough to run unconditionally and independent of the transport: one
+    pass over the roster every AVAIL_SAMPLE_S, which even for the full LVHM
+    fab is a few thousand dict lookups. It runs whether the feed is Kafka, a
+    file, or nothing at all -- a stalled feed is exactly when a tool is most
+    likely to be stranded offline.
+    """
+    while True:
+        try:
+            mirror.sweep_and_sample()
+        except Exception as e:
+            print(f"[availability] {e!r}", file=sys.stderr, flush=True)
+        time.sleep(AVAIL_SAMPLE_S)
+
+
 def start_feeds():
     """FEED_FILE replaces Kafka rather than supplementing it: running both
     would interleave two sources into one mirror and make the state
     unattributable."""
+    threading.Thread(target=availability_loop, daemon=True).start()
     if FEED_FILE:
         threading.Thread(target=feed_file_loop, daemon=True).start()
     else:

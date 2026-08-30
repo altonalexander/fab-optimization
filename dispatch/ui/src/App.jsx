@@ -3,6 +3,7 @@ import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
+import ToolAvailability from './ToolAvailability.jsx'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
@@ -92,14 +93,19 @@ function useLiveState() {
   return { state, feed, connected, history, link }
 }
 
-function Stat({ label, value, sub, accent }) {
-  return (
-    <div className="stat">
+// `href` makes a tile a link to the view that explains it. A plain <a> rather
+// than an onClick so the hash router, middle-click, and copy-link all keep
+// working for free -- the tile becomes a real URL, not a click handler.
+function Stat({ label, value, sub, accent, href, title }) {
+  const body = (
+    <>
       <div className="stat-label">{label}</div>
       <div className="stat-value" style={accent ? { color: accent } : undefined}>{value}</div>
       {sub && <div className="stat-sub">{sub}</div>}
-    </div>
+    </>
   )
+  if (!href) return <div className="stat">{body}</div>
+  return <a className="stat stat-link" href={href} title={title}>{body}</a>
 }
 
 // Derives the flow graph from the boundary policy itself, so these counts
@@ -483,6 +489,7 @@ function ToolIndex({ query, setQuery, toolHref }) {
 
   return (
     <div>
+      <ToolAvailability />
       <div className="tool-index-head">
         <p className="muted">
           {data.total} tools in {data.groups.length} groups, busiest first.
@@ -747,7 +754,9 @@ export default function App() {
               sub="lots/hr" />
         <Stat label="tools down" value={offline.length}
               accent={offline.length ? '#b91c1c' : undefined}
-              sub={offline.join(', ') || 'all up'} />
+              sub={offline.join(', ') || 'all up'}
+              href={linkTo('/tools')}
+              title="open the tool index" />
       </div>
 
       <div className={assistantOpen ? 'shell' : 'shell shell-collapsed'}>
@@ -831,14 +840,14 @@ export default function App() {
             ? <ToolDetail id={openTool} backHref={linkTo('/tools')} />
             : <><h3>Tools</h3>
                 <ToolIndex query={query} setQuery={setQuery}
-                           toolHref={id => linkTo(`/tools/${id}`)} /></>}
+                           toolHref={id => linkTo(['tools', id])} /></>}
         </section>
       )}
 
       {tab === 'floor' && (
         <section>
           <h3>Cleanroom floor</h3>
-          <FloorMap onOpenTool={(id) => navigate(`/tools/${id}`)}
+          <FloorMap onOpenTool={(id) => navigate(['tools', id])}
                     sel={query.bay || null}
                     onSel={(k) => setQuery({ bay: k || undefined })}
                     heat={query.heat === '1'}
