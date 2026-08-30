@@ -21,6 +21,7 @@ from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
 from assistant import FabAssistant
+from openapi import register_docs
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": os.getenv("CORS_ORIGINS", "*")}})
@@ -519,6 +520,7 @@ def enforce_read_only():
 
 @app.get("/health")
 def health():
+    """Liveness, plus whether this instance refuses writes."""
     return jsonify({"ok": True, "read_only": READ_ONLY, "zone": "boundary-2-3"})
 
 
@@ -536,6 +538,7 @@ def zones():
 
 @app.get("/api/state")
 def state():
+    """Full mirror snapshot: tools, queues, counters and the sim clock."""
     return jsonify(mirror.snapshot())
 
 
@@ -784,6 +787,7 @@ def tools_index():
 
 @app.get("/api/tools/<path:tool_id>")
 def tool_detail(tool_id):
+    """One tool: its row, plus its recent decisions and events."""
     with mirror.lock:
         known = tool_id in mirror.tools or tool_id in mirror.tool_stats
         recent = list(reversed(mirror.tool_recent.get(tool_id, ())))
@@ -799,6 +803,7 @@ def tool_detail(tool_id):
 
 @app.get("/api/events")
 def events():
+    """Tail of the raw event feed, oldest first."""
     n = min(int(request.args.get("limit", 100)), 500)
     with mirror.lock:
         return jsonify(list(mirror.events)[-n:])
@@ -806,6 +811,7 @@ def events():
 
 @app.get("/api/decisions")
 def decisions():
+    """Tail of the dispatch decision feed, oldest first."""
     n = min(int(request.args.get("limit", 100)), 500)
     with mirror.lock:
         return jsonify(list(mirror.decisions)[-n:])
@@ -1181,6 +1187,7 @@ def sim_control_set():
 
 @app.get("/api/chat/status")
 def chat_status():
+    """Whether the assistant is configured, and which model backs it."""
     return jsonify({"available": assistant.available, "error": assistant.error,
                     "model": os.getenv("VERTEX_MODEL", "claude-sonnet-4-5@20250929")})
 
@@ -1214,6 +1221,12 @@ def start_feeds():
         threading.Thread(target=feed_file_loop, daemon=True).start()
     else:
         threading.Thread(target=kafka_consumer_loop, daemon=True).start()
+
+
+# Swagger UI at /docs, ReDoc at /redoc, spec at /openapi.json. Generated from
+# the URL map, so new routes document themselves; see openapi.ENRICH for the
+# body/response schemas a URL map cannot infer.
+register_docs(app)
 
 
 if __name__ == "__main__":
