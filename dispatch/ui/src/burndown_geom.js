@@ -207,16 +207,28 @@ export function reworkJogs(lot) {
   return out
 }
 
+/** Clear air to the right of the last thing worth reading: the latest due date
+ *  or projected completion, whichever is further out. A due marker sitting on
+ *  the frame cannot be read as early or late, and a projection ray that ends at
+ *  the edge looks truncated rather than finished. Five days is roughly a week
+ *  of fab time at LVHM release rates -- enough to see where a ray lands
+ *  relative to its due rule without shrinking the live part of the chart. */
+export const RIGHT_PAD_S = 5 * 86400
+
 /** Domain must cover projected completions and due dates too, or the ray and
  *  the due-date rule get clipped off the right edge. */
 export function domainWithProjection(lots, now, metric) {
   let [t0, t1] = domain(lots, now)
+  let last = -Infinity
   for (const l of lots) {
-    if (l.due) t1 = Math.max(t1, l.due)
+    if (l.due) last = Math.max(last, l.due)
     const pr = projection(l, metric, now)
-    if (pr) t1 = Math.max(t1, pr.t2)
+    if (pr) last = Math.max(last, pr.t2)
   }
-  return [t0, t1 + (t1 - t0) * 0.02]
+  if (isFinite(last)) t1 = Math.max(t1, last + RIGHT_PAD_S)
+  // The proportional pad still applies when there is nothing to anchor to --
+  // a cohort with no due dates and no projectable lots.
+  return [t0, Math.max(t1, t1 + (t1 - t0) * 0.02)]
 }
 
 

@@ -11,10 +11,31 @@
  */
 import {
   allPoints, batchBands, domain, domainWithProjection, envelope,
-  historySegments, maxValue, projection, reworkJogs, segments, valueAt,
+  historySegments, maxValue, projection, reworkJogs, RIGHT_PAD_S, segments,
+  valueAt,
 } from './burndown_geom.js'
 
-const BASE = process.argv[2] || 'http://localhost:8077'
+// 8000 is where dev-up.sh and the container both put the API. This used to
+// default to a scratch port, which meant the suite failed for everyone whose
+// API was in the normal place. FAB_API covers the second-checkout case that
+// VITE_API_TARGET covers for the dev server.
+const BASE = process.argv[2] || process.env.FAB_API || 'http://localhost:8000'
+
+// This file needs a running API. Without the guard a cold start dies on an
+// unhandled fetch rejection and reports a 20-line ECONNREFUSED stack, which
+// reads like a broken test rather than a missing service.
+try {
+  const r = await fetch(`${BASE}/health`)
+  if (!r.ok) throw new Error(`health returned ${r.status}`)
+} catch (e) {
+  console.error(
+    `no API at ${BASE} (${e.cause?.code || e.message}).\n` +
+    'These are integration checks against real simulator output, not unit\n' +
+    'tests. Start the stack with scripts/dev-up.sh, or pass a base URL:\n' +
+    '  node dispatch/ui/src/burndown_geom.test.mjs http://localhost:PORT')
+  process.exit(2)
+}
+
 let failures = 0
 const check = (name, cond, detail = '') => {
   if (cond) { console.log(`  ok   ${name}`) }
@@ -152,6 +173,20 @@ for (const row of idx.cohorts.slice(0, 25)) {
     }
     const pr = projection(lot, 'steps', now)
     if (pr) check(`eta inside domain for ${lot.lot}`, pr.t2 <= pd1)
+  }
+
+  // ... and with room to spare past it, so a due dot on the zero line can be
+  // read as early or late rather than sitting on the frame.
+  let lastMark = -Infinity
+  for (const lot of d.lots) {
+    if (lot.due) lastMark = Math.max(lastMark, lot.due)
+    const pr = projection(lot, 'steps', now)
+    if (pr) lastMark = Math.max(lastMark, pr.t2)
+  }
+  if (isFinite(lastMark)) {
+    check(`5 days clear past the last due/eta in ${d.cohort ?? 'cohort'}`,
+          pd1 >= lastMark + RIGHT_PAD_S - 1,
+          `pd1=${pd1} lastMark=${lastMark} pad=${pd1 - lastMark}`)
   }
 }
 

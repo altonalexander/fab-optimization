@@ -71,6 +71,9 @@ section{background:var(--card);border:1px solid var(--line);border-radius:8px;
 section h3{margin:0 0 12px;font-size:14px}
 .grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
 @media(max-width:860px){.grid{grid-template-columns:1fr}}
+/* One panel, full width. .grid's 1.4fr 1fr leaves a single child at ~58% of
+   the row, which is what was cropping the burndown. */
+.grid-wide{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 
 .feed{max-height:260px;overflow:auto;font-size:12px}
 .feed-row{display:flex;gap:8px;align-items:center;padding:3px 0;
@@ -108,17 +111,9 @@ section h3{margin:0 0 12px;font-size:14px}
 .err{margin-top:12px;padding:9px;background:#fef2f2;color:#991b1b;border-radius:6px;
   font-size:12px}
 
-.zones{display:flex;flex-direction:column;gap:10px}
-.zone{border:2px solid;border-radius:8px;padding:12px}
-.zone-head{display:flex;align-items:center;gap:8px}
-.zone-id{color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px}
-.zone-sub{font-size:11px;color:var(--mut);margin:4px 0 8px}
 .tag{font-size:10px;padding:1px 7px;border-radius:999px;margin-left:auto}
 .tag-ok{background:#dcfce7;color:#166534}
 .tag-warn{background:#fef3c7;color:#92400e}
-.members{display:flex;flex-wrap:wrap;gap:5px}
-.member{font-size:11px;padding:2px 8px;background:#f3f4f6;border-radius:4px;
-  font-family:ui-monospace,monospace}
 .invariants{background:#f9fafb;border:1px solid var(--line);border-radius:8px;
   padding:12px;font-size:12px}
 .invariants ul{margin:6px 0 0;padding-left:18px;color:var(--mut)}
@@ -299,8 +294,11 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   border-color: #111827; }
 /* No transition on line geometry: animated redraws on a live chart read as
    flicker, and make it impossible to tell whether motion is data or rendering. */
-.burndown-svg { max-width: 100%; height: auto; background: #fff;
-  border: 1px solid #e5e7eb; }
+.burndown-svg { display: block; width: 100%; max-width: 100%; height: auto;
+  background: #fff; border: 1px solid #e5e7eb; }
+/* min-width:0 so the svg can shrink inside the grid track rather than forcing
+   the panel wider than its column. */
+.burndown { min-width: 0; }
 .burndown-svg * { transition: none !important; }
 .burndown-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px;
   color: #4b5563; margin-top: 6px; align-items: center; }
@@ -342,3 +340,17 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 .sc-frozen { position: absolute; top: 6px; right: 8px; font-size: 11px;
   color: #92400e; background: #fffbeb; border: 1px solid #fde68a;
   border-radius: 3px; padding: 2px 6px; pointer-events: none; }
+
+/* Zone diagram (topology tab). Sizes are SVG user units scaled by the
+   viewBox, so they are deliberately unitless rather than rem. */
+.zone-diagram{width:100%;height:auto;display:block;margin:0 0 14px;max-width:840px}
+.zd-badge{fill:#fff;font-size:10px;font-weight:700;letter-spacing:.04em}
+.zd-name{fill:#111827;font-size:13px;font-weight:600}
+.zd-member{fill:#374151;font-size:10px}
+.zd-svc{fill:#111827;font-size:11px;font-weight:600;font-family:ui-monospace,monospace}
+.zd-flow{fill:#334155;font-size:9.5px}
+.zd-dim{fill:var(--mut,#6b7280)}
+.zd-deny{fill:#b91c1c;font-size:9px}
+.zd-tag{font-size:9.5px;font-weight:600}
+.zd-tag-ok{fill:#15803d}
+.zd-tag-warn{fill:#b45309}
