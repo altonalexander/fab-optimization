@@ -215,19 +215,22 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   .floor-panel{position:static}}
 
 /* Assistant rail --------------------------------------------------------- */
-/* The rail is a fixed full-height column pinned to the left edge of the
+/* The rail is a fixed full-height column pinned to the right edge of the
    viewport: it does not scroll with the page and does not sit inside the app
-   padding. When it is open the whole app is pushed right by its width; when it
+   padding. When it is open the whole app is pushed left by its width; when it
    is collapsed the app reclaims every pixel of that space. */
 .shell{display:block}
 .shell-main{min-width:0}          /* lets charts shrink instead of overflowing */
 
-.app-railed{margin-left:380px}
+.app-railed{margin-right:380px}
 
-.rail{position:fixed;left:0;top:0;bottom:0;width:380px;z-index:40;
+.rail{position:fixed;right:0;top:0;bottom:0;width:380px;z-index:40;
   display:flex;flex-direction:column;
-  background:var(--card);border:0;border-right:1px solid var(--line);
+  background:var(--card);border:0;border-left:1px solid var(--line);
   border-radius:0;padding:14px 16px}
+/* The close button sets [hidden]; without this the display:flex above wins and
+   the rail never goes away. */
+.rail[hidden]{display:none}
 .rail-head{display:flex;justify-content:space-between;align-items:center;
   margin-bottom:6px}
 .rail-head h3{margin:0}
@@ -236,14 +239,14 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 .rail-toggle:hover{color:var(--fg)}
 
 /* Collapsed state: this button is the only way back in, so it is deliberately
-   loud -- a tall pill on the left edge, where the rail itself will appear. */
-.rail-reopen{position:fixed;left:0;top:50%;transform:translateY(-50%);
+   loud -- a big pill in the bottom-right corner, under the rail it opens. */
+.rail-reopen{position:fixed;right:22px;bottom:22px;
   display:flex;align-items:center;gap:8px;
-  padding:14px 20px 14px 16px;border:0;
-  border-radius:0 999px 999px 0;background:#111827;color:#fff;cursor:pointer;
+  padding:14px 22px;border:0;
+  border-radius:999px;background:#111827;color:#fff;cursor:pointer;
   font-size:15px;font-weight:600;letter-spacing:.01em;font-family:inherit;
-  box-shadow:0 4px 18px rgba(0,0,0,.28);z-index:41}
-.rail-reopen:hover{background:#1f2937;padding-right:24px}
+  box-shadow:0 6px 20px rgba(0,0,0,.30);z-index:41}
+.rail-reopen:hover{background:#1f2937;box-shadow:0 8px 26px rgba(0,0,0,.36)}
 .rail-reopen-icon{font-size:17px;line-height:1}
 
 /* The rail owns the height; the chat fills it rather than a fixed 520px. */
@@ -252,7 +255,7 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 /* Below this the rail stops being a rail: it drops back into the flow at full
    width, static, with a bounded height so it cannot swallow the page. */
 @media(max-width:1100px){
-  .app-railed{margin-left:0}
+  .app-railed{margin-right:0}
   .rail{position:static;width:auto;border:1px solid var(--line);
     border-radius:10px;margin-bottom:16px}
   .rail .chat{height:420px;flex:none}
