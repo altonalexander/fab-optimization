@@ -5,7 +5,25 @@ Licensed under the Apache License, Version 2.0. See LICENSE.
 
 ------------------------------------------------------------------------------
 This product includes third-party software and data with their own terms.
+The complete, generated inventory -- every component, version, copyright and
+licence, including everything bundled inside the OR-Tools distribution -- is in
+THIRD_PARTY_NOTICES.md, with full licence texts in licenses/.
 ------------------------------------------------------------------------------
+
+Google OR-Tools  --  linked into the dispatcher (CP-SAT tactical solver)
+    Apache License 2.0. Copyright 2010-2025 Google LLC.
+    https://github.com/google/or-tools
+    Pinned at v9.15.6755. Bundles SCIP, SoPlex, the COIN-OR solvers (EPL-2.0),
+    abseil, protobuf and re2; see THIRD_PARTY_NOTICES.md.
+
+librdkafka  --  Kafka client, linked into the dispatcher
+    BSD-2-Clause. Copyright (c) 2012-2022, Magnus Edenhill.
+    https://github.com/confluentinc/librdkafka
+
+ZeroMQ (libzmq)  --  AMHS transport, linked dynamically
+    Mozilla Public License 2.0. Copyright the ZeroMQ authors.
+    https://github.com/zeromq/libzmq
+    Used unmodified through the C API.
 
 PySCFabSim  --  baselines/pyscfabsim/
     MIT License. Copyright (c) 2026 Research Group Production Systems.

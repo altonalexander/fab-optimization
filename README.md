@@ -300,6 +300,28 @@ in `baselines/pyscfabsim/UPSTREAM.md`. See `baselines/pyscfabsim/README.md` for
 the details and `baselines/pyscfabsim/LICENSE` for the MIT terms, which must be
 retained in any redistribution.
 
+### Google OR-Tools — the solver
+
+The tactical layer is a CP-SAT model solved with
+[Google OR-Tools](https://github.com/google/or-tools) (Apache-2.0), pinned at
+**v9.15.6755**. **We did not build a solver.** The contribution here is the
+decomposition and the reformulation — priority ranking rather than scheduling,
+tool-group rather than per-tool granularity, a four-hour horizon — and CP-SAT
+does the search underneath it. Keeping that line visible is the point of this
+section.
+
+> Perron, L. and Furnon, V. *OR-Tools*, Google.
+> <https://developers.google.com/optimization/>
+
+If you are describing CP-SAT's *behaviour* rather than just noting the
+dependency, cite the solver paper as well — Perron, Didier and Gay on the
+CP-SAT-LP solver (CP 2023, LIPIcs). Check the exact bibliographic entry against
+the proceedings before you publish it; it is not verified here.
+
+OR-Tools is a large dependency that bundles SCIP, SoPlex, the COIN-OR solvers,
+abseil and protobuf, each with its own licence. See
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ### SMT2020 — the dataset
 
 Both the dispatcher and the baseline read the
@@ -315,6 +337,48 @@ it, cite:
 This project standardises on the **LVHM** scenario; HVLM works when passed
 explicitly. See `docs/adr/0001-lvhm-default-scenario.md`.
 
+## Quoting benchmark numbers
+
+CP-SAT performance changes between OR-Tools releases, so a solver number
+without its version is not reproducible. `make bench` therefore prints a
+`RUN CONFIG` block before any results:
+
+```
+== RUN CONFIG ==
+  cpsat version    9.15.6755
+  threads          8
+  time limit       1 s per solve
+  relative gap     0.02
+  deterministic    yes
+  stopping         first of: proven optimal, gap <= 0.02, or time limit
+```
+
+Quote the whole block alongside any table you publish. The version is read from
+the linked library via `OrToolsVersionString()` — it is never a compiled-in
+literal, so it cannot drift from the binary that produced the numbers.
+
+The same no-silent-fallback rule that governs the backend table governs this:
+in a build without CP-SAT linked, the version reads `unavailable (not linked)`
+and the run prints an explicit refusal. It is never defaulted to a
+plausible-looking value.
+
+## Third-party software
+
+This project links against, bundles, and in one case vendors other people's
+work. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists every component
+with its version, copyright and licence; full texts are in
+[`licenses/`](licenses/). Both must travel with any distribution of this
+software — source, binaries, or container images.
+
+It is generated from the dependency manifests, not hand-maintained:
+
+```bash
+python3 scripts/gen_third_party_notices.py           # regenerate
+python3 scripts/gen_third_party_notices.py --check   # CI: fail if stale
+```
+
+Adding a dependency without recording its licence is a hard error, by design.
+
 ## License
 
 This project is licensed under the **Apache License 2.0** — see `LICENSE`.
@@ -324,5 +388,6 @@ retain the copyright notice, state your changes, and pass along the `NOTICE`
 file. It also grants you an explicit patent licence from the contributors.
 
 The Apache-2.0 licence covers this project's own code. It does **not** cover
-`baselines/pyscfabsim/` (MIT, see above) or the SMT2020 dataset (separate
-terms). `NOTICE` lists all third-party components.
+`baselines/pyscfabsim/` (MIT, see above), the SMT2020 dataset (separate
+terms), or any of the libraries it links against. `NOTICE` and
+`THIRD_PARTY_NOTICES.md` list all third-party components.

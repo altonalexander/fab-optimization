@@ -17,6 +17,14 @@
 //         ./fabtest --bench    solver comparison at scale
 //         ./fabtest --audit-only
 
+// The linked solver's own version string. Reported, never assumed: a CP-SAT
+// benchmark number is meaningless without the version that produced it, and a
+// plausible-looking default would be worse than no number at all.
+#ifdef FAB_HAVE_ORTOOLS
+#include "ortools/base/version.h"
+#endif
+
+#include <optional>
 #include "fab/machine_config.hpp"
 #include "fab/planner.hpp"
 #include "fab/solver.hpp"
@@ -559,6 +567,18 @@ AssignmentModel synthetic(int n_lots, int n_tools, unsigned seed) {
     return m;
 }
 
+// Version of a backend as actually linked. Returns nullopt when the backend
+// is absent -- callers must render that as "unavailable", never as a default.
+// An unversioned solver row is not reproducible and must not look like one.
+static std::optional<std::string> backend_version(const std::string& name) {
+#ifdef FAB_HAVE_ORTOOLS
+    if (name == "cpsat")
+        return operations_research::OrToolsVersionString();
+#endif
+    if (name == "greedy") return std::string("in-tree");
+    return std::nullopt;
+}
+
 void bench(double budget) {
     // Say plainly which backends are real. Two rows that agree because one
     // silently fell back to the other looks like a tie and is not one.
@@ -568,13 +588,38 @@ void bench(double budget) {
         auto b = make_solver(name);
         const bool ok = b->available();
         any_missing |= !ok;
+        const auto ver = backend_version(name);
         std::cout << "  " << std::setw(8) << std::left << name << std::right
-                  << (ok ? "linked" : "NOT LINKED -> falls back to greedy") << "\n";
+                  << (ok ? "linked" : "NOT LINKED -> falls back to greedy");
+        if (ok)
+            std::cout << "  version " << (ver ? *ver : std::string("UNAVAILABLE"));
+        std::cout << "\n";
     }
     if (any_missing)
         std::cout << "\n  Rows for an unlinked backend are greedy's numbers "
                      "wearing its name.\n  Rebuild with -DFAB_HAVE_ORTOOLS "
                      "before drawing any conclusion.\n";
+
+    // Reproducibility metadata. Solver performance moves between releases, so
+    // a table of numbers without the version, thread count, time limit and
+    // stopping criterion cannot be compared against anything -- including a
+    // later run of this same file.
+    {
+        SolveParams ref;
+        ref.time_limit_s = budget;
+        const auto cv = backend_version("cpsat");
+        std::cout << "\n== RUN CONFIG ==\n"
+                  << "  cpsat version    " << (cv ? *cv : std::string("unavailable (not linked)")) << "\n"
+                  << "  threads          " << ref.threads << "\n"
+                  << "  time limit       " << ref.time_limit_s << " s per solve\n"
+                  << "  relative gap     " << ref.relative_gap << "\n"
+                  << "  deterministic    " << (ref.deterministic ? "yes" : "no") << "\n"
+                  << "  stopping         first of: proven optimal, gap <= "
+                  << ref.relative_gap << ", or time limit\n";
+        if (!cv)
+            std::cout << "  >>> Quote no CP-SAT number from this run: the "
+                         "backend is not linked.\n";
+    }
 
     std::cout << "\n== BENCHMARK ==\n"
               << std::setw(7) << "lots" << std::setw(7) << "tools"

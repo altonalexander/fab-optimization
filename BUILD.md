@@ -37,6 +37,25 @@ Other backends: HiGHS (free MILP, reads the LP text `SolverExporter::to_lp()`
 already emits) and Gurobi (commercial, needs `GUROBI_HOME` and a license daemon
 in the fab zone). Neither is linked here.
 
+## Third-party notices
+
+The dependency pins above are the input to `THIRD_PARTY_NOTICES.md`, which is
+generated, not hand-written. After changing any pin -- the OR-Tools version in
+particular -- regenerate it:
+
+```bash
+python3 scripts/gen_third_party_notices.py           # writes root + dispatch/legal/
+python3 scripts/gen_third_party_notices.py --check   # CI gate: fails if stale
+```
+
+It writes two copies on purpose. The container build context is `dispatch/`, so
+`dispatch/legal/` is the one the images `COPY`; Apache-2.0 and the other
+licences here require the notice to travel with distributed binaries, not just
+with the repository.
+
+Adding a dependency with no licence entry is a hard error rather than a silent
+omission -- the same rule as the backend table.
+
 ## Acceptance gate
 
 ```bash
@@ -47,7 +66,11 @@ make bench         # solver comparison; prints the backend table FIRST
 ```
 
 `make bench` prints which backends are actually linked before any results, so an
-unlinked CP-SAT cannot masquerade as a tie with greedy.
+unlinked CP-SAT cannot masquerade as a tie with greedy. It also prints a
+`RUN CONFIG` block -- solver version, threads, time limit, gap, stopping
+criterion -- which must be quoted alongside any published table. The version
+comes from `OrToolsVersionString()` in the linked library, never a literal; with
+CP-SAT unlinked it reads `unavailable (not linked)` and the run says so.
 
 ## Baseline
 
