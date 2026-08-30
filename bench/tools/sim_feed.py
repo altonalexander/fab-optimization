@@ -65,6 +65,7 @@ from plugins.interface import IPlugin  # noqa: E402
 DEFAULT_BROKERS = 'localhost:29092'   # the dev-override host listener
 
 LOT_TOPIC = 'fab.lot.events'
+BURNDOWN_TOPIC = 'fab.lot.burndown'
 TOOL_TOPIC = 'fab.tool.events'
 DECISION_TOPIC = 'fab.dispatch.decisions'
 
@@ -157,7 +158,8 @@ class FeedPlugin(IPlugin):
     separate so a slow equipment view never gates the decision ranking.
     """
 
-    def __init__(self, sink, speed, tool_filter=None, from_day=None, to_day=None):
+    def __init__(self, sink, speed, tool_filter=None, from_day=None, to_day=None,
+                 burndown=True, cohort_mode='product-day'):
         self.sink = sink
         self.speed = speed
         self.tool_filter = tool_filter
@@ -169,6 +171,13 @@ class FeedPlugin(IPlugin):
         self.last_sim_t = None
         self.emitted = 0
         self.skipped = 0
+        self.burndown = burndown
+        self.cohort_mode = cohort_mode
+        # Last cumulative (queue, batch-wait, processing) seconds per lot, so
+        # each burndown event can say what the *preceding* flat segment was
+        # spent on. Keyed by lot idx and dropped when the lot completes, so it
+        # is bounded by WIP rather than by total lots released.
+        self._last_split = {}
 
     def _in_window(self):
         t = getattr(self, '_now', None)
@@ -211,6 +220,94 @@ class FeedPlugin(IPlugin):
         """
         return f'{lot.name}_{lot.idx}'
 
+    # ------------------------------------------------------------------
+    # Cohort burndown
+    # ------------------------------------------------------------------
+    #
+    # "Cohort" is not an SMT2020 concept, so it has to be defined here, and the
+    # definition decides what the chart means. The burndown groups lots that
+    # "must meet at batch operations", and a furnace batch in SMT2020 requires
+    # the same product *and* the same step -- the baseline's own batching key is
+    # step_name + '_' + part_name. So a cohort has to be product-scoped.
+    #
+    #   product-day (default)  one product, one day of releases. LVHM releases
+    #                          5.57 lots/product/day and a furnace holds 3-6
+    #                          lots, so this is almost exactly one batch worth
+    #                          of partners -- the group whose spread actually
+    #                          predicts a stall at the next furnace.
+    #
+    #   release-wave           the lots released at the same instant. In LVHM
+    #                          every product releases together every 258.46 min,
+    #                          so a wave is 10 lots of 10 different products,
+    #                          which can *never* batch with each other. Useful
+    #                          for watching identically-released lots diverge;
+    #                          misleading if read as batch partners.
+    #
+    # Release times are exact multiples of the interval (the loader forces
+    # first_release = 0 for every stream), so bucketing by day is stable rather
+    # than jittering across a boundary.
+    def _cohort(self, lot):
+        if self.cohort_mode == 'release-wave':
+            return f'w{int(lot.release_at // 60)}'
+        return f'{lot.part_name}-d{int(lot.release_at // 86400)}'
+
+    def _burn(self, instance, lot, state, reason=None):
+        """One point on this lot's burndown line.
+
+        steps_remaining counts route *positions* left, including the step being
+        worked. It is deliberately not deduplicated by operation name: a lot
+        with 40 to go may visit litho six more times, and collapsing those would
+        understate the work left. It is also not monotonic -- rework splices
+        already-processed steps back onto the front of remaining_steps
+        (instance.py:122), so the line can go back up. That is a real event, not
+        a glitch; nothing here clamps it.
+        """
+        if not self.burndown:
+            return
+        remaining = len(lot.remaining_steps) + (1 if lot.actual_step is not None else 0)
+        done = len(lot.processed_steps)
+
+        # Attribute the flat run that preceded this point. The simulator keeps
+        # cumulative per-lot totals; the delta since this lot's last event is
+        # what that horizontal segment was actually spent on.
+        q, b, pr = (lot.waiting_time, lot.waiting_time_batching, lot.processing_time)
+        lq, lb, lp = self._last_split.get(lot.idx, (0.0, 0.0, 0.0))
+        dq, db, dp = q - lq, b - lb, pr - lp
+        self._last_split[lot.idx] = (q, b, pr)
+        if reason is None:
+            # waiting_time_batching is the share of the wait spent holding for
+            # batch partners, so it is the one reason we can name from data
+            # rather than guess.
+            reason = ('cohort' if db > 0 and db >= dq else
+                      'queue' if dq > 0 else
+                      'proc' if dp > 0 else 'none')
+
+        self._write(BURNDOWN_TOPIC, envelope(
+            type='LOT_PROGRESS',
+            lot=self._lot_id(lot),
+            cohort=self._cohort(lot),
+            part=lot.part_name,
+            t=round(instance.current_time, 1),
+            left=remaining,
+            idx=done,
+            route=done + remaining,
+            state=state,
+            reason=reason,
+            # Seconds in the preceding segment, split by cause. Lets the client
+            # hatch a flat run without re-deriving anything.
+            wq=round(dq, 1), wb=round(db, 1), wp=round(dp, 1),
+            # Remaining theoretical *process* time. Queue time is not included
+            # -- the simulator does not forecast it -- so this is a floor on
+            # what is left, not a predicted finish.
+            rem_s=round(lot.remaining_time, 1) if lot.actual_step is not None else 0,
+            due=round(lot.deadline_at, 1),
+            rel=round(lot.release_at, 1),
+            prio=lot.priority))
+
+    def on_step_done(self, instance, lot, step):
+        self._now = instance.current_time
+        self._burn(instance, lot, 'active')
+
     def on_sim_init(self, instance):
         self._now = instance.current_time
         # Announce every tool once so the dashboard has a roster before any
@@ -239,6 +336,8 @@ class FeedPlugin(IPlugin):
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
+        self._burn(instance, lot, 'done')
+        self._last_split.pop(lot.idx, None)
 
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
@@ -247,6 +346,10 @@ class FeedPlugin(IPlugin):
                 type='LOT_READY', lot=self._lot_id(lot),
                 recipe=getattr(lot.actual_step, 'step_name', ''),
                 prio=1, wafers=25, slack=3600))
+            # Seed the burndown at full route length, so a lot that has not
+            # moved yet still draws a flat line from its release rather than
+            # appearing only once it first completes a step.
+            self._burn(instance, lot, 'released', reason='none')
 
     def on_breakdown(self, *args):
         self._tool_event(args, online=0)
@@ -301,6 +404,16 @@ def main():
                    help='start the feed file fresh')
     p.add_argument('--batch-strat', default='Demand',
                    choices=['Max', 'Min', 'RoundRobin', 'Demand'])
+    p.add_argument('--no-burndown', action='store_true',
+                   help='skip per-lot burndown events (roughly halves lot-event '
+                        'volume; the lots view goes empty)')
+    p.add_argument('--cohort-mode', default='product-day',
+                   choices=['product-day', 'release-wave'],
+                   help="how lots are grouped into cohorts. product-day groups a "
+                        "product's releases by day, which is the set that can "
+                        "actually batch together; release-wave groups lots released "
+                        "at the same instant, which in LVHM is one lot of each of "
+                        "10 products and can never batch (default: product-day)")
     a = p.parse_args()
 
     if not a.dataset.startswith('SMT2020_'):
@@ -342,7 +455,8 @@ def main():
     run_to = 3600 * 24 * a.days
     Randomizer().random.seed(a.seed)
 
-    feed = FeedPlugin(out, a.speed, a.tool_prefix, a.from_day, a.to_day)
+    feed = FeedPlugin(out, a.speed, a.tool_prefix, a.from_day, a.to_day,
+                      burndown=not a.no_burndown, cohort_mode=a.cohort_mode)
     instance = FileInstance(files, run_to, True, [feed], None, a.batch_strat)
     rule = dispatcher_map[a.dispatcher]
 

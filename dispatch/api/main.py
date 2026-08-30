@@ -37,6 +37,13 @@ DEMO_LOTS     = os.getenv("DEMO_LOTS", "0").lower() in ("1", "true", "yes")
 # Tail a newline-delimited event file instead of Kafka. Same consume-only role,
 # different transport -- lets the stack run end to end without a broker.
 FEED_FILE     = os.getenv("FEED_FILE", "")
+# Burndown points held in memory. One bounded ring for the whole fab rather
+# than a per-lot series with an eviction policy: LVHM emits ~23k progress
+# events per simulated day across ~2k lots in flight, so per-lot retention
+# either leaks or silently drops the lots you were watching. A single ring is
+# a flat, predictable memory ceiling, and cohorts are grouped out of it on
+# demand -- the client fetches once and appends from SSE thereafter.
+BURNDOWN_MAX  = int(os.getenv("BURNDOWN_MAX", "150000"))
 
 # ---------------------------------------------------------------------------
 # Live state, rebuilt from the Kafka event stream.
@@ -104,6 +111,12 @@ class FabMirror:
         # evicted long before anyone drills into it, so the detail view would
         # always show an empty history. Bounded per tool, so still no leak.
         self.tool_recent = defaultdict(lambda: deque(maxlen=40))
+        # Cohort burndown. `burndown` holds compact points; `lot_meta` holds the
+        # per-lot constants (cohort, route length, due date) that would
+        # otherwise be repeated on every point.
+        self.burndown = deque(maxlen=BURNDOWN_MAX)
+        self.lot_meta = {}
+        self.sim_t = None        # latest simulated time seen, for the "now" rule
 
     def apply(self, topic, ev):
         with self.lock:
@@ -126,12 +139,90 @@ class FabMirror:
                 if tool:
                     self.tool_stats[tool]["completed"] += 1
                 self.throughput.append((time.time(), self.counts["LOT_COMPLETE"]))
+            elif t == "LOT_PROGRESS":
+                self._apply_progress(ev)
             elif t == "TOOL_STATUS":
                 self.tools[ev.get("tool")] = {
                     "online": ev.get("online") != "0",
                     "last_seen": time.time(),
                 }
         self._fanout({"kind": "event", "topic": topic, "event": ev})
+
+    def _apply_progress(self, ev):
+        """One burndown point. Called with the lock held.
+
+        The wire format is all strings; everything numeric is coerced here so
+        the client never has to, and a malformed field costs one point rather
+        than the whole request.
+        """
+        lot = ev.get("lot")
+        if not lot:
+            return
+
+        def f(key, default=0.0):
+            try:
+                return float(ev.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        t = f("t")
+        left = int(f("left"))
+        state = ev.get("state") or "active"
+
+        meta = self.lot_meta.get(lot)
+        if meta is None:
+            meta = self.lot_meta[lot] = {
+                "cohort": ev.get("cohort") or "?",
+                "part": ev.get("part") or "?",
+                "release": f("rel"),
+                "due": f("due"),
+                "prio": f("prio"),
+            }
+        # Route length can grow: rework splices processed steps back onto the
+        # front of the route, so this is a running maximum, not a constant.
+        meta["route"] = max(int(meta.get("route", 0)), int(f("route")))
+        meta["left"] = left
+        meta["state"] = state
+        meta["last_t"] = t
+        meta["rem_s"] = f("rem_s")
+
+        if self.sim_t is None or t > self.sim_t:
+            self.sim_t = t
+
+        self.burndown.append((lot, t, left, ev.get("reason") or "none",
+                              f("wq"), f("wb"), f("wp"), f("rem_s")))
+
+        # lot_meta would otherwise outlive the ring and grow without bound over
+        # a long run. Trim completed lots first: an active lot's metadata is
+        # still needed to draw its line.
+        if len(self.lot_meta) > 6000:
+            done = [k for k, m in self.lot_meta.items() if m.get("state") == "done"]
+            for k in done[:2000]:
+                self.lot_meta.pop(k, None)
+
+    def burndown_view(self, cohorts=None, max_lots=400):
+        """Group the ring into per-lot series. Takes the lock only to copy."""
+        with self.lock:
+            points = list(self.burndown)
+            meta = {k: dict(v) for k, v in self.lot_meta.items()}
+            sim_t = self.sim_t
+
+        wanted = set(cohorts) if cohorts else None
+        series = {}
+        for lot, t, left, reason, wq, wb, wp, rem_s in points:
+            m = meta.get(lot)
+            if m is None:
+                continue
+            if wanted is not None and m["cohort"] not in wanted:
+                continue
+            s = series.get(lot)
+            if s is None:
+                if len(series) >= max_lots:
+                    continue
+                s = series[lot] = []
+            s.append({"t": t, "left": left, "reason": reason,
+                      "wq": wq, "wb": wb, "wp": wp, "rem_s": rem_s})
+        return series, meta, sim_t
 
     def add_decision(self, d):
         with self.lock:
@@ -606,6 +697,88 @@ def decisions():
     n = min(int(request.args.get("limit", 100)), 500)
     with mirror.lock:
         return jsonify(list(mirror.decisions)[-n:])
+
+
+def _cohort_rows(meta):
+    """One row per cohort, ranked by how recently it moved."""
+    by = {}
+    for lot, m in meta.items():
+        c = by.setdefault(m["cohort"], {
+            "cohort": m["cohort"], "part": m["part"], "lots": 0, "done": 0,
+            "left": [], "last_t": 0.0, "release": m["release"], "due": m["due"],
+        })
+        c["lots"] += 1
+        c["done"] += 1 if m.get("state") == "done" else 0
+        c["left"].append(m.get("left", 0))
+        c["last_t"] = max(c["last_t"], m.get("last_t", 0.0))
+        c["release"] = min(c["release"], m["release"])
+        c["due"] = max(c["due"], m["due"])
+
+    rows = []
+    for c in by.values():
+        left = sorted(c.pop("left"))
+        n = len(left)
+        # Spread is the point of the envelope: a widening band means the cohort
+        # is desynchronising and will stall at the next batch step.
+        c["min_left"] = left[0]
+        c["max_left"] = left[-1]
+        c["med_left"] = left[n // 2]
+        c["spread"] = left[-1] - left[0]
+        rows.append(c)
+    rows.sort(key=lambda r: (-r["last_t"], r["cohort"]))
+    return rows
+
+
+@app.get("/api/lots")
+def lots_index():
+    """Cohort index for the burndown view.
+
+    Returns every cohort currently in the ring, ranked by last movement. The
+    client picks which to expand; series come from /api/lots/<cohort> so the
+    index stays small even with hundreds of cohorts in a long run.
+    """
+    _, meta, sim_t = mirror.burndown_view(cohorts=[])
+    rows = _cohort_rows(meta)
+    return jsonify({
+        "now_t": sim_t,
+        "cohorts": rows[:int(request.args.get("limit", 60))],
+        "total_cohorts": len(rows),
+        "lots_tracked": len(meta),
+        "points_held": len(mirror.burndown),
+        "points_cap": BURNDOWN_MAX,
+    })
+
+
+@app.get("/api/lots/<path:cohort>")
+def lots_cohort(cohort):
+    """Per-lot burndown series for one cohort.
+
+    `steps_remaining` is computed upstream from the route and passed through
+    untouched. It is not monotonic -- rework splices processed steps back onto
+    the route -- and nothing here clamps it, because an upward jog is the most
+    informative thing this chart shows.
+    """
+    series, meta, sim_t = mirror.burndown_view(cohorts=[cohort])
+    if not series:
+        return jsonify({"cohort": cohort, "now_t": sim_t, "lots": [],
+                        "note": "no points held for this cohort"}), 200
+
+    lots = []
+    for lot, pts in series.items():
+        m = meta[lot]
+        pts.sort(key=lambda x: x["t"])
+        lots.append({
+            "lot": lot,
+            "part": m["part"],
+            "route": m.get("route", 0),
+            "release": m["release"],
+            "due": m["due"],
+            "prio": m["prio"],
+            "state": m.get("state", "active"),
+            "points": pts,
+        })
+    lots.sort(key=lambda r: r["lot"])
+    return jsonify({"cohort": cohort, "now_t": sim_t, "lots": lots})
 
 
 @app.get("/api/stream")

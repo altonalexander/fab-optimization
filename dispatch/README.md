@@ -79,6 +79,58 @@ integrity      0 malformed, 0 seq gaps, 0 unknown tools
 | `producer_sim.hpp` | Lot/tool event generator |
 | `equipment_sim.hpp` | Closes the start/complete loop |
 
+## The lots view (cohort burndown)
+
+Remaining route steps per lot against simulated time, one line per lot,
+descending to zero at completion.
+
+```
+sim_feed.py  --(LOT_PROGRESS on fab.lot.burndown)-->  api  -->  /api/lots
+```
+
+`steps_remaining` is computed in the feed from the lot's route and passed
+through untouched; the browser never sees a route. Three properties are
+deliberate and easy to break:
+
+- **It is not monotonic.** Rework splices already-processed steps back onto the
+  front of the route (`simulation/instance.py:122`), so the line goes *up*.
+  Nothing clamps it. Roughly 3 jogs per 2 simulated days in LVHM.
+- **It counts route positions, not distinct operations.** A lot with 40 steps
+  left may visit litho six more times; deduplicating by operation name would
+  understate the work remaining.
+- **Flat runs are attributed.** The simulator tracks `waiting_time_batching`
+  separately from general queueing, so a horizontal run can be labelled
+  *waiting on cohort* from measurement rather than inference.
+
+A **cohort** is not an SMT2020 concept, so `--cohort-mode` defines it:
+
+| mode | grouping | use |
+|---|---|---|
+| `product-day` (default) | one product's releases within one day | the lots that can actually batch — a furnace batch needs the same product *and* the same step. ~5.6 lots in LVHM, about one batch worth |
+| `release-wave` | lots released at the same instant | in LVHM that is one lot of each of 10 products, which can **never** batch with each other. Useful for watching identically-released lots diverge; misleading if read as batch partners |
+
+Endpoints:
+
+| Route | Returns |
+|---|---|
+| `GET /api/lots` | cohort index, ranked by last movement, with min/median/max steps left and the spread |
+| `GET /api/lots/<cohort>` | per-lot series for one cohort |
+
+Points are held in one bounded ring (`BURNDOWN_MAX`, default 150k) rather than
+per-lot series with an eviction policy: LVHM emits ~23k progress events per
+simulated day across ~2k lots in flight, so per-lot retention either leaks or
+silently drops the lots you were watching.
+
+Geometry lives in `ui/src/burndown_geom.js`, free of pixel scales and of React,
+and is checked against a live API:
+
+```bash
+cd dispatch/ui && node src/burndown_geom.test.mjs http://localhost:8000
+```
+
+`--no-burndown` on `sim_feed.py` turns the events off and roughly halves lot
+event volume; the lots view then reports that it has no points.
+
 ## Adding a machine configuration
 
 1. Subclass `MachineConfiguration`, implement `evaluate` / `free_capacity` /

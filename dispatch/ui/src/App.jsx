@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
+import CohortBurndown from './CohortBurndown.jsx'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
@@ -610,12 +611,28 @@ export default function App() {
         <div className="shell-main">
 
       <nav className="tabs">
-        {['live', 'tools', 'floor', 'routes', 'results', 'scenario', 'topology'].map(t => (
+        {['live', 'lots', 'tools', 'floor', 'routes', 'results', 'scenario', 'topology'].map(t => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
         ))}
       </nav>
+
+      {tab === 'lots' && (
+        <div className="grid">
+          <section>
+            <h3>Cohort burndown</h3>
+            <p className="muted" style={{ marginTop: -4 }}>
+              Remaining route steps per lot against simulated time. A cohort is
+              one product's releases within one day &mdash; the lots that can
+              actually batch together, since an SMT2020 furnace batch needs the
+              same product <i>and</i> the same step. Band thickness is cohort
+              spread; a widening band means the cohort is desynchronising.
+            </p>
+            <CohortBurndown />
+          </section>
+        </div>
+      )}
 
       {tab === 'live' && (
         <div className="grid">

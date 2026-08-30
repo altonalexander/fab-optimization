@@ -219,3 +219,25 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 .chat-input button:disabled{background:#9ca3af;cursor:default}
 .chat-foot{margin-top:8px;font-size:11px}
 .chat-off{padding:24px;text-align:center;background:#f9fafb;border-radius:8px}
+
+/* ---------------------------------------------------------------- lots view */
+.burndown-controls { display: flex; gap: 10px; align-items: center;
+  flex-wrap: wrap; margin-bottom: 6px; }
+.burndown-controls select { max-width: 320px; padding: 3px 6px; }
+.burndown-controls .seg { display: inline-flex; }
+.burndown-controls .seg button { padding: 3px 9px; border: 1px solid #d1d5db;
+  background: #fff; cursor: pointer; font-size: 12px; }
+.burndown-controls .seg button + button { border-left: none; }
+.burndown-controls .seg button.active { background: #111827; color: #fff;
+  border-color: #111827; }
+/* No transition on line geometry: animated redraws on a live chart read as
+   flicker, and make it impossible to tell whether motion is data or rendering. */
+.burndown-svg { max-width: 100%; height: auto; background: #fff;
+  border: 1px solid #e5e7eb; }
+.burndown-svg * { transition: none !important; }
+.burndown-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px;
+  color: #4b5563; margin-top: 6px; align-items: center; }
+.burndown-legend i { display: inline-block; width: 10px; height: 10px;
+  margin-right: 5px; vertical-align: -1px; border-radius: 2px; }
+.burndown-note { font-size: 11px; line-height: 1.5; margin-top: 8px;
+  max-width: 900px; }
