@@ -52,6 +52,27 @@ is recoverable from upstream at the SHA above.
    broken, stop — do not point it at a private copy.**
 2. Not tracked (see the root `.gitignore`): `.venv/`, `wandb/`, `__pycache__/`,
    `debug_data/`, `docs/`. Present on disk, regenerable or environment-local.
+3. **Scenario default is LVHM, not HVLM** (2026-08-30). `simulation/greedy.py`,
+   `greedy_runner.py` and `exp_set_gen.py` defaulted to HVLM; this project
+   standardises on LVHM, so a run launched without `--dataset` no longer
+   silently measures the other fab. See `bench/SCENARIO.md` for the reasoning
+   and for what would overturn it. HVLM still works when passed explicitly.
+4. **`main.py` bootstraps `sys.path` from `__file__`** (2026-08-30). Upstream
+   relied on the environment providing `simulation/` on the path; here that was
+   a `pyscfabsim.pth` in the venv that still pointed at the pre-consolidation
+   `PySCFabSim-revised/` directory. Python ignores dead `.pth` entries silently,
+   so every entry point died on `No module named 'classes'` with nothing to
+   indicate why. Paths are **appended**, not inserted: `simulation/gym/` would
+   otherwise shadow the real `gym` that `rl_train` imports.
+5. **`simulation/stats.py` creates its results directory** before writing
+   (2026-08-30). A completed run was otherwise lost at the final write on any
+   checkout without a `greedy/` directory.
+
+Deviations 3-5 are edits inside this vendored tree, which the policy above says
+to avoid. They are here rather than in `dispatch/` or `bench/` because each one
+is a property of the baseline's own entry points — a default, an import path, an
+output path — that cannot be expressed from outside. Re-apply them when
+refreshing the pin.
 
 ## Environment
 

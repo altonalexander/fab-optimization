@@ -51,6 +51,13 @@ The operational constraint: at 400 lots a 0.25s budget returns no incumbent at
 all and the greedy fallback fires. The tactical cycle must allow >=1s of solve
 time at this scale. The fallback is load-bearing, not decorative.
 
+## Which scenario
+
+**LVHM, by default, everywhere.** The reasoning, the assumptions it rests on,
+and the tests that would overturn it are in [`SCENARIO.md`](SCENARIO.md). Read
+it before quoting any number as being about "the fab" — it is about one of two
+fabs, and section 5 records evidence that already pushes back on the rationale.
+
 ## Baseline side
 
 `baselines/pyscfabsim/` reports throughput/cycle-time over SMT2020 HVLM and LVHM

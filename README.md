@@ -8,6 +8,7 @@ reason: **they must read the same data.**
 dispatch/            the C++ stack (fabdisp) — four zones, sub-ms fast path
 baselines/pyscfabsim/  discrete-event fab simulator + PPO agent (vendored, read-only)
 data/smt2020/        the shared SMT2020 load — the reason this is one repo
+                     (LVHM is the standard scenario; see bench/SCENARIO.md)
 bench/               comparison harness, per-tool probe, committed results
 scripts/             dev-up.sh and friends
 ```
