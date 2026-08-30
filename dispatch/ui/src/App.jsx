@@ -715,7 +715,7 @@ export default function App() {
   // Remembered per browser so the rail does not reappear every reload for
   // someone who closed it. Wrapped: some contexts throw on storage access.
   const [assistantOpen, setAssistantOpen] = useState(() => {
-    try { return localStorage.getItem('assistantOpen') !== '0' } catch { return true }
+    try { return localStorage.getItem('assistantOpen') === '1' } catch { return false }
   })
   useEffect(() => {
     try { localStorage.setItem('assistantOpen', assistantOpen ? '1' : '0') } catch { /* ignore */ }
@@ -737,7 +737,7 @@ export default function App() {
     ? Object.entries(state.tools).filter(([, v]) => !v.online).map(([k]) => k) : []
 
   return (
-    <div className="app">
+    <div className={assistantOpen ? 'app app-railed' : 'app'}>
       <header>
         <div>
           <h1>Fab Dispatch</h1>
@@ -759,7 +759,7 @@ export default function App() {
               title="open the tool index" />
       </div>
 
-      <div className={assistantOpen ? 'shell' : 'shell shell-collapsed'}>
+      <div className="shell">
         <div className="shell-main">
 
       <nav className="tabs">
@@ -906,7 +906,9 @@ export default function App() {
       </div>
 
       {!assistantOpen && (
-        <button className="rail-reopen" onClick={() => setAssistantOpen(true)}>
+        <button className="rail-reopen" onClick={() => setAssistantOpen(true)}
+                title="Open the assistant">
+          <span className="rail-reopen-icon" aria-hidden="true">&#9776;</span>
           Assistant
         </button>
       )}
