@@ -199,6 +199,18 @@ class FeedPlugin(IPlugin):
     def _name(self, machine):
         return f'{machine.family}_{machine.idx}'
 
+    def _lot_id(self, lot):
+        """A unique lot id.
+
+        lot.name is the PRODUCT, not the lot: a whole SMT2020 WIP of 2,226 lots
+        carries just four distinct names (Lot_3, Lot_4, HotLot_3, HotLot_4).
+        Emitting name alone collapsed every lot of a product onto one key in
+        the API's lots_ready/in_flight dicts, so the WIP chart read 0 ready and
+        4 in flight after eleven thousand starts. Upstream's own chart_plugin
+        writes `lot.name + ' ' + str(lot.idx)` for the same reason.
+        """
+        return f'{lot.name}_{lot.idx}'
+
     def on_sim_init(self, instance):
         self._now = instance.current_time
         # Announce every tool once so the dashboard has a roster before any
@@ -217,7 +229,7 @@ class FeedPlugin(IPlugin):
         tool = self._name(machine)
         for lot in lots:
             self._write(LOT_TOPIC, envelope(
-                type='LOT_STARTED', lot=lot.name, tool=tool,
+                type='LOT_STARTED', lot=self._lot_id(lot), tool=tool,
                 recipe=lot.actual_step.step_name, prio=1))
         self._write(DECISION_TOPIC, envelope(
             tool=tool, lots=len(lots), queue=len(machine.waiting_lots),
@@ -226,13 +238,13 @@ class FeedPlugin(IPlugin):
 
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
-        self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=lot.name))
+        self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
 
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
         for lot in lots:
             self._write(LOT_TOPIC, envelope(
-                type='LOT_READY', lot=lot.name,
+                type='LOT_READY', lot=self._lot_id(lot),
                 recipe=getattr(lot.actual_step, 'step_name', ''),
                 prio=1, wafers=25, slack=3600))
 

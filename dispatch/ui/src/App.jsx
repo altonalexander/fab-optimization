@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
 
 // ---------------------------------------------------------------------------
@@ -620,17 +620,32 @@ export default function App() {
       {tab === 'live' && (
         <div className="grid">
           <section>
-            <h3>WIP</h3>
+            <h3>WIP — whole fab</h3>
+            <p className="muted" style={{ marginTop: -4 }}>
+              Every lot in the fab, not one tool. <b>Waiting</b> has been
+              released but not started; <b>running</b> is on a tool now. Their
+              sum is total WIP. For one tool, use the tools or floor tab.
+            </p>
             <ResponsiveContainer width="100%" height={240}>
               <LineChart data={history}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={40} />
-                <YAxis tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }}
+                       label={{ value: 'lots', angle: -90, position: 'insideLeft',
+                                style: { fontSize: 11, fill: '#6b7280' } }} />
                 <Tooltip />
-                <Line type="monotone" dataKey="ready" stroke="#1d4ed8" dot={false} />
-                <Line type="monotone" dataKey="inFlight" stroke="#15803d" dot={false} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Line type="monotone" dataKey="ready" name="waiting"
+                      stroke="#1d4ed8" dot={false} />
+                <Line type="monotone" dataKey="inFlight" name="running"
+                      stroke="#15803d" dot={false} />
               </LineChart>
             </ResponsiveContainer>
+            {/* The x axis is wall clock, not simulated time: this is a live
+                monitor, and the sim runs at --speed x realtime. */}
+            <p className="muted" style={{ fontSize: 11 }}>
+              x axis is wall-clock arrival time, not simulated time
+            </p>
           </section>
           <section>
             <h3>Event feed</h3>
