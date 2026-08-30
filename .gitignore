@@ -29,3 +29,6 @@ bench/scratch/
 # original unsorted drop, kept on disk as a safety net
 unorganized/
 dispatch/build-ortools/
+
+# local dev run state
+.dev-run/

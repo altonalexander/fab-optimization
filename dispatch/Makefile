@@ -57,9 +57,14 @@ logs:
 	$(COMPOSE) logs -f dispatcher amhs-adapter
 
 # --- viz layer, run locally without docker ---------------------------------
+# api/.venv holds flask, confluent-kafka and the anthropic SDK. Fall back to
+# python3 so the target still runs where the deps are installed system-wide;
+# see api/requirements.txt if the import fails.
+API_PY := $(if $(wildcard api/.venv/bin/python3),$(PWD)/api/.venv/bin/python3,python3)
+
 api: scenario
 	cd api && SCENARIO_BIN=$(PWD)/fab_scenario TOOL_CONFIG=$(PWD)/config/fab_tools.json \
-	  ZONES_FILE=$(PWD)/infra/zones.yaml python3 main.py
+	  ZONES_FILE=$(PWD)/infra/zones.yaml $(API_PY) main.py
 
 ui:
 	cd ui && npm install && npm run dev
