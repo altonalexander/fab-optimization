@@ -313,7 +313,8 @@ def kafka_consumer_loop():
         "auto.offset.reset": "latest",
         "enable.auto.commit": True,      # a mirror may lose its place safely
     })
-    c.subscribe(["fab.lot.events", "fab.tool.events", "fab.dispatch.decisions"])
+    c.subscribe(["fab.lot.events", "fab.tool.events", "fab.dispatch.decisions",
+                     "fab.lot.burndown"])
     app.logger.info("kafka mirror attached to %s", KAFKA_BROKERS)
 
     while True:

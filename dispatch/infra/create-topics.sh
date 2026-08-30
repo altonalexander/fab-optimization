@@ -28,5 +28,14 @@ $K --bootstrap-server $B --create --if-not-exists \
    --topic fab.tool.state --partitions 6 --replication-factor 1 \
    --config cleanup.policy=compact
 
+# Burndown progress: one record per lot per step completion, so this is the
+# highest-volume topic in the fab (~23k/simulated day for LVHM). Partitioned by
+# lot_id like fab.lot.events, since the burndown is only meaningful if a lot's
+# own points stay in order. Retention is short: the view holds a bounded ring
+# in memory and refetches on load, so a week of history buys nothing.
+$K --bootstrap-server $B --create --if-not-exists \
+   --topic fab.lot.burndown --partitions 12 --replication-factor 1 \
+   --config retention.ms=86400000 --config compression.type=lz4
+
 echo "--- topics ---"
 $K --bootstrap-server $B --list
