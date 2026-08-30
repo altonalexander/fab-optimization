@@ -660,9 +660,14 @@ class FeedPlugin(IPlugin):
             self._write(LOT_TOPIC, envelope(
                 type='LOT_STARTED', lot=self._lot_id(lot), tool=tool,
                 recipe=lot.actual_step.step_name, prio=1))
+        # run stamps every stream, not just burndown. A consumer that cannot
+        # tell which run an event came from cannot notice that it is stitching
+        # two timelines together -- which is exactly what happened: state from
+        # day 5 drawn against decisions from day 30, silently.
         self._write(DECISION_TOPIC, envelope(
             tool=tool, lots=len(lots), queue=len(machine.waiting_lots),
             day=round(instance.current_time / 86400, 4),
+            run=self.run_id,
             setup=machine.current_setup or '-'))
 
     def on_lot_done(self, instance, lot):
@@ -721,7 +726,7 @@ class FeedPlugin(IPlugin):
                 type='LOT_STATE', lot=L['lot'], product=L['product'],
                 part=L.get('part') or L['product'],
                 step=L['step'], tool=L['tool'], done_steps=L['done_steps'],
-                run=self.run_id, warm_t=self._warm_t,
+                run=self.run_id, warm_t=self._warm_t, day=snap['day'],
                 cohort=self._cohort_of(L['lot']), hist=hist or None),
                 key=L['lot'])
             n += 1
@@ -729,7 +734,8 @@ class FeedPlugin(IPlugin):
             if self.tool_filter and not T['tool'].startswith(self.tool_filter):
                 continue
             self.sink.write(TOOL_STATE_TOPIC, envelope(
-                type='TOOL_STATE', tool=T['tool'], online=T['online']),
+                type='TOOL_STATE', tool=T['tool'], online=T['online'],
+                run=self.run_id, day=snap['day']),
                 key=T['tool'])
             n += 1
         self.emitted += n

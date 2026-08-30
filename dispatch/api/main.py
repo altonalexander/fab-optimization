@@ -139,6 +139,12 @@ class FabMirror:
         # evicted long before anyone drills into it, so the detail view would
         # always show an empty history. Bounded per tool, so still no leak.
         self.tool_recent = defaultdict(lambda: deque(maxlen=40))
+        # Timeline provenance: which run and simulated day the snapshot came
+        # from, and which the live stream is on. See note_timeline().
+        self.snapshot_run = None
+        self.snapshot_day = None
+        self.stream_run = None
+        self.stream_day = None
         # Cohort burndown. `burndown` holds compact points; `lot_meta` holds the
         # per-lot constants (cohort, route length, due date) that would
         # otherwise be repeated on every point.
@@ -411,7 +417,47 @@ class FabMirror:
                       "wq": wq, "wb": wb, "wp": wp, "rem_s": rem_s})
         return series, meta, sim_t, warm_t
 
+    def note_timeline(self, run, day, source):
+        """Record which run/day a record came from, and whether they agree.
+
+        The mirror has no memory of its own, so nothing stopped it drawing a
+        day-5 snapshot against a day-30 decision stream. Both looked healthy
+        and the composite was nonsense. Comparing the run id the snapshot
+        carried against the one the live stream carries is the cheapest
+        possible check, and it is the difference between a wrong dashboard and
+        a dashboard that says it is wrong.
+        """
+        if source == "snapshot":
+            if run:
+                self.snapshot_run = run
+            if day is not None:
+                self.snapshot_day = day
+        else:
+            if run:
+                self.stream_run = run
+            if day is not None:
+                self.stream_day = day
+
+    def timeline(self):
+        """Snapshot/stream provenance, and whether they are the same run."""
+        with self.lock:
+            snap_run, stream_run = self.snapshot_run, self.stream_run
+            snap_day, stream_day = self.snapshot_day, self.stream_day
+        # Unknown is not the same as disagreeing: before either side has been
+        # seen there is nothing to contradict, and claiming a fault then would
+        # train people to ignore the badge.
+        if snap_run and stream_run:
+            ok = snap_run == stream_run
+        else:
+            ok = None
+        return {
+            "snapshot_run": snap_run, "snapshot_day": snap_day,
+            "stream_run": stream_run, "stream_day": stream_day,
+            "consistent": ok,
+        }
+
     def add_decision(self, d):
+        self.note_timeline(d.get("run"), _as_float(d.get("day")), "stream")
         with self.lock:
             self.decisions.append({**d, "ts": time.time()})
             # Decisions carry the simulated clock as a day number. Advancing
@@ -497,6 +543,14 @@ class FabMirror:
                 "completed": self.counts.get("LOT_COMPLETE", 0),
                 "throughput_lots_per_hour": round(rate, 1),
                 "decisions_seen": len(self.decisions),
+                "timeline": {
+                    "snapshot_run": self.snapshot_run,
+                    "snapshot_day": self.snapshot_day,
+                    "stream_run": self.stream_run,
+                    "stream_day": self.stream_day,
+                    "consistent": (None if not (self.snapshot_run and self.stream_run)
+                                   else self.snapshot_run == self.stream_run),
+                },
                 # The simulated clock, and the pacing that clock is running
                 # at, on the same frame as the counts they describe. Polled
                 # separately they would disagree: a live chart plotted against
@@ -601,6 +655,8 @@ def bootstrap_from_state(Consumer):
             idle = 0
             remaining -= 1
             ev = parse_envelope(msg.value().decode("utf-8", "replace"))
+            mirror.note_timeline(ev.get("run"), _as_float(ev.get("day")),
+                                 "snapshot")
             if msg.topic() == "fab.lot.state":
                 lot = ev.get("lot")
                 if not lot:

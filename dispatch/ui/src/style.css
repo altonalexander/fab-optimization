@@ -178,6 +178,19 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 .embed-foot{padding:6px 12px;border-top:1px solid var(--line);font-size:11px;
   background:#fafafa}
 
+/* Timeline provenance badge ------------------------------------------------ */
+.tl-badge{display:flex;align-items:center;gap:7px;padding:4px 10px;
+  border:1px solid var(--line);border-radius:999px;background:var(--card);
+  font-size:12px;white-space:nowrap;cursor:default}
+.tl-day{font-weight:600}
+.tl-run{font-family:ui-monospace,monospace;font-size:10px;color:#6b7280}
+/* Loud on purpose: a stitched timeline makes every chart wrong, and the whole
+   point of the badge is that this state used to be invisible. */
+.tl-badge-bad{border-color:#b91c1c;background:#fef2f2;color:#991b1b}
+.tl-badge-bad .tl-run{color:#b91c1c}
+.tl-warn{font-size:13px;line-height:1}
+.tl-bad-text{font-weight:600}
+
 /* Floor map --------------------------------------------------------------- */
 .floor-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
 .floor-wrap:has(.floor-panel){grid-template-columns:minmax(0,1fr) 260px}

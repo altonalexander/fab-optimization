@@ -828,6 +828,51 @@ function WipChart({ history }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Timeline provenance. What simulated day is on screen, and which producer run
+// it came from.
+//
+// This exists because the dashboard once drew a day-5 WIP snapshot against a
+// day-30 decision stream and looked entirely healthy doing it. Two producers,
+// two timelines, one mirror, and nothing on screen that could have told you.
+// The original dashboard spec asked for a replay id in the provenance line for
+// exactly this reason; this is that.
+// ---------------------------------------------------------------------------
+
+function TimelineBadge({ state }) {
+  const tl = state && state.timeline
+  if (!tl) return null
+
+  // The day worth showing is the live one; the snapshot day is where the run
+  // started and only matters when the two disagree.
+  const day = tl.stream_day ?? tl.snapshot_day
+  const run = tl.stream_run || tl.snapshot_run
+
+  // consistent === null means one side has not been seen yet. That is not a
+  // fault, and flagging it as one would teach people to ignore the badge.
+  const broken = tl.consistent === false
+
+  const title = broken
+    ? `Timeline mismatch: snapshot is run ${tl.snapshot_run} at day `
+      + `${tl.snapshot_day ?? '?'}, stream is run ${tl.stream_run} at day `
+      + `${tl.stream_day ?? '?'}. The view is stitching two runs together and `
+      + `should not be trusted. Restart the feed as a single producer with `
+      + `--warmup-days N.`
+    : `Simulated day ${day ?? '—'}, producer run ${run || '—'}. `
+      + `Snapshot and live stream agree.`
+
+  return (
+    <div className={broken ? 'tl-badge tl-badge-bad' : 'tl-badge'} title={title}>
+      {broken && <span className="tl-warn" aria-hidden="true">⚠</span>}
+      <span className="tl-day">
+        day {day == null ? '—' : Number(day).toFixed(1)}
+      </span>
+      {run && <span className="tl-run">{run}</span>}
+      {broken && <span className="tl-bad-text">timeline mismatch</span>}
+    </div>
+  )
+}
+
 function SpeedControl({ connected }) {
   const [ctl, setCtl] = useState(null)
   const [open, setOpen] = useState(false)
@@ -993,6 +1038,7 @@ export default function App() {
         {/* The live pill and, when the rail is closed, the only way back into
             the assistant -- kept together in the top-right corner. */}
         <div className="header-right">
+          <TimelineBadge state={state} />
           <SpeedControl connected={connected} />
           {!assistantOpen && (
             <button className="rail-reopen" onClick={() => setAssistantOpen(true)}
