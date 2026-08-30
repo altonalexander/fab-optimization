@@ -178,10 +178,18 @@ export function maxValue(lots, metric) {
 export function projection(lot, metric, now) {
   const p = lot.projection
   if (!p || lot.state === 'done' || lot.state === 'scrapped') return null
-  const pts = lot.points || []
+  // Joined, not `lot.points`: a lot that has not moved since the warm-up
+  // snapshot has history and no live points at all, and the API keeps those
+  // deliberately -- they are the stalled lots worth looking at. Reading only
+  // the live half denied a ray to exactly those lots, which is backwards: the
+  // one that has not moved in days is the one whose projected finish matters.
+  const pts = allPoints(lot)
   if (!pts.length) return null
   const last = pts[pts.length - 1]
-  const v0 = metric === 'steps' ? last.left : last.rem_s
+  const v0 = metricOf(last, metric)
+  // History carries only (t, left). A process-time ray for a history-only lot
+  // therefore has no value to start from, and is correctly absent rather than
+  // guessed at.
   if (!v0) return null
   const t0 = Math.max(p.start_t ?? last.t, now ?? last.t)
   return { t1: t0, v1: v0, t2: p.eta_t, v2: 0, eta: p.eta_t, basis: p.basis }

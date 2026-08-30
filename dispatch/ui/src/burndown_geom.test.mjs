@@ -151,12 +151,16 @@ for (const row of idx.cohorts.slice(0, 25)) {
               Math.abs(sl - (lot.due - lot.projection.eta_t)) < 1)
       }
     } else if (lot.state === 'active' && lot.projection) {
-      // One legitimate case: the lot has completed its last step but has not
-      // emitted `done` yet, so it is still `active` with nothing remaining.
-      // There is no ray to draw and drawing one to "now" would be noise.
+      // One legitimate case remains: the lot has completed its last step but
+      // has not emitted `done` yet, so it is still `active` with nothing
+      // remaining. There is no ray to draw and drawing one to "now" would be
+      // noise. A lot with steps left always gets one now, whether it has moved
+      // since the warm-up snapshot or not.
       check(`active lot without a ray has nothing left (${lot.lot})`,
             (lot.stats?.steps_left ?? 0) === 0,
-            `steps_left=${lot.stats?.steps_left}`)
+            `steps_left=${lot.stats?.steps_left}, `
+            + `points=${(lot.points || []).length}, `
+            + `history=${(lot.history || []).length}`)
     }
 
     // A finished lot is not projected anywhere.
@@ -266,6 +270,34 @@ if (warm == null) {
   check('scrapped lot line is not extended to now',
         !segs.some(x => x.extended),
         '- a scrapped lot is not waiting, its line just ends')
+}
+
+// A lot that has not moved since the warm-up snapshot: history, no live
+// points. The API keeps these on purpose -- a lot that has not moved in days
+// is the one worth looking at -- and reading only `points` used to deny it the
+// projection ray, so the stalled lots were the ones missing a projected
+// finish. Five such lots were live when this was found.
+{
+  const stalled = {
+    lot: 'SYNTH_2', state: 'active', due: 900, release: 0,
+    projection: { start_t: 100, eta_t: 800, rate_s: 1, basis: 'part+type', n: 40 },
+    history: [{ t: 0, left: 60 }, { t: 50, left: 44 }],
+    points: [],
+  }
+  const ray = projection(stalled, 'steps', 100)
+  check('a lot with only history still gets a ray',
+        ray !== null && ray.v1 === 44 && ray.v2 === 0,
+        ray ? `v1=${ray.v1} v2=${ray.v2}` : 'no ray')
+  check('the ray starts no earlier than now', ray && ray.t1 >= 100)
+  // History carries only (t, left) -- there is no rem_s to start a
+  // process-time ray from, and inventing one would be a guess.
+  check('no process-time ray from history alone',
+        projection(stalled, 'time', 100) === null)
+  // The live half still wins when it exists.
+  const moved = { ...stalled, points: [{ t: 60, left: 30, reason: 'proc', rem_s: 300 }] }
+  const mray = projection(moved, 'steps', 100)
+  check('a lot that has moved projects from its live points',
+        mray && mray.v1 === 30, mray ? `v1=${mray.v1}` : 'no ray')
 }
 
 console.log(`\nlots checked: ${checkedLots}`)
