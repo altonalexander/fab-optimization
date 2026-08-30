@@ -57,12 +57,11 @@ import sys
 import time
 import uuid
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
-SIM = os.path.join(REPO, 'baselines', 'pyscfabsim')
-sys.path.insert(0, os.path.join(SIM, 'simulation'))
-sys.path.insert(0, SIM)
-os.chdir(SIM)
+# Must precede the baseline imports: it puts the vendored simulator on the path
+# and chdirs into it. REPO comes from there too, so there is one definition of
+# where the repo root is rather than a copy per consumer.
+import sim_runner  # noqa: E402
+from sim_runner import REPO  # noqa: E402
 
 from plugins.interface import IPlugin  # noqa: E402
 
@@ -806,10 +805,7 @@ def main():
     # no broker. Not the operational path -- hidden from --help so it is not
     # reached for by accident.
     sink.add_argument('--out', help=argparse.SUPPRESS)
-    p.add_argument('--dataset', default='SMT2020_LVHM')
-    p.add_argument('--days', type=int, default=5)
-    p.add_argument('--dispatcher', default='fifo')
-    p.add_argument('--seed', type=int, default=0)
+    sim_runner.add_common_args(p, days_default=5)
     p.add_argument('--speed', type=float, default=600.0,
                    help='sim-seconds per wall-second; 0 = unpaced')
     p.add_argument('--tool-prefix', default=None,
@@ -828,8 +824,6 @@ def main():
                    help='stop emitting after this simulated day')
     p.add_argument('--truncate', action='store_true',
                    help='start the feed file fresh')
-    p.add_argument('--batch-strat', default='Demand',
-                   choices=['Max', 'Min', 'RoundRobin', 'Demand'])
     p.add_argument('--no-burndown', action='store_true',
                    help='skip per-lot burndown events (roughly halves lot-event '
                         'volume; the lots view goes empty)')
@@ -842,17 +836,10 @@ def main():
                         "10 products and can never batch (default: product-day)")
     a = p.parse_args()
 
-    if not a.dataset.startswith('SMT2020_'):
-        a.dataset = 'SMT2020_' + a.dataset
+    a.dataset = sim_runner.normalize_dataset(a.dataset)
     if (a.from_day is not None and a.to_day is not None
             and a.from_day > a.to_day):
         p.error('--from-day must not exceed --to-day')
-
-    from dispatching.dispatcher import dispatcher_map
-    from file_instance import FileInstance
-    from randomizer import Randomizer
-    from read import read_all
-    from greedy import get_lots_to_dispatch_by_machine
 
     # Kafka unless a file was explicitly asked for. The transport is the
     # product path; the file exists for tests that cannot start a broker.
@@ -876,10 +863,6 @@ def main():
         print(f'  window: day {a.from_day if a.from_day is not None else 0}'
               f' .. {a.to_day if a.to_day is not None else a.days}',
               file=sys.stderr)
-
-    files = read_all('datasets/' + a.dataset)
-    run_to = 3600 * 24 * a.days
-    Randomizer().random.seed(a.seed)
 
     warm_s = None if a.warmup_days is None else a.warmup_days * 86400
     warmed = warm_s is None
@@ -925,69 +908,58 @@ def main():
     # to, not the 0 the warm-up runs at.
     feed.base_speed = a.speed
     write_control(a.speed)
-    instance = FileInstance(files, run_to, True, [feed], None, a.batch_strat)
-    rule = dispatcher_map[a.dispatcher]
+    instance, run_to = sim_runner.build(
+        a.dataset, a.days, a.seed, [feed], a.batch_strat)
 
-    try:
-        while not instance.done:
-            if instance.next_decision_point():
-                break
-            if instance.current_time > run_to:
-                break
+    def before_dispatch(instance):
+        nonlocal warmed, next_report
+        # Warm-up is silent by design -- nothing is emitted before the
+        # line -- but silent for tens of minutes is indistinguishable from
+        # hung, and that ambiguity has already cost real time: three
+        # redundant runs were started because there was no way to tell a
+        # working warm-up from a dead one without ps. Report progress
+        # against the wall clock, with an ETA derived from the rate
+        # actually achieved rather than from an estimate, because the
+        # machine is usually shared and the achieved rate is the only
+        # honest predictor.
+        # warm_s > 0 guards --warmup-days 0, which is a legitimate and
+        # useful request -- snapshot the WIP the dataset ships with and
+        # stream from there, no warm-up at all -- and which divided by
+        # zero here before it ever reached the snapshot.
+        if warm_s and not warmed \
+                and instance.current_time >= next_report:
+            el = time.time() - t_start
+            done_frac = instance.current_time / warm_s
+            eta = el / done_frac - el if done_frac > 0 else 0
+            print(f'    warm-up day {instance.current_time/86400:6.1f}'
+                  f' / {a.warmup_days:g}'
+                  f'  ({done_frac*100:4.1f}%)'
+                  f'  {el/60:5.1f} min elapsed'
+                  f'  ~{eta/60:.0f} min left', file=sys.stderr)
+            next_report = instance.current_time + report_every
 
-            # Warm-up is silent by design -- nothing is emitted before the
-            # line -- but silent for tens of minutes is indistinguishable from
-            # hung, and that ambiguity has already cost real time: three
-            # redundant runs were started because there was no way to tell a
-            # working warm-up from a dead one without ps. Report progress
-            # against the wall clock, with an ETA derived from the rate
-            # actually achieved rather than from an estimate, because the
-            # machine is usually shared and the achieved rate is the only
-            # honest predictor.
-            # warm_s > 0 guards --warmup-days 0, which is a legitimate and
-            # useful request -- snapshot the WIP the dataset ships with and
-            # stream from there, no warm-up at all -- and which divided by zero
-            # here before it ever reached the snapshot.
-            if warm_s and not warmed \
-                    and instance.current_time >= next_report:
-                el = time.time() - t_start
-                done_frac = instance.current_time / warm_s
-                eta = el / done_frac - el if done_frac > 0 else 0
-                print(f'    warm-up day {instance.current_time/86400:6.1f}'
-                      f' / {a.warmup_days:g}'
-                      f'  ({done_frac*100:4.1f}%)'
-                      f'  {el/60:5.1f} min elapsed'
-                      f'  ~{eta/60:.0f} min left', file=sys.stderr)
-                next_report = instance.current_time + report_every
+        # Cross the warm-up line exactly once: snapshot the fab, start
+        # emitting, and start pacing. Everything before this ran unpaced
+        # with emission suppressed, which is why it takes minutes of CPU
+        # rather than hours of wall clock.
+        if warm_s is not None and not warmed \
+                and instance.current_time >= warm_s:
+            warmed = True
+            snap = snapshot_of(instance, feed._lot_id, feed._name,
+                               history=feed._hist)
+            save_snapshot(cpath, snap)
+            feed.from_s = None            # stop suppressing
+            feed.speed = a.speed          # start pacing
+            feed._control_checked = 0.0   # honour any dashboard change
+            feed.last_sim_t = instance.current_time
+            n = feed.emit_snapshot(snap)
+            print(f'  warm-up complete at day {snap["day"]}: '
+                  f'{len(snap["lots"])} lots in WIP, {n} snapshot records '
+                  f'published (cached to {os.path.relpath(cpath, REPO)})',
+                  file=sys.stderr)
 
-            # Cross the warm-up line exactly once: snapshot the fab, start
-            # emitting, and start pacing. Everything before this ran unpaced
-            # with emission suppressed, which is why it takes minutes of CPU
-            # rather than hours of wall clock.
-            if warm_s is not None and not warmed \
-                    and instance.current_time >= warm_s:
-                warmed = True
-                snap = snapshot_of(instance, feed._lot_id, feed._name,
-                                   history=feed._hist)
-                save_snapshot(cpath, snap)
-                feed.from_s = None            # stop suppressing
-                feed.speed = a.speed          # start pacing
-                feed._control_checked = 0.0   # honour any dashboard change
-                feed.last_sim_t = instance.current_time
-                n = feed.emit_snapshot(snap)
-                print(f'  warm-up complete at day {snap["day"]}: '
-                      f'{len(snap["lots"])} lots in WIP, {n} snapshot records '
-                      f'published (cached to {os.path.relpath(cpath, REPO)})',
-                      file=sys.stderr)
-
-            machine, lots = get_lots_to_dispatch_by_machine(instance, rule)
-            if lots is None:
-                instance.usable_machines.remove(machine)
-            else:
-                instance.dispatch(machine, lots)
-    except KeyboardInterrupt:
-        print(f'\n  stopped at day {instance.current_time/86400:.3f}',
-              file=sys.stderr)
+    sim_runner.run(instance, run_to, a.dispatcher,
+                   before_dispatch=before_dispatch)
 
     out.close()
     msg = (f'  emitted {feed.emitted} events through '

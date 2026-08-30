@@ -62,6 +62,16 @@ for p in "$API_PY" "$SIM_PY"; do
                 || { bad "missing interpreter $p"; exit 1; }
 done
 
+note 'sim runner'
+# The dispatch loop both bench tools share. Runs on any interpreter -- it fakes
+# the instance -- so it goes before the venv-dependent checks: if the loop is
+# broken, the fixture below is meaningless.
+if python3 "$REPO/bench/tools/t_sim_runner.py" >"$RUN/sim_runner.log" 2>&1; then
+  ok "sim_runner contract ($(grep -c '  ok  ' "$RUN/sim_runner.log") checks)"
+else
+  bad 'sim_runner contract'; sed -n '/FAIL/p' "$RUN/sim_runner.log"; exit 1
+fi
+
 note 'fixture'
 # Short and unpaced: this is a correctness check, not a benchmark.
 if "$SIM_PY" "$REPO/bench/tools/sim_feed.py" --out "$FEED" --days 1 --speed 0 \
