@@ -278,3 +278,51 @@ Honest accounting, because the numbers here have been wrong before:
   the data zone — the production shape.
 
 See `BUILD.md` for the toolchain and the OR-Tools recipe.
+
+## Credits
+
+This project stands on two pieces of work by other people. If you use it,
+credit them too.
+
+### PySCFabSim — the baseline simulator
+
+The Python simulator in `baselines/pyscfabsim/` is **not our work**. It is
+[PySCFabSim](https://github.com/prosysscience/PySCFabSim-release) by the
+Research Group Production Systems, MIT-licensed, vendored here read-only so the
+C++ dispatcher has a pinned, reproducible baseline to be measured against.
+Every number this project reports as a comparison is a number PySCFabSim
+produced.
+
+It is vendored via the fork
+[david-dd/PySCFabSim-revised](https://github.com/david-dd/PySCFabSim-revised)
+at commit `ae3d55ef`, and **has been modified** — seven deviations, documented
+in `baselines/pyscfabsim/UPSTREAM.md`. See `baselines/pyscfabsim/README.md` for
+the details and `baselines/pyscfabsim/LICENSE` for the MIT terms, which must be
+retained in any redistribution.
+
+### SMT2020 — the dataset
+
+Both the dispatcher and the baseline read the
+[SMT2020 Semiconductor Manufacturing Testbed](https://p2schedgen.fernuni-hagen.de/index.php/downloads/simulation),
+distributed by FernUniversität in Hagen under its own terms. It is a separate
+work from this project and from PySCFabSim. If you publish results derived from
+it, cite:
+
+> Kopp, D., Hassoun, M., Kalir, A., & Mönch, L. (2020). SMT2020 — A
+> Semiconductor Manufacturing Testbed. *IEEE Transactions on Semiconductor
+> Manufacturing.* doi:10.1109/TSM.2020.3001933
+
+This project standardises on the **LVHM** scenario; HVLM works when passed
+explicitly. See `docs/adr/0001-lvhm-default-scenario.md`.
+
+## License
+
+This project is licensed under the **Apache License 2.0** — see `LICENSE`.
+
+You may use, modify, and distribute it, including commercially, provided you
+retain the copyright notice, state your changes, and pass along the `NOTICE`
+file. It also grants you an explicit patent licence from the contributors.
+
+The Apache-2.0 licence covers this project's own code. It does **not** cover
+`baselines/pyscfabsim/` (MIT, see above) or the SMT2020 dataset (separate
+terms). `NOTICE` lists all third-party components.

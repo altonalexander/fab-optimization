@@ -1,0 +1,22 @@
+fab-optimization
+Copyright 2026 Alton Alexander
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+------------------------------------------------------------------------------
+This product includes third-party software and data with their own terms.
+------------------------------------------------------------------------------
+
+PySCFabSim  --  baselines/pyscfabsim/
+    MIT License. Copyright (c) 2026 Research Group Production Systems.
+    https://github.com/prosysscience/PySCFabSim-release
+    Vendored via the fork https://github.com/david-dd/PySCFabSim-revised at
+    commit ae3d55ef08cd0d6bc9cd114eb800e6c920dbede1, and modified. Full terms
+    and provenance: baselines/pyscfabsim/LICENSE and baselines/pyscfabsim/NOTICE.
+
+SMT2020 Semiconductor Manufacturing Testbed  --  data/smt2020/
+    A separate work, distributed by FernUniversitaet in Hagen under its own
+    terms. https://p2schedgen.fernuni-hagen.de/index.php/downloads/simulation
+    Kopp, D., Hassoun, M., Kalir, A., & Moench, L. (2020). SMT2020 -- A
+    Semiconductor Manufacturing Testbed. IEEE Transactions on Semiconductor
+    Manufacturing. doi:10.1109/TSM.2020.3001933
