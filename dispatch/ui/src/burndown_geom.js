@@ -10,6 +10,30 @@
 export const metricOf = (p, metric) => (metric === 'steps' ? p.left : p.rem_s)
 
 /**
+ * Warm-up history followed by the live stream, as one series.
+ *
+ * The two arrive separately — history on the compacted state topic, live points
+ * on the burndown stream — and are kept apart in the payload so the chart can
+ * draw them differently. Anything that reasons about a lot's *shape* (the
+ * envelope, the y-domain, a value lookup) wants them joined, or an active lot
+ * looks like it sprang into existence at the warm-up line with no past.
+ *
+ * History carries only (t, left); `rem_s` is absent, so a process-time series
+ * legitimately has no historic half.
+ */
+export function allPoints(lot) {
+  const h = lot.history || []
+  const p = lot.points || []
+  if (!h.length) return p
+  if (!p.length) return h
+  // The snapshot is taken between two steps, so the join is contiguous rather
+  // than overlapping; drop anything at or before the last history point only
+  // if the feed ever republishes across the line.
+  const cut = h[h.length - 1].t
+  return h.concat(p.filter(x => x.t > cut))
+}
+
+/**
  * Step-after lookup: the value in force at time t is the value carried by the
  * last point at or before t. Returns null before the lot's first point.
  */
@@ -74,7 +98,7 @@ export function envelope(lots, d0, d1, now, metric, n = 160) {
     const vals = []
     for (const l of lots) {
       if (t > now && l.state !== 'done') continue
-      const v = valueAt(l.points, t, metric)
+      const v = valueAt(allPoints(l), t, metric)
       if (v != null) vals.push(v)
     }
     if (!vals.length) continue
@@ -115,7 +139,10 @@ export function batchBands(lots) {
 export function domain(lots, now) {
   let t0 = Infinity, t1 = -Infinity
   for (const l of lots) {
-    t0 = Math.min(t0, l.release, l.points?.[0]?.t ?? Infinity)
+    // Start at the earliest thing we can actually draw. With warm-up history
+    // that is the first historic point, not the first live one.
+    const first = allPoints(l)[0]?.t ?? Infinity
+    t0 = Math.min(t0, l.release, first)
     t1 = Math.max(t1, l.due)
   }
   t1 = Math.max(t1, now)
@@ -129,7 +156,7 @@ export function maxValue(lots, metric) {
   let m = 1
   for (const l of lots) {
     if (metric === 'steps') m = Math.max(m, l.route || 0)
-    for (const p of l.points || []) m = Math.max(m, metricOf(p, metric))
+    for (const p of allPoints(l)) m = Math.max(m, metricOf(p, metric) || 0)
   }
   return m
 }
@@ -190,4 +217,38 @@ export function domainWithProjection(lots, now, metric) {
     if (pr) t1 = Math.max(t1, pr.t2)
   }
   return [t0, t1 + (t1 - t0) * 0.02]
+}
+
+
+/**
+ * Step-after segments for the warm-up half of a lot's life.
+ *
+ * Drawn separately from the live half so the chart can colour them
+ * differently: everything here happened before the simulation the user is
+ * watching started, and reading a warm-up stall as something the current run
+ * caused would be the wrong conclusion.
+ *
+ * The trailing run joins the last historic point to the first live one. That
+ * wait began during warm-up, so it belongs to history even though it ends
+ * after the line.
+ */
+export function historySegments(lot, metric) {
+  if (metric !== 'steps') return []      // history carries no rem_s
+  const h = lot.history || []
+  if (h.length < 2) return []
+  const out = []
+  for (let i = 1; i < h.length; i++) {
+    const a = h[i - 1], b = h[i]
+    out.push({ t1: a.t, v1: a.left, t2: b.t, v2: a.left, flat: true, historic: true })
+    out.push({ t1: b.t, v1: a.left, t2: b.t, v2: b.left, flat: false, historic: true })
+  }
+  const last = h[h.length - 1]
+  const firstLive = (lot.points || [])[0]
+  if (firstLive && firstLive.t > last.t) {
+    out.push({ t1: last.t, v1: last.left, t2: firstLive.t, v2: last.left,
+               flat: true, historic: true })
+    out.push({ t1: firstLive.t, v1: last.left, t2: firstLive.t,
+               v2: firstLive.left, flat: false, historic: true })
+  }
+  return out
 }

@@ -10,8 +10,8 @@
  * author's assumptions agree with themselves.
  */
 import {
-  batchBands, domain, domainWithProjection, envelope, maxValue,
-  projection, reworkJogs, segments, valueAt,
+  allPoints, batchBands, domain, domainWithProjection, envelope,
+  historySegments, maxValue, projection, reworkJogs, segments, valueAt,
 } from './burndown_geom.js'
 
 const BASE = process.argv[2] || 'http://localhost:8077'
@@ -153,6 +153,66 @@ for (const row of idx.cohorts.slice(0, 25)) {
     const pr = projection(lot, 'steps', now)
     if (pr) check(`eta inside domain for ${lot.lot}`, pr.t2 <= pd1)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Warm-up history
+// ---------------------------------------------------------------------------
+const warm = idx.warm_t
+let sawHistory = false, histLots = 0
+
+if (warm == null) {
+  console.log('  note no warm_t: feed was run without --warmup-days, '
+              + 'so there is no history to check')
+} else {
+  console.log(`warm-up boundary: day ${(warm / 86400).toFixed(2)}`)
+  for (const row of idx.cohorts.slice(0, 30)) {
+    const d = await (await fetch(`${BASE}/api/lots/${encodeURIComponent(row.cohort)}`)).json()
+    for (const lot of d.lots || []) {
+      const h = lot.history || []
+      if (!h.length) continue
+      sawHistory = true
+      histLots++
+
+      // History is the past, by definition. A point after the line would mean
+      // the snapshot captured something from the live run.
+      check(`history precedes the warm line for ${lot.lot}`,
+            h.every(x => x.t <= warm + 1))
+      check(`history is ordered for ${lot.lot}`,
+            h.every((x, i) => i === 0 || x.t >= h[i - 1].t))
+
+      // The two halves must join, or the chart shows a lot teleporting.
+      if (lot.points.length) {
+        check(`live resumes after history for ${lot.lot}`,
+              lot.points[0].t >= h[h.length - 1].t)
+        const merged = allPoints(lot)
+        check(`allPoints is ordered for ${lot.lot}`,
+              merged.every((x, i) => i === 0 || x.t >= merged[i - 1].t))
+        check(`allPoints spans both halves for ${lot.lot}`,
+              merged.length === h.length + lot.points.filter(
+                x => x.t > h[h.length - 1].t).length)
+      }
+
+      // Historic segments must be a staircase like the live ones, and must
+      // never be drawn past the boundary except for the joining run.
+      const hs = historySegments(lot, 'steps')
+      if (hs.length) {
+        check(`historic segments are flat-or-vertical for ${lot.lot}`,
+              hs.every(x => (x.flat && x.v1 === x.v2) || (!x.flat && x.t1 === x.t2)))
+        check(`historic segments are tagged for ${lot.lot}`,
+              hs.every(x => x.historic === true))
+      }
+      check(`no historic segments for the time metric (${lot.lot})`,
+            historySegments(lot, 'time').length === 0,
+            '- history carries no rem_s, so a process-time staircase would be invented')
+
+      // The window has to actually contain the history we are drawing.
+      const [hd0] = domainWithProjection(d.lots, d.now_t, 'steps')
+      check(`domain reaches back to history for ${lot.lot}`, hd0 <= h[0].t)
+    }
+    if (histLots > 12) break
+  }
+  check('saw warm-up history on at least one lot', sawHistory)
 }
 
 // Scrap never occurs in SMT2020 -- there is no scrap concept in the dataset or

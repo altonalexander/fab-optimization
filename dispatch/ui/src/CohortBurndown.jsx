@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   batchBands as computeBands, envelope as computeEnvelope,
   maxValue, segments as computeSegments, projection as computeProjection,
-  reworkJogs, domainWithProjection,
+  reworkJogs, domainWithProjection, historySegments, allPoints,
 } from './burndown_geom.js'
 
 /**
@@ -35,6 +35,12 @@ const REASON = {
   proc:   { label: 'processing',        color: '#059669' },
   none:   { label: 'no movement yet',   color: '#d1d5db' },
 }
+
+// Warm-up is drawn in near-black. It is not a category of wait like the
+// reason colours below -- it is a different era, before the run being watched
+// began, and colouring it with the live palette invites reading a warm-up
+// stall as something this run caused.
+const HISTORIC = '#111827'
 
 const DAY = 86400
 const fmtDay = t => `d${(t / DAY).toFixed(1)}`
@@ -166,10 +172,11 @@ export default function CohortBurndown() {
     const d0 = t0 + zoom.offset * (t1 - t0)
     const d1 = d0 + span
 
+    const warm = data.warm_t ?? null
     const yMax = maxValue(lots, metric)
     const x = t => M.l + ((t - d0) / (d1 - d0)) * iw
     const y = v => M.t + ih - (v / yMax) * ih
-    return { lots, now, d0, d1, yMax, x, y }
+    return { lots, now, warm, d0, d1, yMax, x, y }
   }, [data, metric, zoom, iw, ih, M.l, M.t])
 
   // Y positions at which lots in this cohort were actually observed waiting on
@@ -281,13 +288,31 @@ export default function CohortBurndown() {
           )
         })}
 
-        {view && envelope && (
-          <>
-            <path d={areaPath(envelope, view)} fill="#2563eb" fillOpacity="0.16" />
-            <path d={linePath(envelope, view, 'med')} fill="none"
-                  stroke="#2563eb" strokeWidth="2" />
-          </>
-        )}
+        {view && envelope && (() => {
+          // Split the band at the warm-up line and draw each side in its own
+          // ink, so the same shape reads as two eras rather than one history.
+          const w = view.warm
+          const past = w == null ? [] : envelope.filter(e => e.t <= w)
+          const live = w == null ? envelope : envelope.filter(e => e.t >= w)
+          return (
+            <>
+              {past.length > 1 && (
+                <>
+                  <path d={areaPath(past, view)} fill={HISTORIC} fillOpacity="0.13" />
+                  <path d={linePath(past, view, 'med')} fill="none"
+                        stroke={HISTORIC} strokeWidth="2" strokeOpacity="0.75" />
+                </>
+              )}
+              {live.length > 1 && (
+                <>
+                  <path d={areaPath(live, view)} fill="#2563eb" fillOpacity="0.16" />
+                  <path d={linePath(live, view, 'med')} fill="none"
+                        stroke="#2563eb" strokeWidth="2" />
+                </>
+              )}
+            </>
+          )
+        })()}
 
         {view && mode === 'lines' && view.lots.map((l, i) => {
           const dim = focus && focus !== l.lot
@@ -302,6 +327,16 @@ export default function CohortBurndown() {
                     x2={view.x(l.due)} y2={view.y(0)}
                     stroke={hue} strokeOpacity={dim ? 0.08 : 0.4}
                     strokeDasharray="4 4" />
+              {/* Warm-up: everything before the run being watched began. */}
+              {historySegments(l, metric).map((s, k) => (
+                <line key={`h${k}`}
+                      x1={view.x(s.t1)} y1={view.y(s.v1)}
+                      x2={view.x(s.t2)} y2={view.y(s.v2)}
+                      stroke={dim ? '#d1d5db' : HISTORIC}
+                      strokeWidth={s.flat ? 2.5 : 1.2}
+                      strokeOpacity={dim ? 0.4 : 0.75} />
+              ))}
+
               {segments(l, view, metric).map((s, k) => (
                 <line key={k} x1={s.x1} y1={s.y1} x2={s.x2} y2={s.y2}
                       stroke={dim ? '#d1d5db'
@@ -366,6 +401,17 @@ export default function CohortBurndown() {
           )
         })}
 
+        {/* Where warm-up ends and this run begins. */}
+        {view && view.warm != null && view.warm > view.d0 && view.warm < view.d1 && (
+          <>
+            <line x1={view.x(view.warm)} x2={view.x(view.warm)}
+                  y1={M.t} y2={M.t + ih}
+                  stroke={HISTORIC} strokeWidth="1.5" strokeOpacity="0.6" />
+            <text x={view.x(view.warm) - 4} y={M.t + 10} fontSize="10"
+                  textAnchor="end" fill={HISTORIC}>sim start</text>
+          </>
+        )}
+
         {/* now */}
         {view && view.now >= view.d0 && view.now <= view.d1 && (
           <>
@@ -385,6 +431,7 @@ export default function CohortBurndown() {
           <span key={k}><i style={{ background: v.color }} />{v.label}</span>
         ))}
         <span><i style={{ background: '#7c3aed', opacity: 0.3 }} />batch step (observed)</span>
+        <span><i style={{ background: HISTORIC }} />warm-up (before sim start)</span>
         <span><i style={{ background: '#6b7280' }} />projected (naive)</span>
         <span><i style={{ background: '#b45309' }} />rework jog</span>
         <span><i style={{ background: '#b91c1c' }} />scrapped (&times;)</span>
@@ -412,6 +459,17 @@ export default function CohortBurndown() {
         forecast. The <b>vertical dash</b> is the due date: a ray crossing zero
         to the right of it is projected late. A <b>scrapped</b> lot ends in a
         red &times; and gets no projection at all.
+      </p>
+      <p className="muted burndown-note">
+        Lines drawn in <b>black</b> are <b>warm-up</b>: the fab was simulated for
+        several days before this run started, so an active lot already has a
+        past. That history is captured during warm-up and published on the
+        compacted state topic, which is why it survives an API restart. It is
+        decimated to at most 60 points per lot, keeping the endpoints and every
+        rework jog. Everything from the <b>sim start</b> rule rightwards happened
+        during the run you are watching. A warm-up stall is not something this
+        run caused, which is the reason the two eras are not drawn in the same
+        ink.
       </p>
     </div>
   )

@@ -117,6 +117,10 @@ class FabMirror:
         self.burndown = deque(maxlen=BURNDOWN_MAX)
         self.lot_meta = {}
         self.burndown_run = None   # which simulation run the ring belongs to
+        # Where warm-up ends and the live stream begins. Published by the feed
+        # rather than inferred, because the chart draws the two sides
+        # differently and a guessed boundary would mislabel real history.
+        self.warm_t = None
         self.sim_t = None        # latest simulated time seen, for the "now" rule
 
     def apply(self, topic, ev):
@@ -142,12 +146,69 @@ class FabMirror:
                 self.throughput.append((time.time(), self.counts["LOT_COMPLETE"]))
             elif t == "LOT_PROGRESS":
                 self._apply_progress(ev)
+            elif t == "LOT_STATE":
+                self._apply_lot_state(ev)
             elif t == "TOOL_STATUS":
                 self.tools[ev.get("tool")] = {
                     "online": ev.get("online") != "0",
                     "last_seen": time.time(),
                 }
         self._fanout({"kind": "event", "topic": topic, "event": ev})
+
+    def _apply_lot_state(self, ev):
+        """A snapshot record: the lot's position, and how it got there.
+
+        The warm-up history rides on this topic because it is compacted -- one
+        record per lot, so an API starting up long after the feed still rebuilds
+        every active lot's past. Called with the lock held.
+        """
+        lot = ev.get("lot")
+        if not lot:
+            return
+
+        run = ev.get("run")
+        if run and run != self.burndown_run:
+            self.burndown_run = run
+            self.burndown.clear()
+            self.lot_meta.clear()
+            self.sim_t = None
+
+        try:
+            self.warm_t = float(ev.get("warm_t")) if ev.get("warm_t") else self.warm_t
+        except (TypeError, ValueError):
+            pass
+
+        raw = ev.get("hist") or ""
+        history = []
+        for chunk in raw.split(","):
+            if not chunk:
+                continue
+            t, _, v = chunk.partition(":")
+            try:
+                history.append({"t": float(t), "left": int(v)})
+            except ValueError:
+                continue
+
+        m = self.lot_meta.setdefault(lot, {})
+        m.setdefault("part", ev.get("part") or ev.get("product") or "?")
+        m.setdefault("cohort", ev.get("cohort") or "?")
+        m.setdefault("release", history[0]["t"] if history else 0.0)
+        m.setdefault("due", 0.0)
+        m.setdefault("prio", 0.0)
+        m.setdefault("hot", False)
+        if history:
+            m["history"] = history
+            # Seed position from the snapshot so a lot that has not moved since
+            # warm-up still has a length and a place on the chart. A later
+            # LOT_PROGRESS overwrites all of this with live truth.
+            m.setdefault("left", history[-1]["left"])
+            m.setdefault("last_t", history[-1]["t"])
+            try:
+                done = int(float(ev.get("done_steps") or 0))
+                m.setdefault("route", done + history[-1]["left"])
+            except (TypeError, ValueError):
+                pass
+        m.setdefault("state", "active")
 
     def _apply_progress(self, ev):
         """One burndown point. Called with the lock held.
@@ -229,6 +290,7 @@ class FabMirror:
             points = list(self.burndown)
             meta = {k: dict(v) for k, v in self.lot_meta.items()}
             sim_t = self.sim_t
+            warm_t = self.warm_t
 
         if want_points:
             # The rate model is fitted over the whole ring, not just the
@@ -251,7 +313,7 @@ class FabMirror:
                 s = series[lot] = []
             s.append({"t": t, "left": left, "reason": reason,
                       "wq": wq, "wb": wb, "wp": wp, "rem_s": rem_s})
-        return series, meta, sim_t
+        return series, meta, sim_t, warm_t
 
     def add_decision(self, d):
         with self.lock:
@@ -404,6 +466,9 @@ def bootstrap_from_state(Consumer):
                         mirror.in_flight[lot] = tool
                     else:
                         mirror.lots_ready[lot] = ev
+                    # Same record also carries the warm-up burndown, which is
+                    # the only place an active lot's past exists.
+                    mirror._apply_lot_state(ev)
                 lots += 1
             else:
                 tool = ev.get("tool")
@@ -991,10 +1056,11 @@ def lots_index():
     client picks which to expand; series come from /api/lots/<cohort> so the
     index stays small even with hundreds of cohorts in a long run.
     """
-    _, meta, sim_t = mirror.burndown_view(cohorts=[])
+    _, meta, sim_t, warm_t = mirror.burndown_view(cohorts=[])
     rows = _cohort_rows(meta)
     return jsonify({
         "now_t": sim_t,
+        "warm_t": warm_t,
         "cohorts": rows[:int(request.args.get("limit", 60))],
         "total_cohorts": len(rows),
         "lots_tracked": len(meta),
@@ -1012,10 +1078,18 @@ def lots_cohort(cohort):
     the route -- and nothing here clamps it, because an upward jog is the most
     informative thing this chart shows.
     """
-    series, meta, sim_t = mirror.burndown_view(cohorts=[cohort], want_points=True)
+    series, meta, sim_t, warm_t = mirror.burndown_view(cohorts=[cohort],
+                                                       want_points=True)
+    # A lot can have warm-up history and no live points yet -- it has not moved
+    # since the snapshot. Dropping those would hide exactly the stalled lots
+    # worth looking at, so they are drawn from history alone.
+    for lot, m in meta.items():
+        if m.get("cohort") == cohort and m.get("history") and lot not in series:
+            series[lot] = []
+
     if not series:
-        return jsonify({"cohort": cohort, "now_t": sim_t, "lots": [],
-                        "note": "no points held for this cohort"}), 200
+        return jsonify({"cohort": cohort, "now_t": sim_t, "warm_t": warm_t,
+                        "lots": [], "note": "no points held for this cohort"}), 200
 
     rates = rate_model(getattr(mirror, "_all_points", []), meta)
 
@@ -1032,12 +1106,17 @@ def lots_cohort(cohort):
             "prio": m["prio"],
             "hot": bool(m.get("hot")),
             "state": m.get("state", "active"),
+            # Warm-up history and live points are kept apart rather than
+            # concatenated: the chart draws them differently, and merging them
+            # here would throw away the distinction the user asked to see.
+            "history": m.get("history", []),
             "points": pts,
             "projection": project(m, rates, sim_t),
             "stats": lot_stats(m, pts, sim_t),
         })
     lots.sort(key=lambda r: r["lot"])
-    return jsonify({"cohort": cohort, "now_t": sim_t, "lots": lots,
+    return jsonify({"cohort": cohort, "now_t": sim_t, "warm_t": warm_t,
+                    "lots": lots,
                     "rate_basis_counts": {
                         f"{k[0] or 'fab'}/{'hot' if k[1] else ('reg' if k[1] is False else 'any')}": v["n"]
                         for k, v in sorted(rates.items(), key=lambda kv: -kv[1]["n"])[:8]

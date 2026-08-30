@@ -102,6 +102,40 @@ deliberate and easy to break:
   separately from general queueing, so a horizontal run can be labelled
   *waiting on cohort* from measurement rather than inference.
 
+### Warm-up history
+
+With `--warmup-days N` the feed simulates N days unpaced with emission
+suppressed, then publishes a WIP snapshot and streams live from there. Without
+history, every active lot's burndown would begin at the warm-up line with no
+past -- 2,138 lots all apparently created at day 5, which is the opposite of
+what a WIP snapshot is for.
+
+So warm-up points are recorded rather than discarded. They are computed anyway
+(suppression happens in `_write`, after `_burn`), and this is the only chance to
+capture them: the simulator keeps no per-lot step history, so once warm-up has
+passed the shape is gone.
+
+The history rides on `fab.lot.state`, **not** the burndown stream, because that
+topic is compacted: one record per lot, so an API starting up long after the
+feed still rebuilds every active lot's past. On the burndown topic it would age
+out with the deltas.
+
+Each lot's history is decimated to at most `SIM_FEED_HIST_POINTS` (default 60),
+pinning the endpoints and **every rework jog** first, then filling evenly. The
+jogs are the informative part; thinning them away would flatten the one thing
+the history is worth drawing.
+
+The chart draws warm-up in near-black and everything after the `sim start` rule
+in the live palette. They are separate arrays in the payload (`history` and
+`points`) rather than one merged series, because the distinction is the point:
+a stall during warm-up is not something the run being watched caused.
+`allPoints()` joins them for anything reasoning about shape -- the envelope, the
+y-domain, a value lookup.
+
+A lot released after warm-up simply has no history, and a lot that has not moved
+since the snapshot is drawn from history alone rather than dropped, which is
+what keeps a stalled lot visible.
+
 ### The projected line
 
 Each active lot gets a gray dashed ray to a naive completion date:

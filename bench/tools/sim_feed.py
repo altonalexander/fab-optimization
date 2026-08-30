@@ -78,6 +78,38 @@ TOOL_STATE_TOPIC = 'fab.tool.state'
 # dashboard restart instant instead of re-simulating.
 CACHE_DIR = os.path.join(REPO, 'bench', 'snapshots')
 
+# Warm-up history points kept per lot in the snapshot. The raw history is one
+# point per completed step, so a 583-step route would carry 583 of them and the
+# compacted state topic would hold megabytes per run. Decimated to this many,
+# always keeping the first point, the last, and every rework jog -- the jogs
+# are the informative part and averaging them away would flatten the one thing
+# the history is worth drawing for.
+HIST_POINTS = int(os.environ.get('SIM_FEED_HIST_POINTS', '60'))
+
+
+def decimate(points, cap=HIST_POINTS):
+    """Thin a per-lot history to `cap` points, keeping the shape.
+
+    Endpoints and rework jogs are pinned first, then the remainder is filled
+    evenly. A jog is a point where steps remaining went *up*: the lot was sent
+    back in the line, and that is exactly what a reader is looking for.
+    """
+    if len(points) <= cap:
+        return points
+    keep = {0, len(points) - 1}
+    for i in range(1, len(points)):
+        if points[i][1] > points[i - 1][1]:
+            keep.add(i - 1)
+            keep.add(i)
+    room = cap - len(keep)
+    if room > 0:
+        stride = max(1, len(points) // (room + 1))
+        for i in range(0, len(points), stride):
+            if len(keep) >= cap:
+                break
+            keep.add(i)
+    return [points[i] for i in sorted(keep)]
+
 
 def envelope(**kv):
     """events.hpp wire format: k=v;k=v. Values must not contain ; or =."""
@@ -108,7 +140,7 @@ def save_snapshot(path, snap):
     os.replace(tmp, path)      # atomic: a half-written cache is worse than none
 
 
-def snapshot_of(instance, lot_id, machine_name):
+def snapshot_of(instance, lot_id, machine_name, history=None):
     """The fab as it stands: one record per lot in WIP, one per tool.
 
     This is what fixes cold start. A mirror rebuilt from the event stream alone
@@ -141,10 +173,20 @@ def snapshot_of(instance, lot_id, machine_name):
         lots.append({
             'lot': lid,
             'product': lot.name,
+            # lot.name is the order stream ("Lot_9", "HotLot_9"); part_name is
+            # the product ("part_9"). The burndown groups cohorts by product,
+            # so it needs the latter -- carrying only `product` here made a
+            # snapshot lot's part disagree with its own cohort id.
+            'part': getattr(lot, 'part_name', '') or lot.name,
             'step': getattr(step, 'step_name', '') if step else '',
             'setup': getattr(step, 'setup_needed', '') if step else '',
             'tool': running.get(lid),          # None => waiting, not running
             'done_steps': len(getattr(lot, 'processed_steps', []) or []),
+            # The burndown this lot walked during warm-up. Without it an active
+            # lot's line can only start at the moment the feed goes live, so
+            # every lot appears to have been created at day N with no past --
+            # the opposite of what a WIP snapshot is for.
+            'hist': decimate(history.get(lid, [])) if history else [],
         })
 
     # The sim has no broken flag either; a tool being down is expressed by its
@@ -155,6 +197,10 @@ def snapshot_of(instance, lot_id, machine_name):
 
     return {
         'day': round(instance.current_time / 86400, 4),
+        # Where history ends and the live stream begins. The chart draws one
+        # side of this line differently from the other, so it has to be a
+        # published fact rather than something the browser guesses.
+        'warm_t': round(instance.current_time, 1),
         'lots': lots,
         'tools': tools,
     }
@@ -294,6 +340,20 @@ class FeedPlugin(IPlugin):
         # t=817550. Stamping the run lets the consumer drop everything from an
         # older one instead of drawing both.
         self.run_id = uuid.uuid4().hex[:8]
+        # Warm-up burndown, kept rather than thrown away.
+        #
+        # Warm-up runs with emission suppressed, so these points are computed
+        # and then dropped by _write. Recording them here costs nothing extra
+        # and is the only chance to capture them: the simulator does not keep
+        # a lot's step history, so once warm-up has passed, that shape is gone
+        # for good. Keyed by lot id and dropped when a lot completes, so it is
+        # bounded by WIP rather than by every lot ever released.
+        self._hist = {}
+        # Cohort per lot, recorded as lots are seen. A snapshot record has no
+        # release time, and the cohort is defined from it, so it cannot be
+        # recomputed at snapshot time.
+        self._cohort_by_lot = {}
+        self._warm_t = None
 
     def _in_window(self):
         t = getattr(self, '_now', None)
@@ -401,6 +461,17 @@ class FeedPlugin(IPlugin):
                       'queue' if dq > 0 else
                       'proc' if dp > 0 else 'none')
 
+        self._cohort_by_lot[self._lot_id(lot)] = self._cohort(lot)
+
+        if not self._in_window():
+            # Suppressed: warm-up. Keep the shape instead of discarding it.
+            h = self._hist.setdefault(self._lot_id(lot), [])
+            # Cap defensively. A route is at most 583 steps, but rework can add
+            # to that, and an unbounded list here would be a slow leak.
+            if len(h) < 1500:
+                h.append((round(instance.current_time, 1), remaining))
+            return
+
         self._write(BURNDOWN_TOPIC, envelope(
             type='LOT_PROGRESS',
             run=self.run_id,
@@ -464,6 +535,7 @@ class FeedPlugin(IPlugin):
         self._burn(instance, lot, 'done')
         self._last_split.pop(lot.idx, None)
         self._route_len.pop(lot.idx, None)
+        self._hist.pop(self._lot_id(lot), None)
 
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
@@ -477,6 +549,16 @@ class FeedPlugin(IPlugin):
             # appearing only once it first completes a step.
             self._burn(instance, lot, 'released', reason='none')
 
+    def _cohort_of(self, lot_id):
+        """Cohort for a snapshot lot.
+
+        Recorded as each lot is first seen during warm-up, because the snapshot
+        record itself carries no release time and the cohort is defined from
+        it. Falls back to the product, which still groups lots that could batch
+        together even if the day bucket is unknown.
+        """
+        return self._cohort_by_lot.get(lot_id) or '?'
+
     def emit_snapshot(self, snap):
         """Publish a snapshot to the compacted state topics, keyed.
 
@@ -486,13 +568,23 @@ class FeedPlugin(IPlugin):
         bootstrapping consumer would read history instead of state.
         """
         n = 0
+        self._warm_t = snap.get('warm_t')
         for L in snap['lots']:
             if self.tool_filter and L['tool'] and \
                     not L['tool'].startswith(self.tool_filter):
                 continue
+            # History rides on the compacted state topic rather than the
+            # burndown stream: compaction keeps exactly one record per lot, so
+            # an API starting up later rebuilds the full picture from it, which
+            # is the whole point of the snapshot. On the burndown topic it
+            # would age out with the deltas.
+            hist = ','.join(f'{int(t)}:{v}' for t, v in (L.get('hist') or []))
             self.sink.write(LOT_STATE_TOPIC, envelope(
                 type='LOT_STATE', lot=L['lot'], product=L['product'],
-                step=L['step'], tool=L['tool'], done_steps=L['done_steps']),
+                part=L.get('part') or L['product'],
+                step=L['step'], tool=L['tool'], done_steps=L['done_steps'],
+                run=self.run_id, warm_t=self._warm_t,
+                cohort=self._cohort_of(L['lot']), hist=hist or None),
                 key=L['lot'])
             n += 1
         for T in snap['tools']:
@@ -665,7 +757,8 @@ def main():
             if warm_s is not None and not warmed \
                     and instance.current_time >= warm_s:
                 warmed = True
-                snap = snapshot_of(instance, feed._lot_id, feed._name)
+                snap = snapshot_of(instance, feed._lot_id, feed._name,
+                                   history=feed._hist)
                 save_snapshot(cpath, snap)
                 feed.from_s = None            # stop suppressing
                 feed.speed = a.speed          # start pacing
