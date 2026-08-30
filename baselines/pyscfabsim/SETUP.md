@@ -98,10 +98,27 @@ torch wandb pyinstrument openpyxl PyPDF2
 
 The package imports (`from classes import ...`) assume `simulation/` is on
 `sys.path`; upstream did this with `sys.path.append` calls hardcoded to the
-original authors' machines. This checkout instead uses a `.pth` file in the
-venv's `site-packages`. It must be a `.pth` (appended *after* site-packages),
-not `PYTHONPATH` — `simulation/gym/` shadows the real `gym` package if it comes
-first.
+original authors' machines. `main.py` now derives those paths from its own
+`__file__` and appends them, so it works from any checkout with no environment
+setup.
+
+The order matters: the entries must be **appended**, after site-packages. Both
+`simulation/gym/` and the real `gym` package are importable as `gym`, and
+`rl_train` needs the real one, so putting `simulation/` first (via `PYTHONPATH`,
+or `sys.path.insert`) breaks the RL entry points with a confusing
+`cannot import name 'Env' from 'gym'`.
+
+This replaces an earlier `pyscfabsim.pth` in the venv's `site-packages`, which
+still pointed at the pre-reorg `PySCFabSim-revised/` path. Nonexistent `.pth`
+entries are ignored silently, so every entry point died on `No module named
+'classes'` with nothing indicating why. If that stale file is still in your
+venv it is now inert, but worth correcting:
+
+```bash
+printf '%s\n' \
+  "$PWD/simulation" "$PWD/simulation/gym" \
+  > .venv/lib/python3.11/site-packages/pyscfabsim.pth
+```
 
 `wandb` is called unconditionally by `simulation/plugins/wandb_plugin.py`; the
 scripts set `WANDB_MODE=offline` so it does not demand an API key.

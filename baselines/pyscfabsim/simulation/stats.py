@@ -162,6 +162,9 @@ def print_statistics(instance, days, dataset, disp, method='greedy', dir='greedy
             if plugin.get_output_name() is not None:
                 plugins[plugin.get_output_name()] = plugin.get_output_value()
 
+        # A fresh checkout has no results dir, and losing a completed run to a
+        # missing directory at the very last step is a bad trade.
+        os.makedirs(dir, exist_ok=True)
         with io.open(f'{dir}/{method}_{days}days_{dataset}_{disp}.json', 'w') as f:
             json.dump({
                 'lots': lots,
