@@ -911,7 +911,10 @@ def main():
     # do not publish the first N days.
     from_day = a.warmup_days if warm_s is not None else a.from_day
     speed = 0.0 if warm_s is not None else a.speed
-    if warm_s is not None:
+    if warm_s == 0:
+        print('  no warm-up: snapshotting the WIP the dataset ships with, '
+              'then streaming', file=sys.stderr)
+    elif warm_s is not None:
         print(f'  warming up to day {a.warmup_days:g} (unpaced, silent) — '
               f'about {a.warmup_days * 3 / 30:.0f} min of CPU',
               file=sys.stderr)
@@ -941,7 +944,11 @@ def main():
             # actually achieved rather than from an estimate, because the
             # machine is usually shared and the achieved rate is the only
             # honest predictor.
-            if warm_s is not None and not warmed \
+            # warm_s > 0 guards --warmup-days 0, which is a legitimate and
+            # useful request -- snapshot the WIP the dataset ships with and
+            # stream from there, no warm-up at all -- and which divided by zero
+            # here before it ever reached the snapshot.
+            if warm_s and not warmed \
                     and instance.current_time >= next_report:
                 el = time.time() - t_start
                 done_frac = instance.current_time / warm_s
