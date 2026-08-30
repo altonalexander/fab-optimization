@@ -92,6 +92,20 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 
 /* --- assistant ---------------------------------------------------------- */
 /* Tool index / detail ----------------------------------------------------- */
+/* Availability strip above the tool index. Fixed height so the groups below
+   it do not jump as points arrive. */
+.avail{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px 6px;margin-bottom:14px}
+.avail-head{display:flex;justify-content:space-between;align-items:baseline;
+  gap:16px;flex-wrap:wrap}
+.avail-pct{font-size:20px;font-weight:600}
+.avail-ok{color:#15803d}
+.avail-warn{color:#b45309}
+.avail-bad{color:#b91c1c}
+.avail-notes{display:flex;gap:14px;font-size:12px;flex-wrap:wrap}
+.avail-svg{width:100%;height:92px;display:block;margin-top:4px}
+.avail-empty{height:92px;display:flex;align-items:center;font-size:12px}
+
 .tool-index-head{display:flex;justify-content:space-between;align-items:center;
   gap:16px;flex-wrap:wrap}
 .tool-search{padding:7px 11px;border:1px solid var(--line);border-radius:6px;

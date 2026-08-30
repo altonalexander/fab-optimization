@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
+import ToolAvailability from './ToolAvailability.jsx'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
@@ -476,6 +477,7 @@ function ToolIndex({ onOpen }) {
 
   return (
     <div>
+      <ToolAvailability />
       <div className="tool-index-head">
         <p className="muted">
           {data.total} tools in {data.groups.length} groups, busiest first.

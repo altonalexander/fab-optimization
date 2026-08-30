@@ -270,6 +270,17 @@ class FeedPlugin(IPlugin):
         # spent on. Keyed by lot idx and dropped when the lot completes, so it
         # is bounded by WIP rather than by total lots released.
         self._last_split = {}
+        # Tools taken down by a breakdown or a PM, and the simulated time each
+        # one comes back. PySCFabSim fires a plugin hook when an outage STARTS
+        # but none when it ends -- it just shifts the machine's events forward
+        # by the sampled length -- so without this the feed is one-way and the
+        # dashboard's tool roster decays monotonically to all-down.
+        self._down_until = {}
+        # Last (breakdown, PM) seconds seen per machine. BreakdownEvent.handle
+        # adds the sampled outage length to these counters *before* calling the
+        # plugin, so the delta is the exact length without resampling the
+        # distribution (which would give a different number every time).
+        self._wear = {}
 
     def _in_window(self):
         t = getattr(self, '_now', None)
@@ -296,6 +307,23 @@ class FeedPlugin(IPlugin):
             if delta > 0:
                 time.sleep(min(delta, 2.0))
         self.last_sim_t = sim_t
+
+    def _recover_due(self, now):
+        """Bring back every tool whose outage has elapsed.
+
+        Called from the hooks that already carry a simulated clock, so recovery
+        rides the existing event stream rather than needing a timer of its own.
+        A tool with no further activity anywhere in the fab therefore recovers
+        on the next event from any tool -- close enough for a dashboard, and it
+        cannot leave a tool down forever.
+        """
+        if not self._down_until:
+            return
+        due = [t for t, at in self._down_until.items() if at <= now]
+        for tool in due:
+            del self._down_until[tool]
+            self._write(TOOL_TOPIC, envelope(
+                type='TOOL_STATUS', tool=tool, online=1))
 
     def _name(self, machine):
         return f'{machine.family}_{machine.idx}'
@@ -398,6 +426,7 @@ class FeedPlugin(IPlugin):
 
     def on_step_done(self, instance, lot, step):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         self._burn(instance, lot, 'active')
 
     def on_sim_init(self, instance):
@@ -412,6 +441,7 @@ class FeedPlugin(IPlugin):
 
     def on_dispatch(self, instance, machine, lots, machine_end_time, lot_end_time):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         if self.tool_filter and not self._name(machine).startswith(self.tool_filter):
             return
         self._pace(instance.current_time)
@@ -427,12 +457,14 @@ class FeedPlugin(IPlugin):
 
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
         self._burn(instance, lot, 'done')
         self._last_split.pop(lot.idx, None)
 
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         for lot in lots:
             self._write(LOT_TOPIC, envelope(
                 type='LOT_READY', lot=self._lot_id(lot),
@@ -472,29 +504,58 @@ class FeedPlugin(IPlugin):
         return n
 
     def on_breakdown(self, *args):
-        self._tool_event(args, online=0)
+        self._tool_down(args, kind='breakdown')
 
     def on_preventive_maintenance(self, *args):
-        self._tool_event(args, online=0)
+        self._tool_down(args, kind='pm')
 
-    def _tool_event(self, args, online):
+    def _outage_length(self, machine, kind):
+        """Seconds this outage will last, taken from the simulator's own books.
+
+        BreakdownEvent.handle() samples the length once and adds it to
+        machine.bred_time (breakdown) or machine.pmed_time (PM) before calling
+        us, so the delta since the last outage on this machine is that exact
+        sample. Resampling event.length instead would give a recovery time
+        unrelated to the one the simulator is actually running.
+        """
+        attr = 'bred_time' if kind == 'breakdown' else 'pmed_time'
+        total = float(getattr(machine, attr, 0.0) or 0.0)
+        key = (id(machine), attr)
+        prev = self._wear.get(key, 0.0)
+        self._wear[key] = total
+        return max(0.0, total - prev)
+
+    def _tool_down(self, args, kind):
         # interface.py declares on_breakdown(machine, event) but events.py
         # calls it as (instance, event) -- accept either rather than trusting
         # the signature.
-        machine = None
+        machine, now = None, getattr(self, '_now', None)
         for a in args:
-            if hasattr(a, 'machine'):
+            if hasattr(a, 'current_time'):
+                now = a.current_time
+            if machine is None and hasattr(a, 'machine'):
                 machine = a.machine
-                break
-            if hasattr(a, 'idx') and hasattr(a, 'family'):
+            elif machine is None and hasattr(a, 'idx') and hasattr(a, 'family'):
                 machine = a
-                break
         if machine is None:
             return
-        if self.tool_filter and not self._name(machine).startswith(self.tool_filter):
+        tool = self._name(machine)
+        if self.tool_filter and not tool.startswith(self.tool_filter):
             return
+        length = self._outage_length(machine, kind)
+        self._now = now
         self._write(TOOL_TOPIC, envelope(
-            type='TOOL_STATUS', tool=self._name(machine), online=online))
+            type='TOOL_STATUS', tool=tool, online=0, reason=kind,
+            down_s=round(length, 1)))
+        if now is not None:
+            # A second outage while already down extends rather than shortens:
+            # whichever end is later is when the tool is actually usable again.
+            self._down_until[tool] = max(self._down_until.get(tool, 0.0),
+                                         now + length)
+        else:
+            # No clock to schedule against. Recover on the next event rather
+            # than stranding the tool offline for the rest of the run.
+            self._down_until[tool] = 0.0
 
 
 def main():

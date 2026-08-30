@@ -79,6 +79,55 @@ integrity      0 malformed, 0 seq gaps, 0 unknown tools
 | `producer_sim.hpp` | Lot/tool event generator |
 | `equipment_sim.hpp` | Closes the start/complete loop |
 
+## Tool availability and recovery
+
+The tool index opens with an availability strip: online tools over time, with
+the roster drawn as a dashed reference line above it. The series should be
+sitting just under the line; the gap is the outage.
+
+It exists because the roster used to decay to nothing and nobody could see it
+happening. `TOOL_STATUS` was a one-way street:
+
+- PySCFabSim fires `on_breakdown` / `on_preventive_maintenance` when an outage
+  *starts*. There is no end-of-outage hook — `BreakdownEvent.handle()` just
+  shifts the machine's pending events forward by the sampled length
+  (`simulation/events.py:71`, `instance.py:260`).
+- So `sim_feed.py` emitted `online=0` and never `online=1`, and the mirror,
+  which trusts the feed absolutely, only ever removed tools from service.
+
+Over a 3-day LVHM run that read **75.8% online and still falling** — 318 of
+1,313 tools stranded, none of which had actually failed. Extrapolated, the
+dashboard shows a dead fab inside a fortnight.
+
+Three guards now, in order of how much they are trusted:
+
+1. **The feed closes its own loop.** `_tool_down` records when the tool is due
+   back and `_recover_due` emits the matching `online=1`. The outage length is
+   read from the simulator's own `bred_time` / `pmed_time` counters, which
+   `handle()` increments *before* calling the plugin — resampling
+   `event.length` instead would schedule a recovery unrelated to the outage the
+   simulator is actually running. Overlapping outages extend rather than
+   double-recover.
+2. **Activity beats status.** A tool that starts a lot is running, whatever its
+   last status event said, so the mirror marks it back up. This alone holds the
+   roster at 97.6% on a feed that emits *zero* recoveries.
+3. **Nothing stays down forever.** Past `TOOL_DOWN_TTL_S` (default 900s wall
+   clock) with no word either way, the watchdog assumes up. This is the one
+   that catches a dropped partition or a `--tool-prefix` filter.
+
+(2) and (3) are inferences, not observations, so a tool restored by either is
+tagged `recovered_by` and the count is shown in the strip. A number that climbs
+there means the feed is lying and the mirror is papering over it — that is a
+bug to chase, not a healthy steady state.
+
+After: **97.8% online, low water 96.7%**, and the outage books balance — every
+down period either closed or is still open at the run horizon.
+
+Guarded by `scripts/smoke.sh` (`tool recovery` and `/api/tools/availability`),
+which fails on the old one-way feed. `dispatch/api/t_feed_recovery.py <feed>`
+checks the producer; `t_watchdog_replay.py <feed>` strips the recoveries back
+out and checks the mirror holds the roster without them.
+
 ## The lots view (cohort burndown)
 
 Remaining route steps per lot against simulated time, one line per lot,
