@@ -9,6 +9,8 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}
 h1{margin:0;font-size:22px;letter-spacing:-.01em}
 .sub{color:var(--mut);font-size:12px;margin-top:2px}
+.sub-link{color:var(--mut);text-decoration:none;border-bottom:1px dotted currentColor}
+.sub-link:hover{color:var(--fg)}
 .live{display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;
   border-radius:999px;border:1px solid var(--line);background:var(--card)}
 .dot{width:7px;height:7px;border-radius:50%}
