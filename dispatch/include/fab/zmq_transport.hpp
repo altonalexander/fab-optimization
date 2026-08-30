@@ -3,7 +3,8 @@
 //
 // ZONE: rt-net (dispatcher <-> AMHS adapter). NOT the durable path.
 //
-// Why ZMQ here and Kafka there:
+// Why ZMQ here and Kafka there — summary; the decision and its evidence live
+// in docs/adr/0006-zeromq-inbound-kafka-outbound.md, which wins on conflict:
 //   Kafka  = durable, replayable, ms-scale. Correct for MES/lot history.
 //   ZMQ    = fire-and-forget, us-scale, no broker. Correct for move commands.
 //

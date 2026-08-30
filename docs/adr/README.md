@@ -11,6 +11,7 @@ overturn it. Not how anything works — that lives beside the code.
 | [0003](0003-cold-start-snapshot-and-delta.md) | Cold start: snapshot + delta over compacted topics |
 | [0004](0004-kafka-for-state-postgres-for-runs.md) | Kafka holds live state, Postgres holds runs |
 | [0005](0005-cp-kafka-image.md) | cp-kafka rather than apache/kafka |
+| [0006](0006-zeromq-inbound-kafka-outbound.md) | ZeroMQ inbound, Kafka outbound: the transport split |
 
 ## Why these are central and not filed under bench/ or dispatch/
 
