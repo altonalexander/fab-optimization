@@ -155,51 +155,80 @@ populated the moment it starts rather than filling in over the next hour.
 
 ## Running it
 
-**The dashboard.** The simulator runs in two modes — the same run loop
-(`bench/tools/sim_runner.py`) with a different plugin riding it:
+### Start a fresh session
 
-*Mode 1 — headless.* No broker, no feed, no pacing, as fast as possible.
-This is what you use for KPIs and parameter tuning:
+One command. It brings up Kafka and Postgres, starts the API and the UI, waits
+for all three to answer, and starts a producer:
+
+```bash
+scripts/dev-up.sh --fresh --feed
+```
+
+Then open http://localhost:5173/.
+
+| flag | what it does |
+|---|---|
+| `--feed` | start the simulator producer. Without it the dashboard is empty: the API consumer starts at `latest` and there is nothing to consume. |
+| `--fresh` | drop the Kafka and Postgres volumes first, so no snapshot from an earlier run is bootstrapped. This is what "clean start" means here. |
+| `--status` | what is listening |
+| `--stop` | stop what the script started (it refuses to kill anything it did not) |
+
+`FEED_DAYS` / `FEED_WARMUP` / `FEED_SPEED` override the producer's defaults —
+40 simulated days, no warm-up, 20x realtime.
+
+Run it directly rather than through a pipe; see the note at the top of the
+script.
+
+**Why one command rather than three terminals.** `--feed` starts a *single*
+producer that publishes the WIP snapshot and then streams from the same point.
+Two processes would mean two producer run ids, and the dashboard would be
+drawing a snapshot from one run against a live stream from another — which it
+will now tell you about (the header badge goes red), but is better not to do.
+See [`docs/adr/0003`](docs/adr/0003-cold-start-snapshot-and-delta.md).
+
+### Watching it
+
+The header badge is the simulated fab clock. It shows the current sim day, the
+producer run id, and turns red if the snapshot and the live stream are from
+different runs. Clicking it returns to the live view.
+
+`--speed` is sim-seconds per wall-second: `1` is realtime, `20` (the default)
+is twenty times realtime, `0` is unpaced. The dashboard's playback menu changes
+it live, and that setting persists in `bench/.sim_control.json` — **if the
+clock is not moving, check there first**: a leftover `"paused": true` from an
+earlier session leaves the feed running but silent.
+
+### The two modes
+
+The simulator runs in two modes — the same run loop
+(`bench/tools/sim_runner.py`) with a different plugin riding it.
+
+*Mode 1 — headless.* No broker, no feed, no pacing, as fast as possible. This
+is what you use for KPIs and parameter tuning:
 
 ```bash
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 30 --top 15
 ```
 
-*Mode 2 — producer.* The simulator emits events the dashboard consumes, paced,
-so you can watch near-realtime:
+*Mode 2 — producer.* What `--feed` starts. To run it by hand, for a different
+dataset or start day:
 
 ```bash
-# terminal 1 — the broker (dev override publishes a host listener)
-cd dispatch/infra
-docker compose -f docker-compose.yml -f docker-compose.dev.yml \
-    --profile data up -d kafka kafka-init
-
-# terminal 2 — api :8000 and ui :5173, consuming from Kafka
-cd dispatch && DEMO_LOTS=1 KAFKA_BROKERS=localhost:29092 make api
-cd dispatch/ui && npm run dev
-
-# terminal 3 — the simulator as producer: every tool, ten times realtime
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-    --days 3 --speed 10
+    --days 40 --warmup-days 0 --speed 20
 ```
 
-Then open http://localhost:5173/.
-
-`--speed` is sim-seconds per wall-second: `1` is realtime, `10` is ten times
-realtime (a simulated day takes ~2.4 hours), `0` is unpaced. At `--speed 10`
-the whole fab emits about **6 events/second** — the broker and the dashboard
-absorb that without effort, so there is no reason to filter with
-`--tool-prefix` unless you want to.
-
-Ctrl-C the producer to pause; rerun it to resume. The API consumer starts at
-`latest`, so the dashboard is empty until something is produced —
-`DEMO_LOTS=1` is what keeps the scenario button working meanwhile.
+`--warmup-days 0` snapshots the WIP the dataset already ships with (~2,200
+lots) and streams from there, at no warm-up cost. A later start day has to be
+simulated to — roughly 3 minutes of CPU per 30 simulated days on an idle
+machine, considerably more on a busy one — and is cached in `bench/snapshots/`
+afterwards, so only the first build of a given day is slow.
 
 **Tests:**
 
 ```bash
 cd dispatch && make test        # 56/56, the C++ suite
-scripts/smoke.sh                # 16 assertions over the API, producer, floorplan
+scripts/smoke.sh                # end-to-end: API, producer, floorplan, scenario
 python3 bench/tools/t_sim_runner.py   # the shared dispatch loop, any interpreter
 ```
 
