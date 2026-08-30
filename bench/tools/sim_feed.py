@@ -264,18 +264,38 @@ class KafkaSink:
     """
 
     def __init__(self, brokers):
+        self.label = brokers
+        self.dropped = 0
+        self.failed = 0
+        self.delivered = 0
+        self._brokers = brokers
+        self._p = None
+
+    @property
+    def p(self):
+        """Connect on first write, not at construction.
+
+        A warm-up simulates for minutes while emitting nothing. Holding an idle
+        librdkafka producer open across that does no good and did measurable
+        harm: a 90-day warm-up with the producer created up front died silently
+        every time at around a minute, while the identical run against the file
+        sink ran happily. Nothing is produced before the warm-up line, so
+        nothing needs to be connected before it either.
+        """
+        if self._p is None:
+            self._p = self._connect(self._brokers)
+        return self._p
+
+    @staticmethod
+    def _connect(brokers):
         from confluent_kafka import Producer
-        self.p = Producer({
+        return Producer({
             'bootstrap.servers': brokers,
             # A dashboard feed must never block the simulation; drop before
             # stalling, and say so at the end rather than silently.
             'queue.buffering.max.messages': 200000,
             'linger.ms': 50,
         })
-        self.label = brokers
-        self.dropped = 0
-        self.failed = 0
-        self.delivered = 0
 
     def _ack(self, err, _msg):
         if err is None:
@@ -306,7 +326,10 @@ class KafkaSink:
         happened the first time this was pointed at a closed port. Anything
         still in the queue after flush() is a failure and is reported as one.
         """
-        remaining = self.p.flush(15)
+        if self._p is None:
+            print('  KAFKA: nothing produced (never connected)', file=sys.stderr)
+            return
+        remaining = self._p.flush(15)
         undelivered = self.failed + self.dropped + (remaining or 0)
         if undelivered:
             print(f'  KAFKA: {self.delivered} delivered, {undelivered} NOT '
