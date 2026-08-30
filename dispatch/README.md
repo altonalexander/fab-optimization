@@ -205,6 +205,55 @@ health/zones/state/events/decisions/stream; SSE streams; POST to a non-scenario
 path returns 403; and a two-tool-down scenario returns the correct diff —
 two lots rerouted, one newly unassignable.
 
+**API docs:** Swagger UI at `/docs`, ReDoc at `/redoc`, spec at `/openapi.json`.
+The spec is generated from the Flask URL map on each request, so a new route
+documents itself from its own docstring and the spec cannot drift from the
+routes that exist. Body and response schemas — the one thing a URL map cannot
+infer — live in the `ENRICH` table in `api/openapi.py`; routes missing from it
+are still listed, and are reported under `x-undocumented` so the gap stays
+visible.
+
+### Why Flask here, and when to change
+
+This service is a **read-only mirror**: it consumes Kafka, holds bounded
+in-memory state, fans it out over SSE, and shells out to the C++ planner for
+what-ifs. No dispatch logic lives here. That shape is what the framework choice
+should serve, and three properties of it favour Flask behind a gevent worker:
+
+- **Long-lived connections dominate.** `/api/stream` is a blocking generator
+  parked in `q.get(timeout=5)` for as long as a dashboard is open. Under
+  `gunicorn -k gevent` that is a greenlet costing kilobytes, which is why the
+  worker count is `-w 2` and not a thread pool sized to the audience.
+- **The event source is a blocking C client.** `confluent-kafka` has no asyncio
+  API, so the consumer is a plain thread writing into a `Lock`-guarded mirror.
+  An async framework would need a `call_soon_threadsafe` bridge on every event
+  and `asyncio.Queue` fanout — real complexity that buys nothing here.
+- **Scenario runs block for up to 30s.** The gevent worker monkeypatches, so a
+  `subprocess.run` wait yields cooperatively without anyone having to remember
+  to make it async.
+
+The honest cost is request validation: body parsing is hand-rolled
+(`request.get_json(silent=True) or {}`, manual coercion and range checks). That
+is tolerable for a read-only demo API and would not be in a service that writes.
+
+**Reach for FastAPI when** the API stops being read-only. The moment a request
+can change something, hand-rolled validation is the wrong tool and pydantic
+models earn their keep — schemas become the source of truth for both validation
+and the spec, replacing the `ENRICH` table. Also worth it if a request ever
+needs to fan out to several upstream services at once, where per-request async
+concurrency is the point rather than per-connection.
+
+**Reach for Rust when** the mirror itself becomes the bottleneck, which is a
+measurement, not a guess. Today LVHM emits ~23k progress events per simulated
+day; at the top replay speed of 400× that is ~106 events/s sustained, and
+Python absorbs it with room to spare. The signals to watch are GIL contention
+between the consumer thread and SSE fanout showing up as lag on the live view,
+or `BURNDOWN_MAX` (150k points) needing to grow into the millions, where
+per-object overhead — not throughput — is what runs you out of memory. Note the
+bar is high on purpose: the dispatcher is already C++, so a Rust API would make
+this a three-language stack for a service whose job is to hold a ring buffer
+and serialise JSON. Rewrite it when a profile says so, not before.
+
 ### Assistant (Claude on Vertex AI)
 
 An `assistant` tab in the dashboard answers questions about live state and runs
