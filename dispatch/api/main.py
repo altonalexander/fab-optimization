@@ -150,6 +150,7 @@ class FabMirror:
         # differently and a guessed boundary would mislabel real history.
         self.warm_t = None
         self.sim_t = None        # latest simulated time seen, for the "now" rule
+        self.sim_t_at = None     # wall clock when that reading arrived
         # tool_id -> wall clock when it was last marked down, for the watchdog.
         self.down_since = {}
         # tool_id -> why it came back ("status" | "activity" | "watchdog"),
@@ -266,6 +267,7 @@ class FabMirror:
             self.burndown.clear()
             self.lot_meta.clear()
             self.sim_t = None
+            self.sim_t_at = None
 
         try:
             self.warm_t = float(ev.get("warm_t")) if ev.get("warm_t") else self.warm_t
@@ -331,6 +333,7 @@ class FabMirror:
                 self.burndown.clear()
                 self.lot_meta.clear()
                 self.sim_t = None
+                self.sim_t_at = None
         elif self.burndown_run is not None:
             return
 
@@ -364,8 +367,7 @@ class FabMirror:
         meta["last_t"] = t
         meta["rem_s"] = f("rem_s")
 
-        if self.sim_t is None or t > self.sim_t:
-            self.sim_t = t
+        self._advance_sim(t)
 
         self.burndown.append((lot, t, left, ev.get("reason") or "none",
                               f("wq"), f("wb"), f("wp"), f("rem_s")))
@@ -412,6 +414,13 @@ class FabMirror:
     def add_decision(self, d):
         with self.lock:
             self.decisions.append({**d, "ts": time.time()})
+            # Decisions carry the simulated clock as a day number. Advancing
+            # sim_t from them as well as from burndown progress is what keeps
+            # the live chart's x axis working under --no-burndown, which turns
+            # the only other sim-timestamped topic off.
+            day = _as_float(d.get("day"))
+            if day is not None:
+                self._advance_sim(day * 86400.0)
             tool = d.get("tool")
             if tool:
                 s = self.tool_stats[tool]
@@ -451,9 +460,29 @@ class FabMirror:
         except ValueError:
             pass
 
+    def _advance_sim(self, t):
+        """Move the simulated clock forward. Caller holds the lock.
+
+        Monotonic on purpose: events from several topics arrive interleaved and
+        slightly out of order, and a clock that stepped backwards would make
+        the live chart draw a sample to the left of the one before it.
+        """
+        if t is None:
+            return
+        if self.sim_t is None or t > self.sim_t:
+            self.sim_t = t
+            # Wall clock at which that reading was taken, so a consumer can
+            # tell a stalled feed from a fab that is genuinely idle.
+            self.sim_t_at = time.time()
+
     def snapshot(self):
+        # Read outside the lock: it touches the filesystem, and the ingest
+        # thread should never wait on a stat() to record an event.
+        sim = read_sim_control()
         with self.lock:
             now = time.time()
+            sim["t"] = self.sim_t
+            sim["t_at"] = self.sim_t_at
             recent = [c for ts, c in self.throughput if now - ts < 120]
             rate = 0.0
             if len(recent) >= 2:
@@ -468,7 +497,33 @@ class FabMirror:
                 "completed": self.counts.get("LOT_COMPLETE", 0),
                 "throughput_lots_per_hour": round(rate, 1),
                 "decisions_seen": len(self.decisions),
+                # The simulated clock, and the pacing that clock is running
+                # at, on the same frame as the counts they describe. Polled
+                # separately they would disagree: a live chart plotted against
+                # sim time has to know the clock for *this* sample, not the
+                # clock as of whenever a separate poll last landed.
+                "sim": sim,
             }
+
+
+def read_sim_control():
+    """Playback pacing as the feed last wrote it.
+
+    `available` is false when no feed has ever written the file: a Kafka feed
+    from somewhere else has no speed to report, and neither the badge nor the
+    chart should invent one.
+    """
+    try:
+        with open(SIM_CONTROL_FILE) as f:
+            ctl = json.load(f)
+    except (OSError, ValueError):
+        return {"available": False, "speed": None, "paused": False}
+    return {
+        "available": True,
+        "speed": _as_float(ctl.get("speed")),
+        "paused": bool(ctl.get("paused")),
+        "updated": ctl.get("updated"),
+    }
 
 
 mirror = FabMirror()
@@ -1508,22 +1563,13 @@ assistant = FabAssistant(mirror, scenario_runner)
 def sim_control_get():
     """Current playback pacing of the simulator feed.
 
-    `available` is false when no feed has ever written the file -- a live
-    Kafka feed from somewhere else has no speed to report, and the dashboard
-    shows the badge without a menu rather than pretending it can steer it.
+    The same reading the state frames carry (see read_sim_control), plus the
+    menu of speeds, which only the dashboard's control needs.
     """
-    try:
-        with open(SIM_CONTROL_FILE) as f:
-            ctl = json.load(f)
-    except (OSError, ValueError):
+    ctl = read_sim_control()
+    if not ctl["available"]:
         return jsonify({"available": False, "speeds": SIM_SPEEDS})
-    return jsonify({
-        "available": True,
-        "speed": ctl.get("speed"),
-        "paused": bool(ctl.get("paused")),
-        "updated": ctl.get("updated"),
-        "speeds": SIM_SPEEDS,
-    })
+    return jsonify({**ctl, "speeds": SIM_SPEEDS})
 
 
 @app.post("/api/sim/control")

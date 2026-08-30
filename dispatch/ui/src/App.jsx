@@ -5,6 +5,7 @@ import CohortBurndown from './CohortBurndown.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
 import StreamChart from './StreamChart.jsx'
+import { spanFor, fmtSpan, fmtSimTime } from './stream_geom.js'
 
 // ---------------------------------------------------------------------------
 // ZONE 3 — enterprise. This app is READ-ONLY by construction: it talks only to
@@ -48,8 +49,18 @@ function useLiveState() {
         const now = Date.now()
         if (msg.kind === 'state') {
           setState(msg.state)
+          // The simulated clock rides on the frame it describes rather than
+          // being polled alongside it: the WIP chart plots fab time, and a
+          // clock read at some other moment would put the sample in the wrong
+          // place. sim.t is null when nothing on the wire is sim-stamped, and
+          // the chart falls back to wall clock rather than inventing one.
+          const sim = msg.state.sim || {}
           setHistory(h => [...h.slice(-119), {
             t: new Date().toLocaleTimeString(),
+            simT: sim.t,
+            simAt: sim.t_at,
+            speed: sim.speed,
+            paused: !!sim.paused,
             ready: msg.state.ready,
             inFlight: msg.state.in_flight,
             completed: msg.state.completed,
@@ -581,6 +592,93 @@ function fmtSpeed(v) {
   return `${Number.isInteger(v) ? v : Number(v).toFixed(1)}x`
 }
 
+// WIP against the fab's own clock.
+//
+// The series is fab data, so wall clock is the wrong axis for it: the feed
+// replays at 1x to 400x and can be paused, which means equal spacing between
+// arrivals is not equal fab time. Plotted by arrival, the same-looking window
+// covered ten minutes of fab at 1x and nearly three days at 400x, a slope meant
+// 400x different things depending on the pill in the header, and a paused feed
+// kept scrolling out a flat line that read as steady WIP rather than a stopped
+// fab. Against sim time all three are gone by construction.
+//
+// The event-rate chart on the topology tab deliberately keeps its wall-clock
+// axis: that one measures envelopes arriving at this browser, so the browser's
+// clock is its subject rather than a distortion of it.
+// Why the chart is standing still, when it is. A still chart is the honest
+// rendering of a fab clock that is not advancing, but on its own it is
+// indistinguishable from a dead stream, so it says which it is. Paused is the
+// deliberate case; a clock that has simply stopped moving while frames keep
+// arriving is a finished replay or a stalled feed, and is worth saying out
+// loud rather than leaving as a flat line nobody questions.
+function stalledNote(last) {
+  if (!last) return null
+  if (last.paused) return 'paused · the fab clock is stopped'
+  if (last.simAt == null) return null
+  const age = Date.now() / 1000 - last.simAt
+  if (age < 30) return null
+  return `fab clock last advanced ${age < 90 ? `${Math.round(age)}s`
+    : `${Math.round(age / 60)} min`} ago`
+}
+
+function WipChart({ history }) {
+  const last = history.length ? history[history.length - 1] : null
+  // Null when nothing on the wire is sim-stamped (an external Kafka feed, or
+  // --no-burndown with no dispatch decisions yet). Then this falls back to the
+  // old wall-clock axis and says so, rather than inventing a clock.
+  const timed = history.length > 1 && last?.simT != null
+
+  // Only consulted when the entire window is paused, which is the one case
+  // spanFor cannot measure its way out of.
+  const lastSpan = useRef(0)
+  const span = useMemo(
+    () => (timed ? spanFor(history.map(h => h.simT), 120, lastSpan.current) : 0),
+    [history, timed],
+  )
+  useEffect(() => { if (span > 0) lastSpan.current = span }, [span])
+
+  // Where playback speed changed, in sim time. Each one is a point either side
+  // of which a pixel is worth a different amount of fab time.
+  const marks = useMemo(() => {
+    if (!timed) return []
+    const out = []
+    for (let i = 1; i < history.length; i++) {
+      const a = history[i - 1].speed, b = history[i].speed
+      if (a != null && b != null && a !== b && history[i].simT != null) {
+        out.push({ t: history[i].simT, label: fmtSpeed(b) })
+      }
+    }
+    return out
+  }, [history, timed])
+
+  return (
+    <>
+      <StreamChart
+        data={history} cap={120} height={240} yLabel="lots"
+        xMode={timed ? 'time' : 'index'} span={span} marks={marks}
+        frozen={timed ? stalledNote(last) : null}
+        series={[
+          { key: 'ready', name: 'waiting', color: '#1d4ed8' },
+          { key: 'inFlight', name: 'running', color: '#15803d' },
+        ]} />
+      <p className="muted" style={{ fontSize: 11 }}>
+        {timed ? (
+          <>
+            x axis is simulated fab time, {fmtSpan(span)} across the plot
+            {last.speed != null && <> at {fmtSpeed(last.speed)} playback</>}
+            {' '}· now {fmtSimTime(last.simT)}. Changing speed rescales the
+            window and marks where it changed; pausing stops the chart, because
+            the fab clock has stopped.
+          </>
+        ) : (
+          <>x axis is wall-clock arrival time: this feed publishes no simulated
+             clock, so fab time is not available to plot against</>
+        )}
+      </p>
+    </>
+  )
+}
+
 function SpeedControl({ connected }) {
   const [ctl, setCtl] = useState(null)
   const [open, setOpen] = useState(false)
@@ -806,17 +904,7 @@ export default function App() {
               released but not started; <b>running</b> is on a tool now. Their
               sum is total WIP. For one tool, use the tools or floor tab.
             </p>
-            <StreamChart
-              data={history} cap={120} height={240} yLabel="lots"
-              series={[
-                { key: 'ready', name: 'waiting', color: '#1d4ed8' },
-                { key: 'inFlight', name: 'running', color: '#15803d' },
-              ]} />
-            {/* The x axis is wall clock, not simulated time: this is a live
-                monitor, and the sim runs at --speed x realtime. */}
-            <p className="muted" style={{ fontSize: 11 }}>
-              x axis is wall-clock arrival time, not simulated time
-            </p>
+            <WipChart history={history} />
           </section>
           <section>
             <h3>Event feed</h3>

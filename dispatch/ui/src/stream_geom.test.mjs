@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  M, TICKS, view, niceMax, niceStep, yTicks, points, indexAt, xTickIndices,
+  M, TICKS, view, timeView, spanFor, niceMax, niceStep, yTicks, points,
+  indexAt, xTickIndices, fmtSimTime, fmtSpan, travel,
 } from './stream_geom.js'
 
 const seq = (n, f) => Array.from({ length: n }, (_, i) => f(i))
@@ -96,4 +97,130 @@ test('x tick labels are spaced at least the requested gap apart', () => {
 test('a degenerate box still produces finite geometry', () => {
   const v = view(3, 10, 0, 0, [[1, 2, 3]])
   assert.ok(Number.isFinite(v.x(0)) && Number.isFinite(v.y(1)) && v.slot > 0)
+})
+
+// --- simulated-time mode ----------------------------------------------------
+
+const tv = (ts, span, vals = ts.map(() => 1)) => timeView(ts, span, 300, 100, [vals])
+
+test('the newest sample anchors the right edge in time mode too', () => {
+  const v = tv([100, 160, 220], 600)
+  assert.equal(Number(v.x(2).toFixed(6)), Number((M.l + v.iw).toFixed(6)))
+})
+
+test('x distance is elapsed fab time, not sample count', () => {
+  // Three samples, but the second gap is five times the first: the plot has to
+  // show that gap, or a stall in the fab looks like ordinary spacing.
+  const v = tv([0, 60, 360], 600)
+  const d1 = v.x(1) - v.x(0)
+  const d2 = v.x(2) - v.x(1)
+  assert.ok(Math.abs(d2 / d1 - 5) < 1e-9, 'the two gaps must be in 1:5 ratio')
+})
+
+test('a pause holds the chart still instead of scrolling out a flat line', () => {
+  // Paused, the feed keeps heartbeating but the fab clock does not advance, so
+  // every sample lands on the same x. Nothing moves -- which is what happened.
+  const v = tv([0, 60, 120, 120, 120], 600)
+  assert.equal(v.x(4), v.x(3))
+  assert.equal(v.x(3), v.x(2))
+})
+
+test('spanFor measures the fab-time window instead of trusting the speed dial', () => {
+  assert.equal(spanFor([0, 5, 10], 11, 0), 50, '5 sim-s per sample over 10 slots')
+  // 400x: the same arrivals now carry 2000 sim-seconds each.
+  assert.equal(spanFor([0, 2000, 4000], 11, 0), 20000)
+})
+
+test('spanFor keeps the last window through a pause', () => {
+  // All-equal timestamps: paused. A measured span of zero would collapse the
+  // axis and put every sample on the right edge.
+  assert.equal(spanFor([9, 9, 9], 11, 600), 600)
+  assert.equal(spanFor([], 11, 600), 600)
+  assert.ok(spanFor([], 11, 0) > 0, 'never a zero span, even with nothing to measure')
+})
+
+test('spanFor ignores a pause at the tail and uses the last real advance', () => {
+  assert.equal(spanFor([0, 5, 10, 10, 10], 11, 0), 50)
+})
+
+test('a speed change rescales the window rather than distorting one axis', () => {
+  // The honest consequence of plotting fab time: at 400x the ten minutes you
+  // watched at 1x really is a sliver of the new window. It compresses, it does
+  // not silently restretch, and the old samples keep their true spacing.
+  const slow = tv([0, 5, 10], spanFor([0, 5, 10], 11))
+  const fast = tv([0, 5, 10], spanFor([0, 2000, 4000], 11))
+  assert.ok(fast.span > slow.span * 100)
+  const width = v => Math.abs(v.x(2) - v.x(0))
+  assert.ok(width(fast) < width(slow) / 100,
+            'history from the slow window collapses toward the edge')
+})
+
+test('indexAt finds the sample under the pointer in time mode', () => {
+  const v = tv([0, 60, 360], 600)
+  for (let i = 0; i < 3; i++) assert.equal(indexAt(v, v.x(i)), i)
+  assert.equal(indexAt(v, v.x(0) - 200), null, 'empty stretch reads as nothing')
+})
+
+test('time-mode x labels are spaced apart and always label the newest', () => {
+  const ts = seq(40, i => i * 60)
+  const v = tv(ts, spanFor(ts, 40))
+  const idx = xTickIndices(v, 70)
+  assert.equal(idx[idx.length - 1], v.n - 1)
+  for (let i = 1; i < idx.length; i++) {
+    assert.ok(v.x(idx[i]) - v.x(idx[i - 1]) >= 70 - 1e-9)
+  }
+})
+
+// --- what actually animates ---------------------------------------------------
+
+test('one sample slides by one slot in index mode', () => {
+  const v = mk(6)
+  assert.equal(travel({ at: 5, span: 0 }, { at: 6, span: 0 }, v, false), v.slot)
+})
+
+test('in time mode the slide is the fab time that elapsed', () => {
+  const ts = seq(5, i => i * 60)
+  const v = tv(ts, spanFor(ts, 5))
+  // Half the window of fab time should move the plot half its width.
+  const half = travel({ at: 0, span: v.span }, { at: v.span / 2, span: v.span },
+                      v, true)
+  assert.ok(Math.abs(half - v.iw / 2) < 1e-9)
+})
+
+test('a pause slides by nothing at all', () => {
+  const ts = [0, 60, 120, 120]
+  const v = tv(ts, spanFor(ts, 5))
+  assert.equal(travel({ at: 120, span: v.span }, { at: 120, span: v.span },
+                      v, true), 0)
+})
+
+test('a speed change snaps instead of sliding', () => {
+  // The window rescaled underneath it, so px before and px after measure
+  // different amounts of fab time and any translate between them is a lie.
+  const ts = seq(5, i => i * 60)
+  const v = tv(ts, spanFor(ts, 5))
+  assert.equal(travel({ at: 100, span: 240 }, { at: 160, span: 96000 }, v, true), 0)
+})
+
+test('a reset or a new run does not fly in from the side', () => {
+  const ts = seq(5, i => i * 60)
+  const v = tv(ts, spanFor(ts, 5))
+  assert.equal(travel({ at: 900, span: v.span }, { at: 60, span: v.span },
+                      v, true), 0, 'clock went backwards: a new run')
+  assert.equal(travel({ at: 0, span: 0 }, { at: 1, span: 0 }, mk(1), false), 0,
+               'a single sample is not a step')
+})
+
+test('a reconnect after a long gap snaps rather than scrolling the whole width', () => {
+  const ts = seq(5, i => i * 60)
+  const v = tv(ts, spanFor(ts, 5))
+  assert.equal(travel({ at: 0, span: v.span },
+                      { at: v.span * 3, span: v.span }, v, true), 0)
+})
+
+test('fab time is labelled in the days the burndown already uses', () => {
+  assert.equal(fmtSimTime(12.4 * 86400), 'd12.4')
+  assert.equal(fmtSpan(600), '10 fab min')
+  assert.equal(fmtSpan(240000), '2.8 fab days')
+  assert.equal(fmtSpan(0), '—')
 })

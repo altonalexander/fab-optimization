@@ -280,12 +280,37 @@ redraws the series on every sample and tweens each vertex to its new position:
 an arriving point makes the whole line wobble in place, which reads as data
 moving when nothing moved but the window.
 
-The geometry pins the newest sample to the right edge and gives every sample a
-fixed slot, so one arrival shifts the series by exactly one slot and nothing
-else -- the component animates that single translate and the strip scrolls. The
-y domain is rounded to whole gridline steps for the same reason, so it holds
-still instead of retracking on every frame. Motion is skipped entirely under
-`prefers-reduced-motion`.
+The geometry pins the newest sample to the right edge, so one arrival shifts
+the series and nothing else -- the component animates that single translate and
+the strip scrolls. The y domain is rounded to whole gridline steps for the same
+reason, so it holds still instead of retracking on every frame. Motion is
+skipped entirely under `prefers-reduced-motion`.
+
+The two charts are on different clocks, deliberately:
+
+- **Event rate (topology)** is x-by-sample-index against wall clock. It
+  measures envelopes arriving at this browser, so the browser's clock is its
+  subject and playback speed is just one input to the number.
+- **WIP (live)** is x-by-*simulated* time. It is fab data, and the feed replays
+  at 1x to 400x and can be paused, so equal spacing between arrivals is not
+  equal fab time. Plotted by arrival the same-looking window covered ten
+  minutes of fab at 1x and nearly three days at 400x, a slope meant 400x
+  different things depending on the pill in the header, and a paused feed kept
+  scrolling out a flat line that read as steady WIP rather than a stopped fab.
+
+For that, state frames carry the simulated clock and the pacing that produced
+it (`state.sim`: `t`, `t_at`, `speed`, `paused`) on the same frame as the counts
+they describe -- polled separately the two would disagree about where a sample
+belongs. `sim.t` is the latest sim time seen on any sim-stamped topic (burndown
+progress, or dispatch decisions under `--no-burndown`); it is null for a feed
+that stamps neither, and the chart then falls back to the wall-clock axis and
+says so rather than inventing a clock.
+
+Consequences worth knowing, all of them the point rather than side effects: a
+pause advances the clock by nothing, so the chart holds still and labels itself
+paused; a speed change rescales the window, which snaps rather than sliding and
+leaves a dashed mark where it happened; and the visible window is measured from
+the fab time actually arriving, not computed from the speed dial.
 
 ```bash
 cd dispatch/ui && node --test src/stream_geom.test.mjs
