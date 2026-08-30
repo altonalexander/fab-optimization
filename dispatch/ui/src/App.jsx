@@ -211,6 +211,14 @@ export default function App() {
   const { state, feed, connected, history } = useLiveState()
   const [zones, setZones] = useState(null)
   const [tab, setTab] = useState('live')
+  // Remembered per browser so the rail does not reappear every reload for
+  // someone who closed it. Wrapped: some contexts throw on storage access.
+  const [assistantOpen, setAssistantOpen] = useState(() => {
+    try { return localStorage.getItem('assistantOpen') !== '0' } catch { return true }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('assistantOpen', assistantOpen ? '1' : '0') } catch { /* ignore */ }
+  }, [assistantOpen])
 
   useEffect(() => {
     fetch('/api/zones').then(r => r.json()).then(setZones).catch(() => {})
@@ -250,8 +258,11 @@ export default function App() {
               sub={offline.join(', ') || 'all up'} />
       </div>
 
+      <div className={assistantOpen ? 'shell' : 'shell shell-collapsed'}>
+        <div className="shell-main">
+
       <nav className="tabs">
-        {['live', 'assistant', 'scenario', 'topology'].map(t => (
+        {['live', 'scenario', 'topology'].map(t => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -291,10 +302,6 @@ export default function App() {
         </div>
       )}
 
-      {tab === 'assistant' && (
-        <section><h3>Assistant</h3><ChatPanel /></section>
-      )}
-
       {tab === 'scenario' && (
         <section><h3>What-if</h3><ScenarioPanel tools={tools} /></section>
       )}
@@ -307,6 +314,28 @@ export default function App() {
         No write path exists from this page to the dispatcher. Scenario runs use
         a cloned registry in the same C++ planner binary.
       </footer>
+
+        </div>
+
+        {/* Always mounted, never unmounted by tab changes: the conversation
+            has to survive switching between live, scenario and topology, which
+            is the whole point of it being a rail rather than a tab. Collapsing
+            hides it with [hidden] so chat state is preserved. */}
+        <aside className="rail" hidden={!assistantOpen}>
+          <div className="rail-head">
+            <h3>Assistant</h3>
+            <button className="rail-toggle" onClick={() => setAssistantOpen(false)}
+                    title="Hide assistant">×</button>
+          </div>
+          <ChatPanel />
+        </aside>
+      </div>
+
+      {!assistantOpen && (
+        <button className="rail-reopen" onClick={() => setAssistantOpen(true)}>
+          Assistant
+        </button>
+      )}
     </div>
   )
 }

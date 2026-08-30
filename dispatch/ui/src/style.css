@@ -3,7 +3,9 @@
 body{margin:0;background:var(--bg);color:var(--fg);
   font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.app{max-width:1180px;margin:0 auto;padding:24px}
+/* Widened from 1180 to fit the 380px assistant rail beside the content
+   without squeezing the charts. */
+.app{max-width:1580px;margin:0 auto;padding:24px}
 header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}
 h1{margin:0;font-size:22px;letter-spacing:-.01em}
 .sub{color:var(--mut);font-size:12px;margin-top:2px}
@@ -89,6 +91,39 @@ section h3{margin:0 0 12px;font-size:14px}
 footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 
 /* --- assistant ---------------------------------------------------------- */
+/* Assistant rail --------------------------------------------------------- */
+/* Two columns: content scrolls, the rail stays put. The rail is sticky rather
+   than fixed so it still sits inside the page padding and never overlaps the
+   footer. */
+.shell{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:22px;
+  align-items:start}
+.shell-collapsed{grid-template-columns:minmax(0,1fr)}
+.shell-main{min-width:0}          /* lets charts shrink instead of overflowing */
+
+.rail{position:sticky;top:20px;display:flex;flex-direction:column;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:14px 16px;max-height:calc(100vh - 40px)}
+.rail-head{display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:6px}
+.rail-head h3{margin:0}
+.rail-toggle{background:none;border:0;font-size:18px;line-height:1;cursor:pointer;
+  color:#6b7280;padding:0 4px}
+.rail-toggle:hover{color:var(--fg)}
+.rail-reopen{position:fixed;right:18px;bottom:18px;padding:10px 16px;border:0;
+  border-radius:999px;background:#111827;color:#fff;cursor:pointer;font-size:13px;
+  box-shadow:0 2px 10px rgba(0,0,0,.18)}
+
+/* The rail owns the height; the chat fills it rather than a fixed 520px. */
+.rail .chat{height:auto;flex:1;min-height:0}
+
+/* Below this the rail stops being a rail: it drops under the content at full
+   width, static, with a bounded height so it cannot swallow the page. */
+@media(max-width:1100px){
+  .shell{grid-template-columns:minmax(0,1fr)}
+  .rail{position:static;max-height:none}
+  .rail .chat{height:420px;flex:none}
+}
+
 .chat{display:flex;flex-direction:column;height:520px}
 .chat-log{flex:1;overflow:auto;padding-right:4px}
 .chat-empty{padding:16px 0}
