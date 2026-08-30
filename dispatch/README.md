@@ -271,6 +271,26 @@ cd dispatch/ui && node src/burndown_geom.test.mjs http://localhost:8000
 `--no-burndown` on `sim_feed.py` turns the events off and roughly halves lot
 event volume; the lots view then reports that it has no points.
 
+### Live charts scroll, they do not redraw
+
+The WIP chart on the live tab and the event-rate chart on the topology tab are
+rolling windows fed one sample at a time. They are drawn by `StreamChart.jsx`
+over `stream_geom.js` rather than by a charting library, because a library
+redraws the series on every sample and tweens each vertex to its new position:
+an arriving point makes the whole line wobble in place, which reads as data
+moving when nothing moved but the window.
+
+The geometry pins the newest sample to the right edge and gives every sample a
+fixed slot, so one arrival shifts the series by exactly one slot and nothing
+else -- the component animates that single translate and the strip scrolls. The
+y domain is rounded to whole gridline steps for the same reason, so it holds
+still instead of retracking on every frame. Motion is skipped entirely under
+`prefers-reduced-motion`.
+
+```bash
+cd dispatch/ui && node --test src/stream_geom.test.mjs
+```
+
 ## Adding a machine configuration
 
 1. Subclass `MachineConfiguration`, implement `evaluate` / `free_capacity` /

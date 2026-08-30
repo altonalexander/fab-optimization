@@ -4,9 +4,7 @@ import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
-} from 'recharts'
+import StreamChart from './StreamChart.jsx'
 
 // ---------------------------------------------------------------------------
 // ZONE 3 — enterprise. This app is READ-ONLY by construction: it talks only to
@@ -197,15 +195,10 @@ function TopologyMetrics({ zones, state, link, connected }) {
         {link.rateHistory.length < 2
           ? <div className="muted">sampling…</div>
           : (
-            <ResponsiveContainer width="100%" height={160}>
-              <LineChart data={link.rateHistory}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={40} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Line type="monotone" dataKey="rate" stroke="#1d4ed8" dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+            <StreamChart
+              data={link.rateHistory} cap={60} height={160}
+              series={[{ key: 'rate', name: 'envelopes/s', color: '#1d4ed8',
+                         fmt: v => v.toFixed(2) }]} />
           )}
       </section>
 
@@ -813,21 +806,12 @@ export default function App() {
               released but not started; <b>running</b> is on a tool now. Their
               sum is total WIP. For one tool, use the tools or floor tab.
             </p>
-            <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={history}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={40} />
-                <YAxis tick={{ fontSize: 11 }}
-                       label={{ value: 'lots', angle: -90, position: 'insideLeft',
-                                style: { fontSize: 11, fill: '#6b7280' } }} />
-                <Tooltip />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="ready" name="waiting"
-                      stroke="#1d4ed8" dot={false} />
-                <Line type="monotone" dataKey="inFlight" name="running"
-                      stroke="#15803d" dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+            <StreamChart
+              data={history} cap={120} height={240} yLabel="lots"
+              series={[
+                { key: 'ready', name: 'waiting', color: '#1d4ed8' },
+                { key: 'inFlight', name: 'running', color: '#15803d' },
+              ]} />
             {/* The x axis is wall clock, not simulated time: this is a live
                 monitor, and the sim runs at --speed x realtime. */}
             <p className="muted" style={{ fontSize: 11 }}>
