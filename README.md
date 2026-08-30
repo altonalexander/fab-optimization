@@ -35,7 +35,7 @@ mode. That symlink is load-bearing: if it is ever broken, stop.
    └────────────────────────┬───────────────────────────────────────────┘
                             │ Kafka
    ┌────────────────────────▼─── zone 3: data ──────────┐
-   │   kafka  ·  api (read-only)  <- sim_feed.py produces │
+   │   kafka · postgres · api (read-only)               │
    └────────────────────────┬───────────────────────────┘
                             │ HTTP (nginx)
    ┌────────────────────────▼─── zone 4: enterprise ────┐
@@ -76,6 +76,14 @@ hardcoded product mix, random priorities, coin-flip tool downs. It exists so the
 ready pool does not grow unbounded while the pipeline is exercised. Anything
 that needs fab physics uses the simulator instead.
 
+**The stores** — two, with different jobs. **Kafka** holds live state: the
+compacted `fab.lot.state` / `fab.tool.state` topics are the keyed,
+restart-survivable record the dashboard bootstraps from, which is what solves
+cold start (see below). **Postgres** (`infra/postgres-init.sql`) is the *run*
+store — runs, KPIs and per-tool outcomes, for comparing dispatchers across
+seeds and scenarios. It deliberately holds no live fab state; giving the same
+fact two homes is how they drift.
+
 **The transport** — `transport.hpp` (Kafka), `zmq_transport.hpp` (ZeroMQ),
 `hsms.hpp` and `secs2.hpp` (equipment protocol). SECS-II is real; HSMS is a
 state machine with the wire codec stubbed; the Kafka bodies are sketched against
@@ -89,6 +97,52 @@ They share no transport. Unifying them is the next piece of work: have the
 simulator publish `DispatchDecision` and `EquipmentState` onto the same stream
 the API already speaks, so the React app can grow a tool view instead of a
 second UI being maintained.
+
+## Cold start
+
+The dashboard is a **mirror**: it holds no state of its own and rebuilds the
+fab from the event stream. That is the right design — it means the dashboard
+can die, restart, or be opened for the first time mid-shift without anyone
+coordinating — but on its own it cannot answer *"what is in the fab right
+now?"* at the moment it connects.
+
+It learns a lot exists only when that lot next **moves**. A lot sitting in a
+litho queue announces nothing for hours of simulated time, and the ~2,000 lots
+the simulator loads from `WIP.txt` are never *released* at all, so they emit
+nothing until they happen to dispatch. A freshly started mirror therefore
+under-reports WIP for as long as it takes every lot to touch a tool — and it
+under-reports it *silently*, which is worse, because a low number looks like a
+quiet fab rather than a blind observer.
+
+Replaying history does not fix it. A year is ~15M events, minutes of consumer
+time on every restart, and the answer you want is one number per lot, not the
+path it took to get there.
+
+**The fix is snapshot + delta.** The producer states the position of every lot
+and tool once, as keyed records on a **compacted** Kafka topic, and streams
+changes from there. Compaction is what makes this cheap: the log keeps exactly
+one record per live key, so a consumer reading from the very beginning reads
+*the fab*, not its history. `fab.lot.state` and `fab.tool.state` exist for
+this and nothing else.
+
+Because a discrete-event simulator cannot *start* at day 90 — it has to
+simulate there, at roughly 3 minutes of CPU per 30 simulated days — the
+snapshot is cached to `bench/snapshots/`, keyed by dataset, seed, dispatcher,
+batch strategy and day. Building it takes minutes; replaying it takes about
+two seconds.
+
+```bash
+# once — simulate 90 days silently, snapshot, then stream live from there
+baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+    --days 93 --warmup-days 90 --speed 10
+
+# afterwards — republish the cached snapshot, no simulation
+baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+    --warmup-days 90 --snapshot-only
+```
+
+The API applies the snapshot before tailing events, so the dashboard is
+populated the moment it starts rather than filling in over the next hour.
 
 ## Running it
 

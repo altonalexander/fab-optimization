@@ -37,6 +37,13 @@ networks:
     driver: bridge          # deliberately NOT internal -- that is the point
 
 services:
+  # Same reasoning as kafka below: data-net is internal, so psql from the host
+  # needs a non-internal network as well as a published port.
+  postgres:
+    networks: [data-net, devhost-net]
+    ports:
+      - "25432:5432"
+
   kafka:
     networks: [data-net, devhost-net]
     ports:
