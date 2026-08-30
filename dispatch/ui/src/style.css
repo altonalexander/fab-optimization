@@ -71,6 +71,9 @@ section{background:var(--card);border:1px solid var(--line);border-radius:8px;
 section h3{margin:0 0 12px;font-size:14px}
 .grid{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
 @media(max-width:860px){.grid{grid-template-columns:1fr}}
+/* One panel, full width. .grid's 1.4fr 1fr leaves a single child at ~58% of
+   the row, which is what was cropping the burndown. */
+.grid-wide{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
 
 .feed{max-height:260px;overflow:auto;font-size:12px}
 .feed-row{display:flex;gap:8px;align-items:center;padding:3px 0;
@@ -299,8 +302,11 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   border-color: #111827; }
 /* No transition on line geometry: animated redraws on a live chart read as
    flicker, and make it impossible to tell whether motion is data or rendering. */
-.burndown-svg { max-width: 100%; height: auto; background: #fff;
-  border: 1px solid #e5e7eb; }
+.burndown-svg { display: block; width: 100%; max-width: 100%; height: auto;
+  background: #fff; border: 1px solid #e5e7eb; }
+/* min-width:0 so the svg can shrink inside the grid track rather than forcing
+   the panel wider than its column. */
+.burndown { min-width: 0; }
 .burndown-svg * { transition: none !important; }
 .burndown-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px;
   color: #4b5563; margin-top: 6px; align-items: center; }

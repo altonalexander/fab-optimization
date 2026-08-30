@@ -951,7 +951,7 @@ export default function App() {
       </nav>
 
       {tab === 'lots' && (
-        <div className="grid">
+        <div className="grid-wide">
           <section>
             <h3>Cohort burndown</h3>
             <p className="muted" style={{ marginTop: -4 }}>
