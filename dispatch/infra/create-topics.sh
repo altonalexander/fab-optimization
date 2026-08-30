@@ -2,7 +2,7 @@
 # Topic provisioning. Partition counts and retention are per-topic decisions,
 # not defaults — each one below is deliberate.
 set -e
-K=/opt/kafka/bin/kafka-topics.sh
+K=/usr/bin/kafka-topics
 B=kafka:9092
 
 # Lot events: partitioned by lot_id so per-lot ordering is guaranteed.

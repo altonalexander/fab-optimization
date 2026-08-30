@@ -99,10 +99,18 @@ class KafkaSink:
         })
         self.label = brokers
         self.dropped = 0
+        self.failed = 0
+        self.delivered = 0
+
+    def _ack(self, err, _msg):
+        if err is None:
+            self.delivered += 1
+        else:
+            self.failed += 1
 
     def write(self, topic, payload):
         try:
-            self.p.produce(topic, payload.encode('utf-8'))
+            self.p.produce(topic, payload.encode('utf-8'), callback=self._ack)
         except BufferError:
             self.dropped += 1
             self.p.poll(0)
@@ -110,10 +118,24 @@ class KafkaSink:
         self.p.poll(0)
 
     def close(self):
-        self.p.flush(10)
-        if self.dropped:
-            print(f'  WARNING: dropped {self.dropped} events (producer queue '
-                  f'full)', file=sys.stderr)
+        """Report what was DELIVERED, not what was handed to the client.
+
+        produce() only enqueues. With an unreachable broker every call
+        succeeds, the queue fills, and the run ends claiming tens of thousands
+        of events while the broker received none -- which is exactly what
+        happened the first time this was pointed at a closed port. Anything
+        still in the queue after flush() is a failure and is reported as one.
+        """
+        remaining = self.p.flush(15)
+        undelivered = self.failed + self.dropped + (remaining or 0)
+        if undelivered:
+            print(f'  KAFKA: {self.delivered} delivered, {undelivered} NOT '
+                  f'delivered ({self.failed} failed, {self.dropped} dropped, '
+                  f'{remaining} still queued at exit) -- is {self.label} '
+                  f'reachable?', file=sys.stderr)
+        else:
+            print(f'  KAFKA: {self.delivered} delivered to {self.label}',
+                  file=sys.stderr)
 
 
 class FeedPlugin(IPlugin):

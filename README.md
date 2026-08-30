@@ -195,13 +195,18 @@ Honest accounting, because the numbers here have been wrong before:
   from a source file that does not exist and hid the failure with `|| true`.
   That build step and the broken compose service are gone.
 - Gurobi and HiGHS are declared backends that fall through to greedy.
-- **The Kafka broker in compose does not start.** `apache/kafka:3.9.0` fails at
-  its storage-format step with `advertised.listeners cannot use the nonroutable
-  meta-address 0.0.0.0`, and it reproduces on a minimal `docker run` with a
-  fully routable `KAFKA_ADVERTISED_LISTENERS`, so it is the image's own
-  env handling, not this compose file. Everything else in the data profile is
-  fine. `sim_feed.py --kafka` is written against the same wire format and is
-  untested end to end until this is resolved — either pin a different image or
-  mount a `server.properties`. Until then use `--out` and `FEED_FILE`.
+- Kafka now runs. `apache/kafka:3.9.0` could not start at all — it died at its
+  storage-format step with `advertised.listeners cannot use the nonroutable
+  meta-address 0.0.0.0`, reproducible on a bare `docker run` with a fully
+  routable `KAFKA_ADVERTISED_LISTENERS`, so it was the image's own env
+  handling. Pinned to `confluentinc/cp-kafka:7.7.1`, which accepts the same
+  environment unchanged. Broker healthy, all four topics created, and the real
+  wire format round trips producer → broker → consumer on `data-net`.
+- **Reaching that broker from the host is unverified.** `docker-compose.dev.yml`
+  publishes a second listener for host-side producers, but under Docker Desktop
+  + WSL2 here the binding never materialises (a plain `docker run -p` does
+  publish, so it is compose-specific to this setup). Run the producer inside
+  the data zone — the production shape — or use `--out`/`FEED_FILE`, which is
+  the fully tested path.
 
 See `BUILD.md` for the toolchain and the OR-Tools recipe.

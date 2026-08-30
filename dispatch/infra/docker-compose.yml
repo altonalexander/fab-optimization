@@ -149,11 +149,14 @@ services:
   kafka:
     container_name: fab-data-kafka
     profiles: ["all", "data"]
-    image: apache/kafka:3.9.0
+    image: confluentinc/cp-kafka:7.7.1
     networks: [data-net]
     volumes:
-      - kafka-data:/var/lib/kafka/data
+      - kafka-data:/var/lib/kafka/data   # cp-kafka default log dir
     environment:
+      # cp-kafka requires this in KRaft mode; it must stay stable across
+      # restarts or the formatted log directory is rejected.
+      CLUSTER_ID: "5L6g3nShT-eMCtK--X86sw"
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
@@ -167,14 +170,14 @@ services:
       # >>> PLACEHOLDER: production needs SASL_SSL, 3 brokers, rack awareness,
       #     and min.insync.replicas=2.
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      test: ["CMD-SHELL", "/usr/bin/kafka-topics --bootstrap-server localhost:9092 --list"]
       interval: 10s
       retries: 10
 
   kafka-init:
     container_name: fab-data-kafka-init
     profiles: ["all", "data"]
-    image: apache/kafka:3.9.0
+    image: confluentinc/cp-kafka:7.7.1
     networks: [data-net]
     depends_on:
       kafka: { condition: service_healthy }
