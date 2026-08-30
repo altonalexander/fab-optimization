@@ -275,12 +275,17 @@ class KafkaSink:
     def p(self):
         """Connect on first write, not at construction.
 
-        A warm-up simulates for minutes while emitting nothing. Holding an idle
-        librdkafka producer open across that does no good and did measurable
-        harm: a 90-day warm-up with the producer created up front died silently
-        every time at around a minute, while the identical run against the file
-        sink ran happily. Nothing is produced before the warm-up line, so
-        nothing needs to be connected before it either.
+        A warm-up simulates for minutes while emitting nothing, so there is no
+        reason to hold an idle librdkafka producer and its threads open across
+        it. That is the whole justification: tidiness, not a bug fix.
+
+        CORRECTION. This was originally committed claiming it fixed warm-ups
+        that "died silently at around a minute". They were not dying. `ps` was
+        being filtered by a shell hook and reported nothing for a live process,
+        so each apparently-dead run was relaunched -- four ended up competing
+        for one core, which is what made them look stuck. A foreground run
+        settled it: the process was fine and simply unfinished. The change is
+        still worth keeping; the crash it claimed to fix never existed.
         """
         if self._p is None:
             self._p = self._connect(self._brokers)
@@ -872,6 +877,11 @@ def main():
 
     warm_s = None if a.warmup_days is None else a.warmup_days * 86400
     warmed = warm_s is None
+    t_start = time.time()
+    # Ten lines over the whole warm-up: frequent enough to see it moving,
+    # sparse enough not to become the output.
+    report_every = (warm_s / 10) if warm_s else 0
+    next_report = report_every
     cpath = cache_path(a.dataset, a.seed, a.dispatcher,
                        a.warmup_days or 0, a.batch_strat)
 
@@ -915,6 +925,27 @@ def main():
                 break
             if instance.current_time > run_to:
                 break
+
+            # Warm-up is silent by design -- nothing is emitted before the
+            # line -- but silent for tens of minutes is indistinguishable from
+            # hung, and that ambiguity has already cost real time: three
+            # redundant runs were started because there was no way to tell a
+            # working warm-up from a dead one without ps. Report progress
+            # against the wall clock, with an ETA derived from the rate
+            # actually achieved rather than from an estimate, because the
+            # machine is usually shared and the achieved rate is the only
+            # honest predictor.
+            if warm_s is not None and not warmed \
+                    and instance.current_time >= next_report:
+                el = time.time() - t_start
+                done_frac = instance.current_time / warm_s
+                eta = el / done_frac - el if done_frac > 0 else 0
+                print(f'    warm-up day {instance.current_time/86400:6.1f}'
+                      f' / {a.warmup_days:g}'
+                      f'  ({done_frac*100:4.1f}%)'
+                      f'  {el/60:5.1f} min elapsed'
+                      f'  ~{eta/60:.0f} min left', file=sys.stderr)
+                next_report = instance.current_time + report_every
 
             # Cross the warm-up line exactly once: snapshot the fab, start
             # emitting, and start pacing. Everything before this ran unpaced
