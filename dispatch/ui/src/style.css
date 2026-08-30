@@ -241,3 +241,12 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   margin-right: 5px; vertical-align: -1px; border-radius: 2px; }
 .burndown-note { font-size: 11px; line-height: 1.5; margin-top: 8px;
   max-width: 900px; }
+
+
+.burndown-stats { margin-top: 10px; max-width: 560px; }
+.burndown-stats h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: #6b7280; }
+.burndown-stats table { width: 100%; font-size: 12px; }
+.burndown-stats th { text-align: left; font-weight: 500; color: #6b7280;
+  padding: 2px 10px 2px 0; white-space: nowrap; width: 45%; }
+.burndown-stats td { padding: 2px 0; font-variant-numeric: tabular-nums; }

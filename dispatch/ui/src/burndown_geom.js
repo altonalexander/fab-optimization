@@ -50,7 +50,8 @@ export function segments(lot, metric, now) {
   // flat run to now is the difference between "stuck for two days" and
   // "looks like it completed".
   const last = pts[pts.length - 1]
-  if (lot.state !== 'done' && now > last.t) {
+  // A scrapped lot's line just ends. It is not waiting for anything.
+  if (lot.state !== 'done' && lot.state !== 'scrapped' && now > last.t) {
     const v = metricOf(last, metric)
     out.push({ t1: last.t, v1: v, t2: now, v2: v, flat: true,
                reason: last.reason, extended: true })
@@ -131,4 +132,62 @@ export function maxValue(lots, metric) {
     for (const p of l.points || []) m = Math.max(m, metricOf(p, metric))
   }
   return m
+}
+
+
+/**
+ * The gray projected ray: where this lot lands if it keeps going at the rate
+ * its product and lot type have actually shown.
+ *
+ * Returns null when there is nothing honest to draw — a finished lot, a
+ * scrapped one, or a lot the server could not fit a rate for. A scrapped lot
+ * gets no ray on purpose: it is not going to complete, and drawing a dotted
+ * line to a completion date would assert the opposite.
+ *
+ * For the process-time metric the ray runs from the lot's remaining process
+ * time to zero over the same interval, so both metrics agree on *when* rather
+ * than disagreeing about the shape of the descent.
+ */
+export function projection(lot, metric, now) {
+  const p = lot.projection
+  if (!p || lot.state === 'done' || lot.state === 'scrapped') return null
+  const pts = lot.points || []
+  if (!pts.length) return null
+  const last = pts[pts.length - 1]
+  const v0 = metric === 'steps' ? last.left : last.rem_s
+  if (!v0) return null
+  const t0 = Math.max(p.start_t ?? last.t, now ?? last.t)
+  return { t1: t0, v1: v0, t2: p.eta_t, v2: 0, eta: p.eta_t, basis: p.basis }
+}
+
+/**
+ * Points where the burndown went back up.
+ *
+ * This is rework: steps the lot had already completed are put back in front of
+ * it, so it has more steps *remaining* while the total route length is
+ * unchanged. The lot has gone back in the line and must redo them. Marking the
+ * jogs makes that readable as an event rather than as a data glitch.
+ */
+export function reworkJogs(lot) {
+  const pts = lot.points || []
+  const out = []
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].left > pts[i - 1].left) {
+      out.push({ t: pts[i].t, from: pts[i - 1].left, to: pts[i].left,
+                 steps: pts[i].left - pts[i - 1].left })
+    }
+  }
+  return out
+}
+
+/** Domain must cover projected completions and due dates too, or the ray and
+ *  the due-date rule get clipped off the right edge. */
+export function domainWithProjection(lots, now, metric) {
+  let [t0, t1] = domain(lots, now)
+  for (const l of lots) {
+    if (l.due) t1 = Math.max(t1, l.due)
+    const pr = projection(l, metric, now)
+    if (pr) t1 = Math.max(t1, pr.t2)
+  }
+  return [t0, t1 + (t1 - t0) * 0.02]
 }

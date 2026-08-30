@@ -177,10 +177,13 @@ class FabMirror:
                 "release": f("rel"),
                 "due": f("due"),
                 "prio": f("prio"),
+                "hot": ev.get("hot") == "1",
             }
-        # Route length can grow: rework splices processed steps back onto the
-        # front of the route, so this is a running maximum, not a constant.
-        meta["route"] = max(int(meta.get("route", 0)), int(f("route")))
+        # Route length is constant for the life of the lot. Rework moves already
+        # processed steps back onto the front of the route: the lot has more
+        # steps *left*, but the total it must pass through is unchanged. It has
+        # gone back in the line, not been given extra work.
+        meta["route"] = int(f("route")) or meta.get("route", 0)
         meta["left"] = left
         meta["state"] = state
         meta["last_t"] = t
@@ -200,12 +203,18 @@ class FabMirror:
             for k in done[:2000]:
                 self.lot_meta.pop(k, None)
 
-    def burndown_view(self, cohorts=None, max_lots=400):
+    def burndown_view(self, cohorts=None, max_lots=400, want_points=False):
         """Group the ring into per-lot series. Takes the lock only to copy."""
         with self.lock:
             points = list(self.burndown)
             meta = {k: dict(v) for k, v in self.lot_meta.items()}
             sim_t = self.sim_t
+
+        if want_points:
+            # The rate model is fitted over the whole ring, not just the
+            # requested cohort: one cohort is 4-6 lots, far too few samples to
+            # estimate a per-product rate from.
+            self._all_points = points
 
         wanted = set(cohorts) if cohorts else None
         series = {}
@@ -700,6 +709,135 @@ def decisions():
         return jsonify(list(mirror.decisions)[-n:])
 
 
+# Rate model. Days per step, learned from what this fab has actually done
+# rather than from the route's nominal process times: the nominal numbers omit
+# queueing, which is most of the cycle, and would project every lot finishing
+# far too early.
+#
+# Keyed by (product, lot type) with an explicit fallback chain, because those
+# are the two parameters that visibly change the rate here. Hot lots hold
+# priority 20 against 10 and jump queues, so a rate learned from regular lots
+# does not describe them; and LVHM's ten products have routes from 242 to 583
+# steps through different tool families, so per-product is not the same as
+# fab-wide. `basis` is reported with every projection so a thin cell is
+# visible rather than quietly averaged away.
+RATE_MIN_SAMPLES = int(os.getenv("RATE_MIN_SAMPLES", "8"))
+
+
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if not n:
+        return None
+    return xs[n // 2] if n % 2 else 0.5 * (xs[n // 2 - 1] + xs[n // 2])
+
+
+def rate_model(points, meta):
+    """Seconds per step, bucketed by (part, hot), (part), (hot) and overall.
+
+    A sample is one observed forward move: the wall of simulated time between
+    two consecutive points, divided by the steps actually completed between
+    them. Backward moves (rework) are skipped -- they are not progress, and
+    dividing by a negative step count would make the rate meaningless. Their
+    cost still lands in the model, because the extra steps a reworked lot
+    subsequently redoes are themselves sampled.
+    """
+    buckets = {}
+    prev = {}
+    for lot, t, left, *_ in points:
+        p = prev.get(lot)
+        prev[lot] = (t, left)
+        if p is None:
+            continue
+        dt, dsteps = t - p[0], p[1] - left
+        if dsteps <= 0 or dt <= 0:
+            continue
+        m = meta.get(lot)
+        if m is None:
+            continue
+        per_step = dt / dsteps
+        hot = bool(m.get("hot"))
+        for key in ((m["part"], hot), (m["part"], None), (None, hot), (None, None)):
+            buckets.setdefault(key, []).append(per_step)
+
+    return {k: {"rate_s": _median(v), "n": len(v)} for k, v in buckets.items()}
+
+
+def project(meta_row, rates, now):
+    """Naive completion estimate for one lot.
+
+    Naive is the point: it assumes the lot keeps moving at the rate its own
+    product and lot type have shown, with no further rework, no tool
+    downtime, and no change in queueing. It is a straight-line reference to
+    read the real line against, not a forecast.
+    """
+    left = meta_row.get("left")
+    if left is None or meta_row.get("state") in ("done", "scrapped"):
+        return None
+
+    part, hot = meta_row["part"], bool(meta_row.get("hot"))
+    for key, basis in (((part, hot), "part+type"), ((part, None), "part"),
+                       ((None, hot), "type"), ((None, None), "fab")):
+        r = rates.get(key)
+        if r and r["rate_s"] and r["n"] >= (RATE_MIN_SAMPLES if basis != "fab" else 1):
+            # Project from now, not from the last event: a lot that has been
+            # sitting for two days is still sitting, and starting the ray at
+            # its last move would quietly forgive that wait.
+            start = max(meta_row.get("last_t", 0.0), now or 0.0)
+            eta = start + left * r["rate_s"]
+            due = meta_row.get("due")
+            return {
+                "rate_s": round(r["rate_s"], 1),
+                "basis": basis,
+                "n": r["n"],
+                "start_t": start,
+                "eta_t": eta,
+                "due_t": due,
+                # Positive = projected to finish before its due date.
+                "slack_s": (due - eta) if due else None,
+            }
+    return None
+
+
+def lot_stats(m, pts, now):
+    """Summary for one lot, computed here so the chart and the table cannot
+    disagree about the same number."""
+    route = m.get("route") or 0
+    left = m.get("left") or 0
+    done = max(route - left, 0)
+
+    # Rework shows as the burndown going back up: steps already completed are
+    # put back in front of the lot. Count the jogs and the steps re-queued --
+    # the route length itself never changes.
+    rework_events = 0
+    rework_steps = 0
+    for a, b in zip(pts, pts[1:]):
+        if b["left"] > a["left"]:
+            rework_events += 1
+            rework_steps += b["left"] - a["left"]
+
+    wq = sum(p.get("wq", 0) for p in pts)
+    wb = sum(p.get("wb", 0) for p in pts)
+    wp = sum(p.get("wp", 0) for p in pts)
+
+    last_t = m.get("last_t", 0.0)
+    return {
+        "route": route,
+        "steps_done": done,
+        "steps_left": left,
+        "pct_complete": round(100.0 * done / route, 1) if route else None,
+        "rework_events": rework_events,
+        "rework_steps": rework_steps,
+        "queue_s": round(wq, 1),
+        "batch_wait_s": round(wb, 1),
+        "process_s": round(wp, 1),
+        # How long since this lot last moved. A large value with state=active
+        # is the whole point of extending the flat line to now.
+        "idle_s": round(max((now or 0.0) - last_t, 0.0), 1),
+        "elapsed_s": round(max((now or 0.0) - m.get("release", 0.0), 0.0), 1),
+    }
+
+
 def _cohort_rows(meta):
     """One row per cohort, ranked by how recently it moved."""
     by = {}
@@ -759,10 +897,12 @@ def lots_cohort(cohort):
     the route -- and nothing here clamps it, because an upward jog is the most
     informative thing this chart shows.
     """
-    series, meta, sim_t = mirror.burndown_view(cohorts=[cohort])
+    series, meta, sim_t = mirror.burndown_view(cohorts=[cohort], want_points=True)
     if not series:
         return jsonify({"cohort": cohort, "now_t": sim_t, "lots": [],
                         "note": "no points held for this cohort"}), 200
+
+    rates = rate_model(getattr(mirror, "_all_points", []), meta)
 
     lots = []
     for lot, pts in series.items():
@@ -775,11 +915,18 @@ def lots_cohort(cohort):
             "release": m["release"],
             "due": m["due"],
             "prio": m["prio"],
+            "hot": bool(m.get("hot")),
             "state": m.get("state", "active"),
             "points": pts,
+            "projection": project(m, rates, sim_t),
+            "stats": lot_stats(m, pts, sim_t),
         })
     lots.sort(key=lambda r: r["lot"])
-    return jsonify({"cohort": cohort, "now_t": sim_t, "lots": lots})
+    return jsonify({"cohort": cohort, "now_t": sim_t, "lots": lots,
+                    "rate_basis_counts": {
+                        f"{k[0] or 'fab'}/{'hot' if k[1] else ('reg' if k[1] is False else 'any')}": v["n"]
+                        for k, v in sorted(rates.items(), key=lambda kv: -kv[1]["n"])[:8]
+                    }})
 
 
 @app.get("/api/stream")

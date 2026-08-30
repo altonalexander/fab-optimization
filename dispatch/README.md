@@ -102,6 +102,63 @@ deliberate and easy to break:
   separately from general queueing, so a horizontal run can be labelled
   *waiting on cohort* from measurement rather than inference.
 
+### The projected line
+
+Each active lot gets a gray dashed ray to a naive completion date:
+
+```
+eta = now + steps_remaining x median_seconds_per_step(product, lot type)
+```
+
+The rate is **learned from what the fab has done**, not from the route's
+nominal process times. Nominal times omit queueing, which is most of the cycle,
+and would project every lot finishing far too early. A sample is one observed
+forward move: elapsed simulated time divided by steps completed. Backward moves
+(rework) are skipped -- they are not progress -- but their cost still lands in
+the model, because the steps a reworked lot redoes are themselves sampled.
+
+Buckets are tried in order and the first with enough samples wins, with the
+`basis` reported alongside every projection so a thin cell is visible rather
+than silently averaged away:
+
+| basis | key | why it is a parameter |
+|---|---|---|
+| `part+type` | product x hot/regular | the default |
+| `part` | product | LVHM routes run 242-583 steps through different families |
+| `type` | hot/regular | hot lots hold priority 20 against 10 and jump queues |
+| `fab` | everything | last resort |
+
+`RATE_MIN_SAMPLES` (default 8) is the threshold for using a narrower bucket.
+
+The ray starts at **now**, not at the lot's last move: a lot that has been
+sitting for two days is still sitting, and starting the ray where it stopped
+would quietly forgive that wait. It assumes no further rework, no tool downtime
+and unchanged queueing -- a reference line to read the real one against, not a
+forecast.
+
+The **due date** is drawn as a vertical dashed rule in the lot's own colour, so
+"ray crosses zero to the right of the rule" means projected late, with nothing
+to read off a legend.
+
+### Rework and scrap
+
+**Rework does not lengthen the route.** The simulator moves already-processed
+steps back onto the front of `remaining_steps`, so the lot has more steps
+*left* while `route` is unchanged -- it has gone back in the line and must redo
+them. `route == steps_done + steps_left` is asserted in the geometry tests.
+Jogs are ringed in amber with the step count on hover.
+
+Getting this wrong is easy: deriving `route` per event undercounts by one
+exactly at completion, because the simulator never appends the final step to
+`processed_steps`. That made the route appear to shrink on 103 of 2,274 lots.
+It is now captured once per lot and reused.
+
+**Scrap** ends a lot's line with a red x and draws no projection, because a
+scrapped lot is not going to complete. Nothing in SMT2020 or PySCFabSim ever
+scraps a lot -- there is no scrap or yield column and no code path -- so this
+is plumbing for a real MES feed, exercised in the tests with a synthetic lot.
+Emit `state=scrapped` on a `LOT_PROGRESS` event to drive it.
+
 A **cohort** is not an SMT2020 concept, so `--cohort-mode` defines it:
 
 | mode | grouping | use |
@@ -114,7 +171,7 @@ Endpoints:
 | Route | Returns |
 |---|---|
 | `GET /api/lots` | cohort index, ranked by last movement, with min/median/max steps left and the spread |
-| `GET /api/lots/<cohort>` | per-lot series for one cohort |
+| `GET /api/lots/<cohort>` | per-lot series, plus a `projection` and a `stats` block per lot |
 
 Points are held in one bounded ring (`BURNDOWN_MAX`, default 150k) rather than
 per-lot series with an eviction policy: LVHM emits ~23k progress events per

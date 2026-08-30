@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  batchBands as computeBands, domain, envelope as computeEnvelope,
-  maxValue, segments as computeSegments,
+  batchBands as computeBands, envelope as computeEnvelope,
+  maxValue, segments as computeSegments, projection as computeProjection,
+  reworkJogs, domainWithProjection,
 } from './burndown_geom.js'
 
 /**
@@ -38,6 +39,13 @@ const REASON = {
 const DAY = 86400
 const fmtDay = t => `d${(t / DAY).toFixed(1)}`
 const hueFor = (key, i) => HUES[i % HUES.length]
+const fmtDur = sec => {
+  if (sec == null) return '—'
+  const d = sec / 86400
+  return Math.abs(d) >= 1 ? `${d.toFixed(1)}d` : `${(sec / 3600).toFixed(1)}h`
+}
+const fmtSigned = sec =>
+  sec == null ? '—' : `${sec >= 0 ? '+' : ''}${(sec / 86400).toFixed(1)}d`
 
 export default function CohortBurndown() {
   const [index, setIndex] = useState(null)
@@ -153,7 +161,7 @@ export default function CohortBurndown() {
     // Fixed window. An auto-scaling axis would shift the chart under the
     // reader's cursor on every tick, so the domain only moves when they zoom
     // or pan.
-    const [t0, t1] = domain(lots, now)
+    const [t0, t1] = domainWithProjection(lots, now, metric)
     const span = (t1 - t0) / zoom.scale
     const d0 = t0 + zoom.offset * (t1 - t0)
     const d1 = d0 + span
@@ -301,6 +309,59 @@ export default function CohortBurndown() {
                       strokeWidth={s.flat ? 3 : 1.5}
                       strokeOpacity={dim ? 0.5 : 1} />
               ))}
+
+              {/* Projected burndown: gray, so it never reads as measurement. */}
+              {(() => {
+                const pr = computeProjection(l, metric, view.now)
+                if (!pr) return null
+                return (
+                  <line x1={view.x(pr.t1)} y1={view.y(pr.v1)}
+                        x2={view.x(pr.t2)} y2={view.y(pr.v2)}
+                        stroke="#6b7280" strokeWidth={dim ? 1 : 1.5}
+                        strokeDasharray="5 4"
+                        strokeOpacity={dim ? 0.25 : 0.85} />
+                )
+              })()}
+
+              {/* Due date: a vertical rule, so "projection crosses zero left of
+                  the rule" is on time and right of it is late, read directly. */}
+              {l.due > view.d0 && l.due < view.d1 && (
+                <line x1={view.x(l.due)} x2={view.x(l.due)}
+                      y1={M.t} y2={M.t + ih}
+                      stroke={hue} strokeDasharray="2 5"
+                      strokeOpacity={dim ? 0.15 : 0.55} />
+              )}
+
+              {/* Rework: the burndown steps back up. Total route is unchanged;
+                  the lot went back in the line and must redo those steps. */}
+              {reworkJogs(l).map((j, k) => (
+                <g key={`rw${k}`}>
+                  <circle cx={view.x(j.t)} cy={view.y(j.to)} r={dim ? 2 : 3.2}
+                          fill="none" stroke="#b45309"
+                          strokeWidth="1.5" strokeOpacity={dim ? 0.3 : 1} />
+                  <title>{`rework at d${(j.t / 86400).toFixed(2)}: `
+                    + `${j.steps} step${j.steps > 1 ? 's' : ''} re-queued `
+                    + `(${j.from} -> ${j.to} left). Route length unchanged.`}</title>
+                </g>
+              ))}
+
+              {/* Scrapped: the line just ends. No projection, because it is not
+                  going to complete. */}
+              {l.state === 'scrapped' && l.points.length > 0 && (() => {
+                const last = l.points[l.points.length - 1]
+                const cx = view.x(last.t)
+                const cy = view.y(metric === 'steps' ? last.left : last.rem_s)
+                const r = 5
+                return (
+                  <g>
+                    <line x1={cx - r} y1={cy - r} x2={cx + r} y2={cy + r}
+                          stroke="#b91c1c" strokeWidth="2" />
+                    <line x1={cx - r} y1={cy + r} x2={cx + r} y2={cy - r}
+                          stroke="#b91c1c" strokeWidth="2" />
+                    <title>{`${l.lot} scrapped at d${(last.t / 86400).toFixed(2)}`}</title>
+                  </g>
+                )
+              })()}
             </g>
           )
         })}
@@ -317,12 +378,17 @@ export default function CohortBurndown() {
         )}
       </svg>
 
+      <LotStats lots={view ? view.lots : []} focus={focus} now={view && view.now} />
+
       <div className="burndown-legend">
         {Object.entries(REASON).map(([k, v]) => (
           <span key={k}><i style={{ background: v.color }} />{v.label}</span>
         ))}
         <span><i style={{ background: '#7c3aed', opacity: 0.3 }} />batch step (observed)</span>
-        <span className="muted">dashed = required rate to due date</span>
+        <span><i style={{ background: '#6b7280' }} />projected (naive)</span>
+        <span><i style={{ background: '#b45309' }} />rework jog</span>
+        <span><i style={{ background: '#b91c1c' }} />scrapped (&times;)</span>
+        <span className="muted">coloured dash = required rate · vertical dash = due date</span>
       </div>
 
       <p className="muted burndown-note">
@@ -332,8 +398,100 @@ export default function CohortBurndown() {
         raw process time over the remaining route — it excludes queue time, which
         the simulator does not forecast, so it is a floor rather than a predicted
         finish. The line is <b>not monotonic</b>: rework splices completed steps
-        back onto the route and the burndown goes up. That jog is real.
+        back onto the route and the burndown goes up. That jog is real: the lot
+        has gone back in the line and must redo those steps, so the number
+        <i> remaining</i> rises while the <i>total</i> route length is
+        unchanged. It is not extra work added to the route.
       </p>
+      <p className="muted burndown-note">
+        The <b>gray dashed ray</b> is a naive projection: steps left multiplied
+        by the median seconds-per-step this product and lot type have actually
+        achieved, started from now rather than from the lot's last move so a
+        stalled lot is not forgiven its wait. It assumes no further rework, no
+        tool downtime and unchanged queueing, so it is a reference line, not a
+        forecast. The <b>vertical dash</b> is the due date: a ray crossing zero
+        to the right of it is projected late. A <b>scrapped</b> lot ends in a
+        red &times; and gets no projection at all.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Summary for the focused lot, or for the whole cohort when nothing is focused.
+ *
+ * Every number here comes from the server's `stats` and `projection` blocks
+ * rather than being recomputed in the browser. Two derivations of the same
+ * quantity drift, and then the table and the chart disagree about the same lot
+ * with nothing to say which is right.
+ */
+function LotStats({ lots, focus, now }) {
+  if (!lots.length) return null
+  const sel = focus ? lots.filter(l => l.lot === focus) : lots
+  if (!sel.length) return null
+
+  const one = sel.length === 1 ? sel[0] : null
+  const sum = k => sel.reduce((a, l) => a + (l.stats?.[k] ?? 0), 0)
+  const proj = sel.map(l => l.projection).filter(Boolean)
+  const late = sel.filter(l => l.projection && l.projection.slack_s != null
+                               && l.projection.slack_s < 0)
+  const worst = proj.length
+    ? proj.reduce((a, b) => (a.slack_s ?? 0) <= (b.slack_s ?? 0) ? a : b)
+    : null
+
+  const cells = one
+    ? [
+        ['lot', one.lot],
+        ['product', `${one.part}${one.hot ? ' · HOT' : ''}`],
+        ['state', one.state],
+        ['progress', `${one.stats.steps_done} / ${one.stats.route} steps `
+                     + `(${one.stats.pct_complete ?? '—'}%)`],
+        ['steps left', one.stats.steps_left],
+        ['rework', one.stats.rework_events
+            ? `${one.stats.rework_events} ×, ${one.stats.rework_steps} steps re-queued`
+            : 'none'],
+        ['idle since last move', fmtDur(one.stats.idle_s)],
+        ['queue / batch / process',
+          `${fmtDur(one.stats.queue_s)} / ${fmtDur(one.stats.batch_wait_s)} / `
+          + `${fmtDur(one.stats.process_s)}`],
+        ['rate used', one.projection
+            ? `${(one.projection.rate_s / 86400).toFixed(3)} d/step `
+              + `(${one.projection.basis}, n=${one.projection.n})`
+            : '—'],
+        ['projected finish', one.projection
+            ? `d${(one.projection.eta_t / 86400).toFixed(1)}` : '—'],
+        ['due', one.due ? `d${(one.due / 86400).toFixed(1)}` : 'none'],
+        ['slack (due − projected)', one.projection
+            ? fmtSigned(one.projection.slack_s) : '—'],
+      ]
+    : [
+        ['lots selected', sel.length],
+        ['products', [...new Set(sel.map(l => l.part))].join(', ')],
+        ['steps left (min / max)',
+          `${Math.min(...sel.map(l => l.stats.steps_left))} / `
+          + `${Math.max(...sel.map(l => l.stats.steps_left))}`],
+        ['spread', Math.max(...sel.map(l => l.stats.steps_left))
+                   - Math.min(...sel.map(l => l.stats.steps_left))],
+        ['rework', `${sum('rework_events')} ×, ${sum('rework_steps')} steps re-queued`],
+        ['scrapped', sel.filter(l => l.state === 'scrapped').length],
+        ['done', sel.filter(l => l.state === 'done').length],
+        ['projected late', `${late.length} of ${proj.length} projected`],
+        ['worst slack', worst ? fmtSigned(worst.slack_s) : '—'],
+      ]
+
+  return (
+    <div className="burndown-stats">
+      <h4>{one ? 'Selected lot' : `Cohort — ${sel.length} lots`}</h4>
+      <table className="tbl">
+        <tbody>
+          {cells.map(([k, v]) => (
+            <tr key={k}><th>{k}</th><td>{String(v)}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      {!one && (
+        <p className="muted">Click a lot in <b>lots</b> mode to drill in.</p>
+      )}
     </div>
   )
 }

@@ -178,6 +178,20 @@ class FeedPlugin(IPlugin):
         # spent on. Keyed by lot idx and dropped when the lot completes, so it
         # is bounded by WIP rather than by total lots released.
         self._last_split = {}
+        # Route length, captured once per lot and reused.
+        #
+        # It cannot be recomputed per event: on the last step the simulator
+        # never appends the final step to processed_steps (the while loop in
+        # instance.py exits before doing so), so processed+remaining reads one
+        # short exactly at completion. Deriving it each time made the route
+        # appear to shrink by 1 on 103 of 2,274 lots -- every completion.
+        #
+        # Rework does NOT change this number. It moves already-processed steps
+        # back onto the front of remaining_steps, so the lot has more steps
+        # *left* but the same total route; it has gone back in the line and
+        # must redo them. Keeping route fixed is what makes that readable on
+        # the chart as a step back up rather than a moving target.
+        self._route_len = {}
 
     def _in_window(self):
         t = getattr(self, '_now', None)
@@ -266,6 +280,9 @@ class FeedPlugin(IPlugin):
             return
         remaining = len(lot.remaining_steps) + (1 if lot.actual_step is not None else 0)
         done = len(lot.processed_steps)
+        route = self._route_len.get(lot.idx)
+        if route is None:
+            route = self._route_len[lot.idx] = done + remaining
 
         # Attribute the flat run that preceded this point. The simulator keeps
         # cumulative per-lot totals; the delta since this lot's last event is
@@ -290,7 +307,12 @@ class FeedPlugin(IPlugin):
             t=round(instance.current_time, 1),
             left=remaining,
             idx=done,
-            route=done + remaining,
+            route=route,
+            # Lot type. SMT2020 gives hot lots priority 20 against 10 for the
+            # rest, and they are released on their own much slower stream, so
+            # they see the fab differently: a rate learned from regular lots
+            # does not describe them.
+            hot=1 if (lot.priority or 0) >= 20 or lot.name.startswith('HotLot') else 0,
             state=state,
             reason=reason,
             # Seconds in the preceding segment, split by cause. Lets the client
@@ -338,6 +360,7 @@ class FeedPlugin(IPlugin):
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
         self._burn(instance, lot, 'done')
         self._last_split.pop(lot.idx, None)
+        self._route_len.pop(lot.idx, None)
 
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
