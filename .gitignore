@@ -32,3 +32,6 @@ dispatch/build-ortools/
 
 # local dev run state
 .dev-run/
+
+# claude code worktrees and session state
+.claude/
