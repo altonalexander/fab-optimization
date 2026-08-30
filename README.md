@@ -34,7 +34,7 @@ mode. That symlink is load-bearing: if it is ever broken, stop.
    └────────────────────────┬───────────────────────────────────────────┘
                             │ Kafka
    ┌────────────────────────▼─── zone 3: data ──────────┐
-   │   kafka  ·  mes-producer  ·  api (read-only)       │
+   │   kafka  ·  api (read-only)  <- sim_feed.py produces │
    └────────────────────────┬───────────────────────────┘
                             │ HTTP (nginx)
    ┌────────────────────────▼─── zone 4: enterprise ────┐
@@ -91,10 +91,10 @@ second UI being maintained.
 
 ## Running it
 
-**The dashboard, locally, no Docker.** The simulator runs in two modes:
+**The dashboard.** The simulator runs in two modes:
 
-*Mode 1 — headless.* No feed, no pacing, as fast as possible. This is what you
-use for KPIs and parameter tuning:
+*Mode 1 — headless.* No broker, no feed, no pacing, as fast as possible.
+This is what you use for KPIs and parameter tuning:
 
 ```bash
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 30 --top 15
@@ -104,22 +104,31 @@ baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 30 --top
 so you can watch near-realtime:
 
 ```bash
-# terminal 1 — api :8000 and ui :5173, reading a file feed instead of Kafka
-DEMO_LOTS=1 FEED_FILE=/tmp/fab-feed.jsonl scripts/dev-up.sh
+# terminal 1 — the broker (dev override publishes a host listener)
+cd dispatch/infra
+docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+    --profile data up -d kafka kafka-init
 
-# terminal 2 — the simulator as producer; --speed is sim-seconds per wall-second
+# terminal 2 — api :8000 and ui :5173, consuming from Kafka
+cd dispatch && DEMO_LOTS=1 KAFKA_BROKERS=localhost:29092 make api
+cd dispatch/ui && npm run dev
+
+# terminal 3 — the simulator as producer: every tool, ten times realtime
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-    --out /tmp/fab-feed.jsonl --days 3 --speed 400 --tool-prefix Litho --truncate
+    --days 3 --speed 10
 ```
 
-Then open http://localhost:5173/. `--speed 0` fills the dashboard as fast as
-the sim runs; Ctrl-C the producer to pause. `--tool-prefix` matters: the whole
-fab emits ~22k dispatch events per simulated day.
+Then open http://localhost:5173/.
 
-Run `dev-up.sh` directly, not through a pipe — see the note in the script.
-`FEED_FILE` replaces Kafka rather than supplementing it; without either, the
-live panels stay empty and `DEMO_LOTS=1` is what keeps the scenario button
-working.
+`--speed` is sim-seconds per wall-second: `1` is realtime, `10` is ten times
+realtime (a simulated day takes ~2.4 hours), `0` is unpaced. At `--speed 10`
+the whole fab emits about **6 events/second** — the broker and the dashboard
+absorb that without effort, so there is no reason to filter with
+`--tool-prefix` unless you want to.
+
+Ctrl-C the producer to pause; rerun it to resume. The API consumer starts at
+`latest`, so the dashboard is empty until something is produced —
+`DEMO_LOTS=1` is what keeps the scenario button working meanwhile.
 
 **Tests:**
 
@@ -190,8 +199,9 @@ Honest accounting, because the numbers here have been wrong before:
   honestly reports `cpsat linked` — no error, no warning, no CP-SAT. Measured
   and corrected in `dispatch/README.md`; re-measure per deployment rather than
   inheriting the number.
-- The producer is `bench/tools/sim_feed.py`, which publishes to Kafka or to a
-  file. There was never a C++ `mes_producer`: `Dockerfile.simulator` built it
+- The producer is `bench/tools/sim_feed.py`, which publishes to Kafka. It
+  still has a hidden `--out` that writes JSONL, kept only so `scripts/smoke.sh`
+  can run with no Docker and no broker. There was never a C++ `mes_producer`: `Dockerfile.simulator` built it
   from a source file that does not exist and hid the failure with `|| true`.
   That build step and the broken compose service are gone.
 - Gurobi and HiGHS are declared backends that fall through to greedy.
@@ -206,7 +216,6 @@ Honest accounting, because the numbers here have been wrong before:
   publishes a second listener for host-side producers, but under Docker Desktop
   + WSL2 here the binding never materialises (a plain `docker run -p` does
   publish, so it is compose-specific to this setup). Run the producer inside
-  the data zone — the production shape — or use `--out`/`FEED_FILE`, which is
-  the fully tested path.
+  the data zone — the production shape.
 
 See `BUILD.md` for the toolchain and the OR-Tools recipe.

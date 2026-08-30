@@ -20,19 +20,28 @@ API cannot tell this apart from Kafka:
 
   {"topic": "fab.lot.events", "payload": "type=LOT_STARTED;lot=...;tool=..."}
 
-Two sinks, same events either way:
+Publishes to Kafka. Start the broker first:
 
-  # file -- local dev, no broker needed
-  DEMO_LOTS=1 FEED_FILE=/tmp/fab-feed.jsonl scripts/dev-up.sh
+  cd dispatch/infra
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+      --profile data up -d kafka kafka-init
+
+  KAFKA_BROKERS=localhost:29092 make api      # in dispatch/
+
+then feed it, all tools, at ten times realtime:
+
   baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-      --out /tmp/fab-feed.jsonl --days 5 --speed 600
+      --days 3 --speed 10
 
-  # kafka -- the real transport, once `make infra-up` is running
-  baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-      --kafka localhost:9092 --days 5 --speed 600
+--speed is sim-seconds per wall-second. 1 is realtime, 10 is ten times
+realtime (a simulated day takes ~2.4 hours of wall clock), 0 is unpaced.
+At --speed 10 the whole fab emits ~6 events/second, which the broker and the
+dashboard absorb without effort.
 
---speed is sim-seconds per wall-second: 600 is ten minutes a second. Use 0 to
-emit as fast as the sim runs (fills the dashboard immediately, no pacing).
+--tool-prefix narrows to one family; omit it for all 1,443 tools.
+
+There is also a hidden --out that writes JSONL instead. It exists only for
+scripts/smoke.sh, which has to run without Docker. Kafka is the path.
 
 --from-day / --to-day record a window. A full 730-day run is ~39M events and
 4.3 GB; a window is megabytes. The simulation still runs from t=0 either way,
@@ -52,6 +61,8 @@ sys.path.insert(0, SIM)
 os.chdir(SIM)
 
 from plugins.interface import IPlugin  # noqa: E402
+
+DEFAULT_BROKERS = 'localhost:29092'   # the dev-override host listener
 
 LOT_TOPIC = 'fab.lot.events'
 TOOL_TOPIC = 'fab.tool.events'
@@ -253,10 +264,14 @@ class FeedPlugin(IPlugin):
 
 def main():
     p = argparse.ArgumentParser(description='run PySCFabSim as a dashboard feed')
-    sink = p.add_mutually_exclusive_group(required=True)
-    sink.add_argument('--out', help='JSONL file the API tails (its FEED_FILE)')
-    sink.add_argument('--kafka', metavar='BROKERS',
-                      help='publish to Kafka instead, e.g. localhost:9092')
+    sink = p.add_mutually_exclusive_group()
+    sink.add_argument('--kafka', metavar='BROKERS', nargs='?',
+                      const=DEFAULT_BROKERS, default=None,
+                      help=f'publish to Kafka (default: {DEFAULT_BROKERS})')
+    # Retained only for scripts/smoke.sh, which has to run with no Docker and
+    # no broker. Not the operational path -- hidden from --help so it is not
+    # reached for by accident.
+    sink.add_argument('--out', help=argparse.SUPPRESS)
     p.add_argument('--dataset', default='SMT2020_HVLM')
     p.add_argument('--days', type=int, default=5)
     p.add_argument('--dispatcher', default='fifo')
@@ -288,15 +303,18 @@ def main():
     from read import read_all
     from greedy import get_lots_to_dispatch_by_machine
 
-    if a.kafka:
+    # Kafka unless a file was explicitly asked for. The transport is the
+    # product path; the file exists for tests that cannot start a broker.
+    if a.out:
+        out = FileSink(a.out, a.truncate)
+    else:
+        brokers = a.kafka or DEFAULT_BROKERS
         try:
-            out = KafkaSink(a.kafka)
+            out = KafkaSink(brokers)
         except ImportError:
             p.error('confluent-kafka is not installed in this interpreter')
         except Exception as e:
-            p.error(f'cannot reach Kafka at {a.kafka}: {e}')
-    else:
-        out = FileSink(a.out, a.truncate)
+            p.error(f'cannot reach Kafka at {brokers}: {e}')
 
     print(f'  feeding {out.label}  ({a.dataset}, {a.days}d, {a.dispatcher}, '
           f'speed={a.speed:g})', file=sys.stderr)
