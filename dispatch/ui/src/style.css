@@ -121,6 +121,37 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   font-size:13px;font-family:inherit;margin-bottom:8px}
 .link:hover{text-decoration:underline}
 
+/* Floor map --------------------------------------------------------------- */
+.floor-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
+.floor-wrap:has(.floor-panel){grid-template-columns:minmax(0,1fr) 260px}
+.floor-main{min-width:0}
+.floor-head{display:flex;justify-content:space-between;align-items:center;
+  gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.floor-svg{display:block;background:var(--card);border:1px solid var(--line);
+  border-radius:8px}
+.floor-svg text{user-select:none}
+.heat-toggle{font-size:12px;color:#6b7280;cursor:pointer;white-space:nowrap}
+.floor-legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:11px;
+  color:#374151}
+.floor-legend .lg{display:flex;align-items:center;gap:5px}
+.floor-legend i{width:11px;height:11px;border-radius:2px;display:inline-block}
+.floor-legend .lg-hatch{background:repeating-linear-gradient(45deg,#b91c1c 0 2px,#fef2f2 2px 5px)}
+.floor-panel{position:sticky;top:20px;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.floor-panel h5{margin:12px 0 6px}
+.floor-tools{display:flex;flex-direction:column;gap:5px;max-height:320px;
+  overflow:auto}
+.delay-strip{margin-top:18px;border:1px dashed var(--line);border-radius:8px;
+  padding:12px 14px;background:#fafafa}
+.delay-strip h4{margin:0 0 4px}
+.delay-rows{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.delay-row{display:flex;gap:16px;align-items:baseline;font-size:12px;
+  padding:6px 10px;background:#fff;border:1px solid var(--line);border-radius:6px}
+.delay-row strong{font-family:ui-monospace,monospace;font-size:11px}
+.tool-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+@media(max-width:900px){.floor-wrap:has(.floor-panel){grid-template-columns:minmax(0,1fr)}
+  .floor-panel{position:static}}
+
 /* Assistant rail --------------------------------------------------------- */
 /* Two columns: content scrolls, the rail stays put. The rail is sticky rather
    than fixed so it still sits inside the page padding and never overlaps the

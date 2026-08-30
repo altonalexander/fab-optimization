@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
+import FloorMap from './FloorMap.jsx'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
@@ -282,6 +283,10 @@ function ToolIndex({ onOpen }) {
   const [data, setData] = useState(null)
   const [open, setOpen] = useState({})
   const [q, setQ] = useState('')
+  const [type, setType] = useState('all')
+  // Delay_* are queue-time placeholders pinned near 100% busy. Left in, they
+  // top the ranking by dispatch count and bury the real constraint.
+  const [showDelay, setShowDelay] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -295,9 +300,15 @@ function ToolIndex({ onOpen }) {
   if (!data) return <div className="muted">loading tools…</div>
 
   const needle = q.trim().toLowerCase()
+  const isDelay = g => g.toLowerCase().startsWith('delay')
+
   const groups = data.groups
+    .filter(g => showDelay || !isDelay(g.group))
+    .filter(g => type === 'all' || g.group === type)
     .map(g => ({ ...g, tools: needle ? g.tools.filter(t => t.id.toLowerCase().includes(needle)) : g.tools }))
     .filter(g => g.tools.length > 0)
+
+  const delayCount = data.groups.filter(g => isDelay(g.group)).length
 
   return (
     <div>
@@ -306,8 +317,23 @@ function ToolIndex({ onOpen }) {
           {data.total} tools in {data.groups.length} groups, busiest first.
           A high queue with the tool online is where lots are waiting.
         </p>
-        <input className="tool-search" placeholder="filter tools…"
-               value={q} onChange={e => setQ(e.target.value)} />
+        <div className="tool-filters">
+          <select className="tool-search" value={type} onChange={e => setType(e.target.value)}>
+            <option value="all">all types ({data.groups.length})</option>
+            {data.groups.map(g => (
+              <option key={g.group} value={g.group}>{g.group} ({g.count})</option>
+            ))}
+          </select>
+          <input className="tool-search" placeholder="filter tools…"
+                 value={q} onChange={e => setQ(e.target.value)} />
+          {delayCount > 0 && (
+            <label className="heat-toggle">
+              <input type="checkbox" checked={showDelay}
+                     onChange={e => setShowDelay(e.target.checked)} />
+              {' '}show Delay_*
+            </label>
+          )}
+        </div>
       </div>
 
       {groups.map(g => {
@@ -404,7 +430,7 @@ export default function App() {
         <div className="shell-main">
 
       <nav className="tabs">
-        {['live', 'tools', 'scenario', 'topology'].map(t => (
+        {['live', 'tools', 'floor', 'scenario', 'topology'].map(t => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -449,6 +475,13 @@ export default function App() {
           {openTool
             ? <ToolDetail id={openTool} onBack={() => setOpenTool(null)} />
             : <><h3>Tools</h3><ToolIndex onOpen={setOpenTool} /></>}
+        </section>
+      )}
+
+      {tab === 'floor' && (
+        <section>
+          <h3>Cleanroom floor</h3>
+          <FloorMap onOpenTool={(id) => { setOpenTool(id); setTab('tools') }} />
         </section>
       )}
 

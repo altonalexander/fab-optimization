@@ -336,6 +336,102 @@ def state():
     return jsonify(mirror.snapshot())
 
 
+# ---------------------------------------------------------------------------
+# Floorplan. Geometry is static and cached; state streams separately.
+# ---------------------------------------------------------------------------
+
+FLOORPLAN_FILE = os.getenv(
+    "FLOORPLAN_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "config", "floorplan.json"))
+
+# Simulator family prefix -> floorplan zone. Longest prefix wins, so
+# LithoTrack/LithoMet resolve before Litho. Delay_* is deliberately absent:
+# those are queue-time placeholders, not equipment, and putting them on a floor
+# map would invent 400 machines that do not exist.
+FAMILY_ZONE = [
+    ("LithoTrack", "LIT"), ("LithoMet", "LIT"), ("Litho", "LIT"),
+    ("Dielectric", "TF"), ("TF", "TF"),
+    ("Diffusion", "DIF"), ("EPI", "DIF"),
+    ("Planar", "CMP"),
+    ("Implant", "IMP"),
+    ("DefMet", "MET"), ("DefMEt", "MET"),
+    ("WE", "CLN"),
+    ("DE", "ETC"),
+]
+_FAMILY_ZONE_SORTED = sorted(FAMILY_ZONE, key=lambda kv: -len(kv[0]))
+
+
+def is_delay_group(group):
+    return group.lower().startswith("delay")
+
+
+def zone_for_group(group):
+    # Checked first and explicitly: "Delay" starts with "DE", so without this
+    # every queue-time placeholder silently lands in the dry-etch bays and the
+    # map shows 400 machines that do not exist.
+    if is_delay_group(group):
+        return None
+    for prefix, zone in _FAMILY_ZONE_SORTED:
+        if group.lower().startswith(prefix.lower()):
+            return zone
+    return None
+
+
+class Floorplan:
+    """Geometry plus a stable tool -> cell assignment.
+
+    The assignment is derived, because SMT2020 has no floorplan, but it must be
+    deterministic: tools are sorted and dealt round-robin into their zone's
+    cells, so a tool keeps its cell across restarts. A map that reshuffles on
+    reload teaches an operator nothing.
+    """
+
+    def __init__(self):
+        self.doc = None
+        self.error = None
+        self.zone_cells = {}
+        self.assign = {}          # tool_id -> (bay, seg)
+        self.cell_tools = {}      # (bay, seg) -> [tool_id]
+        self._assigned_for = set()
+        self.lock = threading.Lock()
+        try:
+            with open(os.path.abspath(FLOORPLAN_FILE)) as f:
+                self.doc = json.load(f)
+            for z in self.doc["zones"]:
+                self.zone_cells[z["id"]] = [tuple(c) for c in z["cells"]]
+        except Exception as e:
+            self.error = str(e)
+
+    def reassign(self, tool_ids):
+        """Recompute placement when the tool set changes. Idempotent."""
+        if self.doc is None:
+            return
+        with self.lock:
+            ids = set(tool_ids)
+            if ids == self._assigned_for:
+                return
+            self._assigned_for = ids
+            assign, cell_tools = {}, {}
+            by_zone = defaultdict(list)
+            for t in sorted(ids):
+                z = zone_for_group(tool_group(t))
+                if z:
+                    by_zone[z].append(t)
+            for z, tools in by_zone.items():
+                cells = self.zone_cells.get(z) or []
+                if not cells:
+                    continue
+                for i, t in enumerate(tools):
+                    cell = cells[i % len(cells)]
+                    assign[t] = cell
+                    cell_tools.setdefault(cell, []).append(t)
+            self.assign, self.cell_tools = assign, cell_tools
+
+
+floorplan = Floorplan()
+
+
 def _tool_row(tool_id):
     """One tool's public shape. Kept in one place so the index and the detail
     view cannot disagree about what a tool looks like."""
@@ -360,6 +456,93 @@ def _tool_row(tool_id):
         "running": running[:25],
         "running_count": len(running),
     }
+
+
+def _known_tools():
+    with mirror.lock:
+        return set(mirror.tools) | set(mirror.tool_stats)
+
+
+@app.get("/api/layout")
+def layout():
+    """Geometry + placement. Static enough to cache; state is a separate call.
+
+    Delay_* tools are returned in their own section rather than as cells. They
+    are queue-time placeholders with no physical location, and giving them a
+    bay would assert a position the dataset does not have.
+    """
+    if floorplan.doc is None:
+        return jsonify({"error": f"floorplan unavailable: {floorplan.error}"}), 500
+
+    ids = _known_tools()
+    floorplan.reassign(ids)
+
+    with floorplan.lock:
+        assign = {t: list(c) for t, c in floorplan.assign.items()}
+        cell_tools = {f"{b},{s}": list(v) for (b, s), v in floorplan.cell_tools.items()}
+
+    delay_groups = defaultdict(list)
+    unplaced = []
+    for t in sorted(ids):
+        g = tool_group(t)
+        if is_delay_group(g):
+            delay_groups[g].append(t)
+        elif t not in assign:
+            unplaced.append(t)
+
+    doc = dict(floorplan.doc)
+    doc["assign"] = assign
+    doc["cell_tools"] = cell_tools
+    doc["delays"] = [{"group": g, "tools": v, "count": len(v)}
+                     for g, v in sorted(delay_groups.items())]
+    # Surfaced rather than silently dropped: a tool with no zone mapping is a
+    # gap in FAMILY_ZONE, and hiding it would make the map quietly incomplete.
+    doc["unplaced"] = unplaced
+    doc["placed"] = len(assign)
+    return jsonify(doc)
+
+
+@app.get("/api/layout/state")
+def layout_state():
+    """Per-cell and per-delay-group rollup. This is the layer that ticks."""
+    ids = _known_tools()
+    floorplan.reassign(ids)
+
+    with floorplan.lock:
+        cell_tools = {k: list(v) for k, v in floorplan.cell_tools.items()}
+
+    cells = []
+    for (bay, seg), tools in cell_tools.items():
+        rows = [_tool_row(t) for t in tools]
+        queues = [r["queue"] for r in rows if r["queue"] is not None]
+        cells.append({
+            "bay": bay, "seg": seg,
+            "tools": len(rows),
+            "down": sum(1 for r in rows if not r["online"]),
+            "running": sum(r["running_count"] for r in rows),
+            "dispatches": sum(r["dispatches"] for r in rows),
+            "wip": sum(queues) if queues else 0,
+            "queue_max": max(queues) if queues else None,
+        })
+
+    delays = []
+    dgroups = defaultdict(list)
+    for t in ids:
+        g = tool_group(t)
+        if is_delay_group(g):
+            dgroups[g].append(t)
+    for g, tools in sorted(dgroups.items()):
+        rows = [_tool_row(t) for t in tools]
+        queues = [r["queue"] for r in rows if r["queue"] is not None]
+        delays.append({
+            "group": g,
+            "tools": len(rows),
+            "running": sum(r["running_count"] for r in rows),
+            "dispatches": sum(r["dispatches"] for r in rows),
+            "wip": sum(queues) if queues else 0,
+        })
+
+    return jsonify({"ts": time.time(), "cells": cells, "delays": delays})
 
 
 @app.get("/api/tools")
