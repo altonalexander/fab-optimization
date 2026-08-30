@@ -44,6 +44,18 @@ FEED_FILE     = os.getenv("FEED_FILE", "")
 # a flat, predictable memory ceiling, and cohorts are grouped out of it on
 # demand -- the client fetches once and appends from SSE thereafter.
 BURNDOWN_MAX  = int(os.getenv("BURNDOWN_MAX", "150000"))
+# Playback control for the simulator feed (bench/tools/sim_feed.py), which is
+# a separate host process. The dashboard's speed menu writes here and the feed
+# polls it. This is NOT a write path into the fab: it changes only how fast a
+# simulated run is replayed, so the zone-3 read-only rule still holds -- there
+# is no reachable dispatcher on the other end of it.
+SIM_CONTROL_FILE = os.getenv(
+    "SIM_CONTROL_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "..", "bench", ".sim_control.json"))
+# What the dashboard offers. 0 would mean unpaced, which floods the browser,
+# so it is deliberately not on the menu.
+SIM_SPEEDS = [1, 10, 20, 50, 100, 400]
 
 # ---------------------------------------------------------------------------
 # Live state, rebuilt from the Kafka event stream.
@@ -480,7 +492,11 @@ def feed_file_loop():
 # Read-only guard. Belt and braces with the nginx limit_except.
 # ---------------------------------------------------------------------------
 
-SCENARIO_PATHS = {"/api/scenario", "/api/scenario/compare", "/api/chat"}
+SCENARIO_PATHS = {"/api/scenario", "/api/scenario/compare", "/api/chat",
+                  # Playback pacing of the simulator feed. It reaches a
+                  # replay process, not the dispatcher, and changes only
+                  # when events are emitted -- never fab state.
+                  "/api/sim/control"}
 
 
 @app.before_request
@@ -489,8 +505,9 @@ def enforce_read_only():
         return None
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return None
-    # Scenario POST is permitted: it runs against a cloned registry and has no
-    # path back to the dispatcher. Everything else is refused.
+    # Scenario and sim-playback POSTs are permitted: they run against a cloned
+    # registry / a replay process and have no path back to the dispatcher.
+    # Everything else is refused.
     if request.path in SCENARIO_PATHS and request.method == "POST":
         return None
     return jsonify({"error": "read-only zone boundary: writes are not permitted"}), 403
@@ -1101,6 +1118,65 @@ def scenario_runner(tool_overrides):
 
 
 assistant = FabAssistant(mirror, scenario_runner)
+
+
+@app.get("/api/sim/control")
+def sim_control_get():
+    """Current playback pacing of the simulator feed.
+
+    `available` is false when no feed has ever written the file -- a live
+    Kafka feed from somewhere else has no speed to report, and the dashboard
+    shows the badge without a menu rather than pretending it can steer it.
+    """
+    try:
+        with open(SIM_CONTROL_FILE) as f:
+            ctl = json.load(f)
+    except (OSError, ValueError):
+        return jsonify({"available": False, "speeds": SIM_SPEEDS})
+    return jsonify({
+        "available": True,
+        "speed": ctl.get("speed"),
+        "paused": bool(ctl.get("paused")),
+        "updated": ctl.get("updated"),
+        "speeds": SIM_SPEEDS,
+    })
+
+
+@app.post("/api/sim/control")
+def sim_control_set():
+    """Set playback speed and/or pause. Both fields are optional."""
+    body = request.get_json(silent=True) or {}
+    try:
+        with open(SIM_CONTROL_FILE) as f:
+            ctl = json.load(f)
+    except (OSError, ValueError):
+        ctl = {"speed": None, "paused": False}
+
+    if "speed" in body:
+        try:
+            speed = float(body["speed"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "speed must be a number"}), 400
+        # Upper bound is the menu's top rate: an arbitrary multiplier from a
+        # POST can outrun the browser's ability to render the stream.
+        if not 0 < speed <= max(SIM_SPEEDS):
+            return jsonify({"error": f"speed must be in (0, {max(SIM_SPEEDS)}]"}), 400
+        ctl["speed"] = speed
+    if "paused" in body:
+        ctl["paused"] = bool(body["paused"])
+    ctl["updated"] = time.time()
+    ctl["source"] = "api"
+
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(SIM_CONTROL_FILE)), exist_ok=True)
+        tmp = SIM_CONTROL_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(ctl, f)
+        os.replace(tmp, SIM_CONTROL_FILE)   # atomic: the feed polls this file
+    except OSError as e:
+        return jsonify({"error": f"cannot write control file: {e}"}), 500
+    return jsonify({"available": True, "speed": ctl.get("speed"),
+                    "paused": bool(ctl.get("paused")), "speeds": SIM_SPEEDS})
 
 
 @app.get("/api/chat/status")

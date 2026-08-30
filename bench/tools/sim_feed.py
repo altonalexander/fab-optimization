@@ -34,7 +34,10 @@ then feed it, all tools, at ten times realtime:
       --days 3 --speed 10
 
 --speed is sim-seconds per wall-second. 1 is realtime, 10 is ten times
-realtime (a simulated day takes ~2.4 hours of wall clock), 0 is unpaced.
+realtime (a simulated day takes ~2.4 hours of wall clock), 0 is unpaced. The
+dashboard's playback menu changes this live: it POSTs to /api/sim/control,
+which writes $SIM_CONTROL_FILE (default bench/.sim_control.json), and the
+pacing loop here polls that file. Delete the file to fall back to --speed.
 At --speed 10 the whole fab emits ~6 events/second, which the broker and the
 dashboard absorb without effort.
 
@@ -76,6 +79,33 @@ TOOL_STATE_TOPIC = 'fab.tool.state'
 # keeping. Keyed by everything that changes the trajectory; a cache hit makes a
 # dashboard restart instant instead of re-simulating.
 CACHE_DIR = os.path.join(REPO, 'bench', 'snapshots')
+
+# Playback control, written by the API when someone uses the dashboard's speed
+# menu and polled here. A file rather than a socket because the feed is a host
+# process started by hand: it must survive the API restarting, and there is
+# nothing to reconnect to when it is not running. This is playback pacing
+# only -- it changes when events are emitted, never what is simulated, so a
+# run's trajectory is identical at 1x and 400x.
+CONTROL_FILE = os.getenv(
+    'SIM_CONTROL_FILE', os.path.join(REPO, 'bench', '.sim_control.json'))
+CONTROL_POLL_S = 0.25     # wall seconds between re-reads; the file is tiny
+
+
+def write_control(speed, paused=False):
+    """Publish the feed's current pacing so the dashboard can show and change it.
+
+    Written on start-up so a fresh feed reports its --speed rather than
+    whatever the last session left behind.
+    """
+    try:
+        os.makedirs(os.path.dirname(CONTROL_FILE), exist_ok=True)
+        tmp = CONTROL_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump({'speed': float(speed), 'paused': bool(paused),
+                       'updated': time.time(), 'source': 'sim_feed'}, f)
+        os.replace(tmp, CONTROL_FILE)   # atomic: no half-read by the poller
+    except OSError:
+        pass                            # pacing control is a convenience
 
 
 def envelope(**kv):
@@ -254,6 +284,14 @@ class FeedPlugin(IPlugin):
                  burndown=True, cohort_mode='product-day'):
         self.sink = sink
         self.speed = speed
+        # Playback control, refreshed from CONTROL_FILE at most every
+        # CONTROL_POLL_S. base_speed is what --speed asked for; the file
+        # overrides it while it exists, so deleting the file restores the
+        # command line rather than freezing at the last dashboard setting.
+        self.base_speed = speed
+        self.paused = False
+        self._control_checked = 0.0
+        self._control_mtime = None
         self.tool_filter = tool_filter
         # A 730-day run is ~39M events and 4.3 GB. Recording a window instead
         # turns that into megabytes without changing the simulation: the sim
@@ -288,8 +326,49 @@ class FeedPlugin(IPlugin):
         self.sink.write(topic, payload, key)
         self.emitted += 1
 
+    def _read_control(self):
+        """Pick up speed/pause changes made from the dashboard.
+
+        Poll-throttled and mtime-guarded: at 400x this runs thousands of times
+        a second, and a stat() per quarter-second is the whole cost.
+        """
+        now = time.time()
+        if now - self._control_checked < CONTROL_POLL_S:
+            return
+        self._control_checked = now
+        try:
+            mtime = os.path.getmtime(CONTROL_FILE)
+        except OSError:
+            # No file (or it was removed): fall back to the command line.
+            if self._control_mtime is not None:
+                self._control_mtime = None
+                self.speed, self.paused = self.base_speed, False
+            return
+        if mtime == self._control_mtime:
+            return
+        self._control_mtime = mtime
+        try:
+            with open(CONTROL_FILE) as f:
+                ctl = json.load(f)
+        except (OSError, ValueError):
+            return                      # half-written file; try again next poll
+        if isinstance(ctl.get('speed'), (int, float)):
+            self.speed = float(ctl['speed'])
+        self.paused = bool(ctl.get('paused'))
+
     def _pace(self, sim_t):
+        self._read_control()
+        # Pause is not speed 0: speed 0 means unpaced (as fast as possible),
+        # so a paused feed has to block here instead of falling through.
+        while self.paused:
+            time.sleep(CONTROL_POLL_S)
+            self._control_checked = 0.0
+            self._read_control()
+            # Resuming should not replay the wall time spent paused as sim
+            # backlog; the next delta is measured from wherever we resume.
+            self.last_sim_t = sim_t
         if self.speed <= 0:
+            self.last_sim_t = sim_t
             return
         if self.last_sim_t is not None:
             delta = (sim_t - self.last_sim_t) / self.speed
@@ -614,6 +693,10 @@ def main():
 
     feed = FeedPlugin(out, speed, a.tool_prefix, from_day, a.to_day,
                       burndown=not a.no_burndown, cohort_mode=a.cohort_mode)
+    # base_speed is the post-warm-up rate the dashboard should show and revert
+    # to, not the 0 the warm-up runs at.
+    feed.base_speed = a.speed
+    write_control(a.speed)
     instance = FileInstance(files, run_to, True, [feed], None, a.batch_strat)
     rule = dispatcher_map[a.dispatcher]
 
@@ -635,6 +718,7 @@ def main():
                 save_snapshot(cpath, snap)
                 feed.from_s = None            # stop suppressing
                 feed.speed = a.speed          # start pacing
+                feed._control_checked = 0.0   # honour any dashboard change
                 feed.last_sim_t = instance.current_time
                 n = feed.emit_snapshot(snap)
                 print(f'  warm-up complete at day {snap["day"]}: '
