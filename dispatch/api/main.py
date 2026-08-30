@@ -804,6 +804,22 @@ PART_TABLE = os.getenv(
 
 _routes_cache = {"mtime": None, "data": None}
 
+# Lane grouping for the route map, mirroring viz/build_route_diagram.py: a
+# wafer moves through these modules in a loop, so ordering lanes this way makes
+# the litho/etch cycle read as one band rather than as scattered rows. Areas
+# absent from a given route are dropped client-side, not here.
+ROUTE_ZONES = [
+    ("Thermal / Deposition", ["Diffusion", "Dielectric", "TF", "TF_Met"]),
+    ("Patterning", ["Litho", "Litho_Met"]),
+    ("Etch", ["Dry_Etch", "Wet_Etch"]),
+    ("Doping & Planarization", ["Implant", "Planar"]),
+    ("Metrology & Queue", ["Def_Met", "Delay_32", "Delay"]),
+]
+# Metrology is an area-name convention in SMT2020 rather than a column: the
+# *_Met bays are the measurement steps, and every rework point in LVHM sits on
+# one of them.
+MEASURE_SUFFIX = "_Met"
+
 
 def _load_part_table():
     """PART -> route key ("part_3" -> "3"), from the dataset's part.txt."""
@@ -859,6 +875,10 @@ def _route_summary(product, key, r):
         "areas": areas,
         "batch_steps": r.get("batch_steps", 0),
         "sampled": r.get("sampled", 0),
+        # Measurement steps, and how many of those are sampled -- a sampled
+        # step measures only a fraction of lots, so the two differ.
+        "measure_steps": r.get("measure_steps", sum(
+            n for a, n in areas.items() if a.endswith(MEASURE_SUFFIX))),
         "rework_steps": len(r.get("rework", [])),
         # The bay a lot of this product spends the most steps in. It is the one
         # thing that distinguishes the ten LVHM routes at a glance.
@@ -898,7 +918,25 @@ def routes_index():
         row["cohorts_tracked"] = len(cohorts.get(row["product"], ()))
 
     return jsonify({"dataset": doc.get("dataset"), "areas": doc.get("areas", []),
-                    "now_t": sim_t, "warm_t": warm_t, "products": rows})
+                    "zones": _zones(doc), "now_t": sim_t, "warm_t": warm_t,
+                    "products": rows})
+
+
+def _zones(doc):
+    """Lane groups, filtered to the areas this dataset actually has."""
+    known = set(doc.get("areas", []))
+    out = []
+    for name, areas in ROUTE_ZONES:
+        present = [a for a in areas if a in known]
+        if present:
+            out.append({"name": name, "areas": present})
+    # An area the grouping does not know about would silently vanish from every
+    # lane map, so it is surfaced rather than dropped.
+    placed = {a for z in out for a in z["areas"]}
+    extra = sorted(known - placed)
+    if extra:
+        out.append({"name": "Other", "areas": extra})
+    return out
 
 
 @app.get("/api/routes/<path:product>")
@@ -932,6 +970,8 @@ def route_detail(product):
     detail = _route_summary(product, key, r)
     detail.update({
         "dataset": doc.get("dataset"),
+        "areas_order": doc.get("areas", []),
+        "zones": _zones(doc),
         "visits": r.get("visits", []),
         "transitions": r.get("transitions", []),
         "rework": r.get("rework", []),

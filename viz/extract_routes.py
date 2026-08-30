@@ -46,14 +46,28 @@ for fn in sorted(os.listdir(ROOT)):
     seq = [r['area'] for r in rows]
 
     # collapse consecutive same-area steps into one "visit" to that bay
+    #
+    # `sampled` and `pct` ride along per visit because the lane map marks which
+    # blocks are measured, not just how many measurement steps a route has. A
+    # sampled step has StepPercent < 100: only that fraction of lots is
+    # actually measured there, so the nominal route overstates the work. In
+    # LVHM every sampled step is a metrology step -- sampling *is* how
+    # metrology is rationed -- and `pct` keeps the lowest rate in the visit,
+    # which is the one worth reading.
     visits = []
     for r in rows:
         if visits and visits[-1]['area'] == r['area']:
-            visits[-1]['steps'] += 1
-            visits[-1]['last'] = r['step']
+            v = visits[-1]
+            v['steps'] += 1
+            v['last'] = r['step']
         else:
             visits.append({'area': r['area'], 'steps': 1,
-                           'first': r['step'], 'last': r['step']})
+                           'first': r['step'], 'last': r['step'],
+                           'sampled': 0, 'pct': None})
+            v = visits[-1]
+        if r['sample'] < 100:
+            v['sampled'] += 1
+            v['pct'] = r['sample'] if v['pct'] is None else min(v['pct'], r['sample'])
 
     trans = Counter()
     va = [v['area'] for v in visits]
@@ -70,8 +84,13 @@ for fn in sorted(os.listdir(ROOT)):
         'seq': seq,
         'transitions': [{'from': a, 'to': b, 'n': n} for (a, b), n in trans.most_common()],
         'sampled': sum(1 for r in rows if r['sample'] < 100),
+        # Metrology is an area convention in SMT2020: the *_Met bays are the
+        # measurement steps, and they are where rework gets decided.
+        'measure_steps': sum(1 for r in rows if r['area'].endswith('_Met')),
         'rework': [{'at': r['step'], 'back_to': r['rwkstep'], 'pct': r['rework'],
-                    'area': r['area']} for r in rows if r['rework'] > 0],
+                    'area': r['area'], 'desc': r['desc'],
+                    'sampled': r['sample'] < 100}
+                   for r in rows if r['rework'] > 0],
         'batch_steps': sum(1 for r in rows if r['batch']),
     }
 

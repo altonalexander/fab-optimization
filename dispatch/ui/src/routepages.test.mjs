@@ -42,7 +42,7 @@ const summary = ([product, key]) => {
     product, key, route: r.id, n_steps: r.n_steps, n_visits: r.n_visits,
     n_areas: Object.keys(r.areas).length, areas: r.areas,
     batch_steps: r.batch_steps, sampled: r.sampled,
-    rework_steps: r.rework.length,
+    measure_steps: r.measure_steps, rework_steps: r.rework.length,
     dominant_area: Object.keys(r.areas).reduce((a, b) =>
       (r.areas[a] >= r.areas[b] ? a : b)),
     lots_tracked: 0, cohorts_tracked: 0,
@@ -50,7 +50,15 @@ const summary = ([product, key]) => {
 }
 
 // --- index ------------------------------------------------------------------
-const index = { dataset: doc.dataset, areas: doc.areas,
+const ZONES = [
+  { name: 'Thermal / Deposition', areas: ['Diffusion', 'Dielectric', 'TF', 'TF_Met'] },
+  { name: 'Patterning', areas: ['Litho', 'Litho_Met'] },
+  { name: 'Etch', areas: ['Dry_Etch', 'Wet_Etch'] },
+  { name: 'Doping & Planarization', areas: ['Implant', 'Planar'] },
+  { name: 'Metrology & Queue', areas: ['Def_Met', 'Delay_32', 'Delay'] },
+]
+
+const index = { dataset: doc.dataset, areas: doc.areas, zones: ZONES,
                 products: products.map(summary) }
 index.products[2].lots_tracked = 9
 index.products[2].cohorts_tracked = 2
@@ -91,7 +99,7 @@ const detail = Object.assign(summary(['part_3', '3']), {
 
 const detHtml = renderToStaticMarkup(
   React.createElement(RouteProductView, {
-    data: detail, order: doc.areas, backHref: '#/routes',
+    data: detail, order: doc.areas, zones: ZONES, backHref: '#/routes',
     cohortHref: c => `#/lots?cohort=${encodeURIComponent(c)}`,
   }))
 
@@ -102,12 +110,52 @@ assert.ok(detHtml.includes('href="#/routes"'), 'links back to the index')
 assert.ok(detHtml.includes('href="#/lots?cohort=part_3-d0"'), 'cohort link')
 assert.ok(detHtml.includes('href="#/lots?cohort=part_3-d1"'), 'cohort link')
 assert.ok(detHtml.includes('Showing 2 of 3'), 'says the sample is a sample')
-// One block per visit, in route order.
-assert.equal((detHtml.match(/class="visit-strip"/g) || []).length, 1)
-const strip = detHtml.slice(detHtml.indexOf('class="visit-strip"'))
-const blocks = strip.slice(0, strip.indexOf('</div>'))
-assert.equal((blocks.match(/flex-grow:/g) || []).length, r3.visits.length,
-             'a block per visit')
+// --- the lane map -----------------------------------------------------------
+// One lane per area this route visits, in zone order, and one block per visit.
+const lanes = ZONES.flatMap(z => z.areas).filter(a => r3.area_visits[a])
+assert.equal(lanes.length, Object.keys(r3.areas).length, 'every bay gets a lane')
+const map = detHtml.slice(detHtml.indexOf('class="lane-map"'))
+const svg = map.slice(0, map.indexOf('</svg>'))
+// Lane labels appear in zone order, not in the route's own or alphabetical
+// order -- that ordering is what makes the litho/etch loop read as one band.
+const labelAt = a => svg.indexOf(`>${a}</text>`)
+for (const a of lanes) assert.ok(labelAt(a) > 0, `lane label for ${a}`)
+const positions = lanes.map(labelAt)
+assert.deepEqual(positions, [...positions].sort((x, y) => x - y),
+                 'lanes are laid out in zone order')
+// A block per visit, plus one lane background per lane.
+assert.equal((svg.match(/<rect /g) || []).length,
+             r3.visits.length + lanes.length, 'a block per visit')
+
+// Measurement lanes are labelled as such, and only those.
+const measured = lanes.filter(a => a.endsWith('_Met'))
+assert.equal((svg.match(/>measure<\/text>/g) || []).length, measured.length,
+             'every metrology lane is labelled, and no other')
+assert.ok(measured.length >= 3, 'LVHM measures in at least three bays')
+
+// Rework: an accent block on the triggering visit and a marker under the axis.
+assert.equal((svg.match(/<polygon /g) || []).length, r3.rework.length,
+             'a marker per rework point')
+const REWORK_FILL = '#ea580c'
+const accentBlocks = (svg.match(new RegExp(`fill="${REWORK_FILL}"`, 'g')) || [])
+// Each rework point paints its visit block and its axis marker; two rework
+// steps can share one visit, so this is an upper bound rather than exact.
+assert.ok(accentBlocks.length >= r3.rework.length,
+          'rework points are drawn in the accent')
+assert.ok(r3.rework.every(w => w.area === 'Litho_Met'),
+          'the copy claims every rework point is a litho metrology step')
+assert.ok(detHtml.includes('Every rework point on this route is a'),
+          'and the page says so')
+
+// The tooltip on a sampled visit states the rate, since a sampled step
+// measures only a fraction of lots and the nominal route overstates it.
+const sampled = r3.visits.find(v => v.sampled && v.pct != null)
+assert.ok(sampled, 'route 3 has sampled visits')
+assert.ok(svg.includes(`run on ${sampled.pct}% of lots`), 'sampling rate shown')
+
+// The legend counts what the map colours.
+assert.ok(detHtml.includes(`${detail.measure_steps} of ${detail.n_steps} steps measure`),
+          'legend states the measurement share')
 // Rework is what makes remaining-steps non-monotonic on the lots view, so the
 // page has to show the loops rather than only count them.
 assert.equal((detHtml.match(/<tr><td class="num">\d+<\/td>/g) || []).length,
@@ -117,10 +165,11 @@ assert.equal((detHtml.match(/<tr><td class="num">\d+<\/td>/g) || []).length,
 const noFeed = renderToStaticMarkup(
   React.createElement(RouteProductView, {
     data: { ...detail, cohorts: [], total_cohorts: 0 },
-    order: doc.areas, backHref: '#/routes', cohortHref: c => `#/lots?cohort=${c}`,
+    order: doc.areas, zones: ZONES, backHref: '#/routes',
+    cohortHref: c => `#/lots?cohort=${c}`,
   }))
 assert.ok(noFeed.includes('No lots of part_3 are being tracked'))
-assert.ok(noFeed.includes('visit-strip'), 'the route still renders without a feed')
+assert.ok(noFeed.includes('lane-map'), 'the route still renders without a feed')
 
 // Colours are assigned from the global area order, so the same bay is the same
 // colour on every product page.
@@ -138,7 +187,7 @@ const other = renderToStaticMarkup(
       area_visits: doc.routes['7'].area_visits, transitions: [], cohorts: [],
       total_cohorts: 0,
     }),
-    order: doc.areas, backHref: '#/routes', cohortHref: c => c,
+    order: doc.areas, zones: ZONES, backHref: '#/routes', cohortHref: c => c,
   }))
 for (const a of ['Wet_Etch', 'Litho']) {
   const c1 = detHtml.slice(hueIn(detHtml, a)).match(/background:(#[0-9a-f]{6})/)[1]
@@ -146,5 +195,17 @@ for (const a of ['Wet_Etch', 'Litho']) {
   assert.equal(c1, c2, `${a} keeps its colour across products`)
 }
 
-console.log(`ok — routes pages render (${products.length} products, ` +
-            `${r3.visits.length} visits on part_3)`)
+// A route whose grouping is missing must still draw every lane, or a dataset
+// with a new bay would silently lose it.
+const noZones = renderToStaticMarkup(
+  React.createElement(RouteProductView, {
+    data: { ...detail, cohorts: [], total_cohorts: 0 }, order: doc.areas,
+    zones: [], backHref: '#/routes', cohortHref: c => c,
+  }))
+for (const a of lanes) {
+  assert.ok(noZones.includes(`>${a}</text>`), `${a} survives a missing grouping`)
+}
+
+console.log(`ok — routes pages render (${products.length} products; part_3: ` +
+            `${r3.visits.length} visits, ${lanes.length} lanes, ` +
+            `${measured.length} measurement, ${r3.rework.length} rework)`)

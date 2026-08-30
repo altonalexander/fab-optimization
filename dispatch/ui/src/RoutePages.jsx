@@ -154,7 +154,6 @@ function Legend({ areas, color }) {
 
 export function RouteProduct({ product, backHref, cohortHref }) {
   const [data, setData] = useState(null)
-  const [order, setOrder] = useState([])
   const [err, setErr] = useState(null)
 
   useEffect(() => {
@@ -165,14 +164,6 @@ export function RouteProduct({ product, backHref, cohortHref }) {
       .catch(e => setErr(String(e || `could not load ${product}`)))
   }, [product])
 
-  // The global area order lives on the index, and it is what keeps colours
-  // stable between product pages. Fetched separately so a deep link straight
-  // to #/routes/part_3 still gets it.
-  useEffect(() => {
-    fetch('/api/routes').then(r => r.json()).then(d => setOrder(d.areas || []))
-      .catch(() => {})
-  }, [])
-
   if (err) {
     return (
       <div>
@@ -182,14 +173,18 @@ export function RouteProduct({ product, backHref, cohortHref }) {
     )
   }
   if (!data) return <p className="muted">loading {product}…</p>
-  return <RouteProductView data={data} order={order} backHref={backHref}
+  // `areas_order` is the global order the index sorts by, so a bay keeps its
+  // colour between product pages; `zones` is the lane grouping for the map.
+  return <RouteProductView data={data} order={data.areas_order}
+                           zones={data.zones} backHref={backHref}
                            cohortHref={cohortHref} />
 }
 
 // `order` is the global area order from the index; empty is fine, and falls
 // back to this route's own areas so a page still renders if the index request
 // is the one that failed.
-export function RouteProductView({ data, order = [], backHref, cohortHref }) {
+export function RouteProductView({ data, order = [], zones = [], backHref,
+                                   cohortHref }) {
   const color = useMemo(() => areaColors(order), [order])
   const areas = order.length ? order : Object.keys(data.areas)
   const maxSteps = Math.max(...Object.values(data.areas), 1)
@@ -210,8 +205,8 @@ export function RouteProductView({ data, order = [], backHref, cohortHref }) {
                sub="furnace, per-batch" />
         <RStat label="rework loops" value={data.rework.length}
                sub="steps that can send a lot back" />
-        <RStat label="sampled steps" value={data.sampled}
-               sub="not every lot runs these" />
+        <RStat label="measurement" value={data.measure_steps}
+               sub={`${data.sampled} sampled`} />
       </div>
 
       <section>
@@ -253,11 +248,26 @@ export function RouteProductView({ data, order = [], backHref, cohortHref }) {
       <section>
         <h4>The route, end to end</h4>
         <p className="muted" style={{ marginTop: -4 }}>
-          Every visit in order, left to right, each block as wide as the steps
-          it holds. The repeating colour pattern is the re-entrancy: the same
-          few bays, over and over, for {data.n_visits} visits.
+          One lane per process area, one column per step: a block marks where
+          that step runs. The lane says which bay, so colour is free to say what
+          the step <i>does</i> — plain process, measurement, or a measurement
+          that can send the lot backwards. Reading across, the same few lanes
+          fire over and over for {data.n_visits} visits: that is the
+          re-entrancy, and it is why a {data.n_steps}-step route needs only{' '}
+          {data.n_areas} bays.
         </p>
-        <VisitStrip visits={data.visits} color={color} total={data.n_steps} />
+        <LaneMap data={data} zones={zones} />
+        <LaneLegend data={data} />
+        {data.rework.length > 0 && (
+          <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+            Every rework point on this route is a{' '}
+            <b>{data.rework[0].area}</b> step — the lot is measured after
+            lithography, and a bad exposure goes back{' '}
+            {data.rework[0].at - data.rework[0].back_to + 1} steps to be
+            stripped and re-exposed. Nothing else on the route can send a lot
+            backwards.
+          </p>
+        )}
       </section>
 
       {data.rework.length > 0 && (
@@ -353,20 +363,162 @@ function RStat({ label, value, sub }) {
   )
 }
 
-// The whole route as one strip. Rendered as flex spans rather than SVG rects:
-// 400+ blocks need a tooltip and a sane wrap, and the browser's own layout
-// does both for free.
-function VisitStrip({ visits, color, total }) {
+// ---------------------------------------------------------------------------
+// Lane map — the route read left to right, one lane per process area.
+//
+// Identity comes from the lane, so colour is spent on what a block *is* rather
+// than on naming its area again: process steps are neutral, measurement steps
+// are marked, and rework points are the one accent on the page. That is the
+// thing worth seeing here -- in LVHM every rework point sits on a litho
+// metrology step, so the route's loops start exactly where it is measured.
+// ---------------------------------------------------------------------------
+
+const LANE_H = 22
+const PAD = { l: 116, t: 10, r: 14, b: 34 }
+const PROCESS = '#93a3b8'      // ordinary process step
+const MEASURE = '#1d4ed8'      // measurement (a *_Met bay)
+const SAMPLED = '#93b4f5'      // measurement run on only a fraction of lots
+const REWORK = '#ea580c'       // the step that can send a lot backwards
+
+const isMeasure = a => a.endsWith('_Met')
+
+// Lanes in zone order, dropping the bays this route never visits. Falls back to
+// the route's own areas if the grouping did not arrive.
+function laneOrder(zones, areaVisits) {
+  const flat = (zones || []).flatMap(z => z.areas)
+  const present = flat.filter(a => areaVisits[a])
+  const rest = Object.keys(areaVisits).filter(a => !flat.includes(a))
+  return [...present, ...rest]
+}
+
+function visitTip(v, n, rw) {
+  const span = v.last !== v.first ? `${v.first}–${v.last}` : `${v.first}`
+  let t = `${v.area} — step ${span} of ${n}`
+  if (v.steps > 1) t += ` (${v.steps} consecutive)`
+  if (v.sampled) {
+    t += `\nsampled: ${v.sampled} of ${v.steps} step` +
+         `${v.steps === 1 ? '' : 's'} run on ${v.pct}% of lots`
+  }
+  if (rw) {
+    t += `\nrework: ${rw.pct}% of lots go back to step ${rw.back_to}` +
+         ` — ${rw.at - rw.back_to + 1} steps re-run`
+  }
+  return t
+}
+
+function LaneMap({ data, zones }) {
+  const lanes = laneOrder(zones, data.area_visits || {})
+  const n = data.n_steps || 1
+
+  // Width is in step units, so one step is one unit wherever it lands. The SVG
+  // scales to the panel and scrolls under a floor of ~1.6px per step, below
+  // which a single-step visit stops being a visible mark at all.
+  const cw = 1.9
+  const iw = n * cw
+  const W = PAD.l + iw + PAD.r
+  const H = PAD.t + lanes.length * LANE_H + PAD.b
+  const x = step => PAD.l + (step - 1) * cw
+  const yOf = a => PAD.t + lanes.indexOf(a) * LANE_H
+
+  // Rework is keyed by the step that triggers it so the visit containing that
+  // step can be drawn in the accent rather than in its lane's own colour.
+  const reworkAt = new Map((data.rework || []).map(w => [w.at, w]))
+  const tickEvery = n > 400 ? 100 : n > 150 ? 50 : 25
+
   return (
-    <div className="visit-strip" role="img"
-         aria-label={`${visits.length} visits across the route, in order`}>
-      {visits.map((v, i) => (
-        <span key={i}
-              style={{ flexGrow: v.steps, background: color(v.area) }}
-              title={`visit ${i + 1}: ${v.area} — ${v.steps} step${
-                v.steps === 1 ? '' : 's'} (${v.first}${
-                v.last !== v.first ? `–${v.last}` : ''} of ${total})`} />
-      ))}
+    <div className="lane-scroll">
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}
+           className="lane-map" role="img"
+           aria-label={`Route map for ${data.product}: ${n} steps across ${
+             lanes.length} process areas`}>
+        {lanes.map((a, i) => {
+          const y = yOf(a)
+          const meas = isMeasure(a)
+          return (
+            <g key={a}>
+              <rect x={PAD.l} y={y} width={iw} height={LANE_H - 4}
+                    fill={i % 2 ? '#f1f5f9' : '#f8fafc'} />
+              <text x={PAD.l - 10} y={y + LANE_H / 2 - 1} textAnchor="end"
+                    dominantBaseline="middle" fontSize="10.5"
+                    fill={meas ? MEASURE : '#4b5563'}
+                    fontWeight={meas ? 600 : 400}>
+                {a}
+              </text>
+              {/* Measurement lanes are called out on the axis itself: which
+                  bays measure is the question this map is here to answer. */}
+              {meas && (
+                <text x={PAD.l - 10} y={y + LANE_H / 2 + 8.5} textAnchor="end"
+                      dominantBaseline="middle" fontSize="8" fill="#9ca3af">
+                  measure
+                </text>
+              )}
+            </g>
+          )
+        })}
+
+        {(data.visits || []).map((v, i) => {
+          const y = yOf(v.area)
+          if (y === undefined || lanes.indexOf(v.area) < 0) return null
+          const rw = reworkAt.get(v.first) || reworkAt.get(v.last)
+          // A one-step visit would otherwise be thinner than a hairline.
+          const w = Math.max(cw * 0.9, v.steps * cw - 0.4)
+          const meas = isMeasure(v.area)
+          const fill = rw ? REWORK : !meas ? PROCESS
+            : v.sampled === v.steps ? SAMPLED : MEASURE
+          return (
+            <rect key={i} x={x(v.first)} y={y + 2.5} width={w}
+                  height={LANE_H - 9} rx="1.5" fill={fill}>
+              {/* One string, not a fragment: an SVG <title> may hold exactly
+                  one text node, and a browser renders the extra ones as
+                  literal markup. */}
+              <title>{visitTip(v, n, rw)}</title>
+            </rect>
+          )
+        })}
+
+        {/* Rework markers below the axis. The loop itself is only 2-3 steps
+            long, so at full-route scale an arrow back would be invisible; a
+            tick under the step is what actually reads. */}
+        {(data.rework || []).map(w => (
+          <polygon key={w.at} fill={REWORK}
+                   points={`${x(w.at)},${PAD.t + lanes.length * LANE_H - 1} ${
+                     x(w.at) - 3.5},${PAD.t + lanes.length * LANE_H + 5} ${
+                     x(w.at) + 3.5},${PAD.t + lanes.length * LANE_H + 5}`}>
+            <title>{`rework at step ${w.at} (${w.area}) — ${w.pct}% of lots ` +
+                    `go back to step ${w.back_to}`}</title>
+          </polygon>
+        ))}
+
+        {Array.from({ length: Math.floor(n / tickEvery) + 1 }, (_, i) => {
+          const t = i * tickEvery
+          return (
+            <text key={t} x={x(t || 1)} y={H - PAD.b + 26} textAnchor="middle"
+                  fontSize="9.5" fill="#9ca3af">
+              {t || 1}
+            </text>
+          )
+        })}
+        <text x={PAD.l} y={H - 2} fontSize="9.5" fill="#9ca3af">
+          process step →
+        </text>
+      </svg>
+    </div>
+  )
+}
+
+function LaneLegend({ data }) {
+  const sampledPct = data.measure_steps
+    ? Math.round((100 * data.sampled) / data.measure_steps) : 0
+  return (
+    <div className="route-legend lane-legend">
+      <span><i style={{ background: PROCESS }} />process step</span>
+      <span><i style={{ background: MEASURE }} />measurement, every lot</span>
+      <span><i style={{ background: SAMPLED }} />measurement, sampled</span>
+      <span><i style={{ background: REWORK }} />rework point</span>
+      <span className="muted">
+        {data.measure_steps} of {data.n_steps} steps measure
+        {sampledPct ? `, ${sampledPct}% of those on a sample of lots` : ''}
+      </span>
     </div>
   )
 }

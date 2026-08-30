@@ -416,3 +416,13 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   border-radius: 4px; overflow: hidden; background: #f1f5f9; }
 .visit-strip span { display: block; height: 100%; min-width: 1px; }
 .visit-strip span:hover { outline: 1px solid #111827; outline-offset: -1px; }
+
+/* The route lane map (RoutePages.jsx). The svg is authored at one unit per
+   process step and left at its natural width: squeezing a 583-step route into
+   a panel makes a single-step visit thinner than a hairline, so it scrolls
+   sideways instead. */
+.lane-scroll { overflow-x: auto; margin-top: 10px; padding-bottom: 2px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.lane-map { display: block; max-width: none; }
+.lane-map rect[fill]:hover { outline: 1px solid #111827; outline-offset: -1px; }
+.lane-legend { margin-top: 8px; }
