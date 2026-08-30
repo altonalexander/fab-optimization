@@ -35,3 +35,6 @@ dispatch/build-ortools/
 
 # claude code worktrees and session state
 .claude/
+
+# warm-up snapshots: regenerable, and large
+bench/snapshots/
