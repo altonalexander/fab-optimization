@@ -14,6 +14,14 @@ export const M = { t: 10, r: 56, b: 16, l: 40 }
 // same number of tools whatever the fab size.
 export const WINDOW = 100
 
+// Share of the plot held open to the right of the newest sample, matching the
+// streaming charts (stream_geom.js FUTURE) and the burndown's RIGHT_PAD_S.
+// The last sample is *now*, and pinned against the frame there is no way to
+// tell "caught up" from "cut off". The strip is also where a forecast would be
+// drawn: expected recoveries live to the right of the rule, measurements to
+// the left, and the rule is what keeps the two from being read as one series.
+export const FUTURE = 0.12
+
 /**
  * Build the scale and the two series.
  *
@@ -43,10 +51,14 @@ export function view(ts, online, total, now) {
   const span = Math.max(1, yMax - yMin)
   const y = v => M.t + ih -
     ((Math.max(yMin, Math.min(v, yMax)) - yMin) / span) * ih
-  // A single sample has no span to interpolate across; pin it to the right
-  // edge, where the newest point always lives.
-  const x = i => n < 2 ? M.l + iw : M.l + (i / (n - 1)) * iw
-  return { n, yMax, yMin, span, x, y, iw, ih }
+  // Measurements occupy everything left of the future strip; `nowX` is where
+  // the newest sample sits and the strip beyond it is deliberately empty.
+  const dataW = iw * (1 - FUTURE)
+  const nowX = M.l + dataW
+  // A single sample has no span to interpolate across; pin it to the rule,
+  // where the newest point always lives.
+  const x = i => n < 2 ? nowX : M.l + (i / (n - 1)) * dataW
+  return { n, yMax, yMin, span, x, y, iw, ih, nowX }
 }
 
 export function points(v, series) {

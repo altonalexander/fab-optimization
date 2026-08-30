@@ -16,6 +16,21 @@
 export const M = { t: 8, r: 10, b: 18, l: 44 }
 
 /**
+ * Share of the plot held open to the right of the newest sample.
+ *
+ * The newest sample is *now*, and butting it against the frame reads as though
+ * the series were cut off there rather than caught up: there is no visual
+ * difference between "this is the present" and "the rest is off screen". The
+ * reserved strip is known-empty future, the same idea as the burndown's
+ * RIGHT_PAD_S, and it is what makes the "now" rule mean something -- a rule on
+ * the frame edge is just a border.
+ *
+ * It is also where an arriving sample comes from: it enters at the right of
+ * this strip and settles onto the rule, so the motion reads as time passing.
+ */
+export const FUTURE = 0.12
+
+/**
  * Build a scale for `n` samples in a window of `cap` slots.
  *
  * @param {number} n    samples held
@@ -27,11 +42,15 @@ export const M = { t: 8, r: 10, b: 18, l: 44 }
  */
 export function view(n, cap, w, h, series, pad = 0.1) {
   const { iw, ih, y, yMax } = frame(w, h, series, pad)
-  const slot = iw / Math.max(1, cap - 1)
-  // Right-anchored: index n-1 lands on the right edge whatever n is, so the
-  // series grows leftwards out of the edge instead of stretching to fit.
-  const x = i => M.l + iw - (n - 1 - i) * slot
-  return { mode: 'index', n, cap, slot, iw, ih, x, y, yMax }
+  // The series occupies everything left of the future strip; `nowX` is where
+  // the newest sample sits, and the strip beyond it is deliberately empty.
+  const dataW = iw * (1 - FUTURE)
+  const nowX = M.l + dataW
+  const slot = dataW / Math.max(1, cap - 1)
+  // Right-anchored on now: index n-1 lands on the rule whatever n is, so the
+  // series grows leftwards out of it instead of stretching to fit.
+  const x = i => nowX - (n - 1 - i) * slot
+  return { mode: 'index', n, cap, slot, iw, ih, nowX, x, y, yMax }
 }
 
 /**
@@ -59,12 +78,17 @@ export function timeView(ts, span, w, h, series, pad = 0.1) {
   const n = ts.length
   const t1 = n ? ts[n - 1] : 0
   const s = span > 0 ? span : 1
-  const xAt = t => M.l + iw - ((t1 - t) / s) * iw
+  const dataW = iw * (1 - FUTURE)
+  const nowX = M.l + dataW
+  // The scale is set over the data region, so the future strip carries real
+  // fab time too -- it is the next span * FUTURE/(1-FUTURE) seconds, which
+  // have not happened yet. Same seconds-per-pixel either side of the rule.
+  const xAt = t => nowX - ((t1 - t) / s) * dataW
   return {
-    mode: 'time', n, ts, span: s, t0: t1 - s, t1, iw, ih, y, yMax, xAt,
+    mode: 'time', n, ts, span: s, t0: t1 - s, t1, iw, ih, nowX, y, yMax, xAt,
     x: i => xAt(ts[i]),
     // One sample's worth of x, for the empty-window and label-spacing cases.
-    slot: n > 1 ? Math.max(1e-6, xAt(ts[n - 1]) - xAt(ts[n - 2])) : iw,
+    slot: n > 1 ? Math.max(1e-6, xAt(ts[n - 1]) - xAt(ts[n - 2])) : dataW,
   }
 }
 
@@ -145,7 +169,7 @@ export function points(v, series) {
 export function indexAt(v, px) {
   if (!v.n) return null
   if (v.mode === 'index') {
-    const i = Math.round(v.n - 1 - (M.l + v.iw - px) / v.slot)
+    const i = Math.round(v.n - 1 - (v.nowX - px) / v.slot)
     return i < 0 || i > v.n - 1 ? null : i
   }
   // Time mode has no constant slot to divide by -- samples are spaced by fab

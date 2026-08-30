@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { W, H, M, WINDOW, view, points, areaPath } from './avail_geom.js'
+import { W, H, M, WINDOW, FUTURE, view, points, areaPath } from './avail_geom.js'
 
 const seq = (n, f) => Array.from({ length: n }, (_, i) => f(i))
 
@@ -43,12 +43,20 @@ test('values outside the window clamp onto the plot', () => {
   }
 })
 
-test('x spans the plot and a single sample pins to the right edge', () => {
+test('x spans the measured region and the newest sample pins to the now rule', () => {
   const v3 = view([0, 1, 2], [1, 1, 1], [1, 1, 1], 1)
   assert.equal(v3.x(0), M.l)
-  assert.equal(v3.x(2), W - M.r)
+  assert.equal(v3.x(2), v3.nowX)
   const v1 = view([0], [1], [1], 1)
-  assert.equal(v1.x(0), W - M.r, 'newest point lives at the right edge')
+  assert.equal(v1.x(0), v1.nowX, 'newest point lives on the rule')
+})
+
+test('the rule leaves known-empty space between the last sample and the frame', () => {
+  const v = view([0, 1, 2], [1, 1, 1], [1, 1, 1], 1)
+  const future = (M.l + v.iw) - v.nowX
+  assert.ok(future > 0, 'a rule on the frame edge is just a border')
+  assert.ok(Math.abs(future / v.iw - FUTURE) < 1e-9)
+  assert.ok(v.x(2) <= v.nowX + 1e-9, 'no measurement is drawn into the future')
 })
 
 test('a growing roster is tracked rather than read as an outage', () => {

@@ -1,18 +1,28 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  M, TICKS, view, timeView, spanFor, niceMax, niceStep, yTicks, points,
+  M, TICKS, FUTURE, view, timeView, spanFor, niceMax, niceStep, yTicks, points,
   indexAt, xTickIndices, fmtSimTime, fmtSpan, travel,
 } from './stream_geom.js'
 
 const seq = (n, f) => Array.from({ length: n }, (_, i) => f(i))
 const mk = (n, cap = 10, vals = seq(n, () => 1)) => view(n, cap, 300, 100, [vals])
 
-test('the newest sample is on the right edge whatever the window holds', () => {
+test('the newest sample sits on the now rule whatever the window holds', () => {
   for (const n of [1, 2, 5, 10]) {
     const v = mk(n)
-    assert.equal(Number(v.x(n - 1).toFixed(6)), Number((M.l + v.iw).toFixed(6)))
+    assert.equal(Number(v.x(n - 1).toFixed(6)), Number(v.nowX.toFixed(6)))
   }
+})
+
+test('the now rule leaves known-empty space to its right', () => {
+  const v = mk(5)
+  const future = M.l + v.iw - v.nowX
+  assert.ok(future > 0, 'a rule on the frame edge is just a border')
+  assert.ok(Math.abs(future / v.iw - FUTURE) < 1e-9)
+  // The newest sample must not be drawn into that strip: it is now, and the
+  // strip is what has not happened.
+  assert.ok(v.x(4) <= v.nowX + 1e-9)
 })
 
 test('the slot width does not depend on how many samples have arrived', () => {
@@ -103,9 +113,21 @@ test('a degenerate box still produces finite geometry', () => {
 
 const tv = (ts, span, vals = ts.map(() => 1)) => timeView(ts, span, 300, 100, [vals])
 
-test('the newest sample anchors the right edge in time mode too', () => {
+test('the newest sample anchors the now rule in time mode too', () => {
   const v = tv([100, 160, 220], 600)
-  assert.equal(Number(v.x(2).toFixed(6)), Number((M.l + v.iw).toFixed(6)))
+  assert.equal(Number(v.x(2).toFixed(6)), Number(v.nowX.toFixed(6)))
+})
+
+test('the future strip carries real fab time at the same scale', () => {
+  // Not just blank margin: a pixel right of the rule is worth the same number
+  // of seconds as a pixel left of it, so the strip is the next stretch of fab
+  // time rather than a decorative gutter.
+  const v = tv([0, 300, 600], 600)
+  const perPx = (v.x(2) - v.x(0)) / 600
+  const futureS = (M.l + v.iw - v.nowX) / perPx
+  assert.ok(futureS > 0)
+  assert.ok(Math.abs(v.xAt(v.t1 + futureS) - (M.l + v.iw)) < 1e-6,
+            'the frame edge is exactly that far into the future')
 })
 
 test('x distance is elapsed fab time, not sample count', () => {

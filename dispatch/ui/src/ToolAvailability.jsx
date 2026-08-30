@@ -75,6 +75,13 @@ export default function ToolAvailability() {
                     strokeWidth="1.5" strokeDasharray="5 4" />
           <polyline points={points(v, d.online)} fill="none" stroke={stroke}
                     strokeWidth="2" strokeLinejoin="round" />
+          {/* now: where measurement stops. Everything right of it is empty
+              because it has not happened -- the same rule the burndown and the
+              live charts draw, so "right of the dashed line" means the same
+              thing on every chart in the app. */}
+          <line x1={v.nowX} x2={v.nowX} y1={M.t} y2={v.y(v.yMin)}
+                stroke="#111827" strokeDasharray="3 3" />
+          <text x={v.nowX + 4} y={M.t + 9} fontSize="9" fill="#111827">now</text>
           <text x={W - M.r + 6} y={v.y(v.yMax) + 4} fontSize="11" fill="#6b7280">
             {v.yMax.toLocaleString()} total
           </text>

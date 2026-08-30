@@ -197,6 +197,15 @@ export default function StreamChart({
               )}
             </g>
 
+            {/* now: the newest sample's position, and the boundary of what is
+                known. Drawn outside the sliding group so it stays put while the
+                strip walks under it -- a "now" that slid left with the data
+                would be marking a moment in the past. Everything to its right
+                is the future, deliberately empty. */}
+            <line x1={v.nowX} x2={v.nowX} y1={M.t} y2={M.t + v.ih}
+                  stroke="#111827" strokeDasharray="3 3" />
+            <text x={v.nowX + 4} y={M.t + 10} fontSize="10" fill="#111827">now</text>
+
             {yLabel && (
               <text x={12} y={M.t + v.ih / 2} fontSize="11" fill="#6b7280"
                     textAnchor="middle"
