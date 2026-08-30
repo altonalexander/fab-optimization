@@ -26,7 +26,6 @@ bench/scratch/
 *:Zone.Identifier
 .DS_Store
 
-# original unsorted drop + original clone, kept on disk as a safety net
+# original unsorted drop, kept on disk as a safety net
 unorganized/
-PySCFabSim-revised/
 dispatch/build-ortools/

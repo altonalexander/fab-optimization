@@ -9,8 +9,11 @@ sequence for one tool.
 Lives in bench/ on purpose: baselines/pyscfabsim is vendored read-only, so this
 constructs FileInstance itself rather than editing greedy.py's plugin list.
 
-  python3 bench/tools/tool_probe.py --days 400 --top 15
-  python3 bench/tools/tool_probe.py --days 400 --tool 231 --tail 40
+Needs the baseline's interpreter (pandas, matplotlib); .venv is gitignored, so
+see baselines/pyscfabsim/UPSTREAM.md if it is not built yet.
+
+  baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 400 --top 15
+  baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 400 --tool 970
 
 Time budget per tool, over the measured window:
 
