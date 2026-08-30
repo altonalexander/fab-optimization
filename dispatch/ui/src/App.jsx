@@ -396,34 +396,19 @@ function ZoneDiagram({ zones }) {
   )
 }
 
-function ZoneMap({ zones, roles }) {
+// The zone cards that used to live here said the same thing as the diagram
+// above, one zone at a time. What the diagram cannot show is the CI contract,
+// so that is all this renders now.
+function ZoneInvariants({ zones }) {
   if (!zones) return <div className="muted">loading topology…</div>
   return (
-    <div className="zones">
-      {zones.zones.map(z => (
-        <div key={z.id} className="zone" style={{ borderColor: ZONE_COLORS[z.name] }}>
-          <div className="zone-head">
-            <span className="zone-id" style={{ background: ZONE_COLORS[z.name] }}>
-              ZONE {z.id}
-            </span>
-            <strong>{z.name}</strong>
-            {roles && roles[z.name] && (
-              <span className="member">{roles[z.name]}</span>
-            )}
-            <span className={z.egress ? 'tag tag-warn' : 'tag tag-ok'}>
-              {z.egress ? 'egress' : 'no egress'}
-            </span>
-          </div>
-          <div className="zone-sub">{z.subnet} · {z.protocols.join(', ')}</div>
-          <div className="members">
-            {z.members.map(m => <span key={m} className="member">{m}</span>)}
-          </div>
-        </div>
-      ))}
-      <div className="invariants">
-        <strong>Enforced invariants</strong>
-        <ul>{zones.invariants.map(i => <li key={i.id}><code>{i.id}</code> {i.rule}</li>)}</ul>
-      </div>
+    <div className="invariants">
+      <strong>Enforced invariants</strong>
+      <ul>
+        {zones.invariants.map(i => (
+          <li key={i.id}><code>{i.id}</code> {i.rule}</li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -873,7 +858,6 @@ export default function App() {
   const { segments, query, navigate, setQuery } = useRoute()
   const tab = TABS.includes(segments[0]) ? segments[0] : 'live'
   const openTool = tab === 'tools' ? (segments[1] || null) : null
-  const topo = useMemo(() => analyzeTopology(zones), [zones])
   // Remembered per browser so the rail does not reappear every reload for
   // someone who closed it. Wrapped: some contexts throw on storage access.
   const [assistantOpen, setAssistantOpen] = useState(() => {
@@ -1060,7 +1044,7 @@ export default function App() {
           <section>
             <h3>Network segmentation</h3>
             <ZoneDiagram zones={zones} />
-            <ZoneMap zones={zones} roles={topo && topo.roles} />
+            <ZoneInvariants zones={zones} />
           </section>
         </>
       )}
