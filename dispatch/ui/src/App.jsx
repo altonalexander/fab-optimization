@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
+import { RouteIndex, RouteProduct } from './RoutePages.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
 import {
@@ -552,10 +553,11 @@ function ToolIndex({ query, setQuery, toolHref }) {
   )
 }
 
-// The route explorer and the bench results are self-contained static pages
-// with their own design system. They are framed rather than ported: rewriting
-// 360KB of hand-tuned SVG into React would lose fidelity and buy nothing,
-// since neither page fetches anything -- their data is embedded.
+// The bench results page is a self-contained static page with its own design
+// system, framed rather than ported: it fetches nothing, its data is embedded,
+// and rewriting 145KB of hand-tuned SVG into React would lose fidelity and buy
+// nothing. Routes used to be framed the same way and no longer are -- see
+// RoutePages.jsx: routes needed per-product URLs, which an iframe cannot have.
 function Embedded({ src, title }) {
   return (
     <div className="embed-wrap">
@@ -711,6 +713,7 @@ export default function App() {
   const { segments, query, navigate, setQuery } = useRoute()
   const tab = TABS.includes(segments[0]) ? segments[0] : 'live'
   const openTool = tab === 'tools' ? (segments[1] || null) : null
+  const openProduct = tab === 'routes' ? (segments[1] || null) : null
   const topo = useMemo(() => analyzeTopology(zones), [zones])
   // Remembered per browser so the rail does not reappear every reload for
   // someone who closed it. Wrapped: some contexts throw on storage access.
@@ -799,7 +802,9 @@ export default function App() {
               same product <i>and</i> the same step. Band thickness is cohort
               spread; a widening band means the cohort is desynchronising.
             </p>
-            <CohortBurndown />
+            <CohortBurndown cohort={query.cohort || null}
+                            onCohort={c => setQuery({ cohort: c || undefined })}
+                            routeHref={p => linkTo(['routes', p])} />
           </section>
         </div>
       )}
@@ -875,8 +880,12 @@ export default function App() {
 
       {tab === 'routes' && (
         <section>
-          <h3>Route explorer</h3>
-          <Embedded src="/route-explorer.html" title="Fab Route Explorer" />
+          {openProduct
+            ? <RouteProduct product={openProduct}
+                            backHref={linkTo('/routes')}
+                            cohortHref={c => linkTo('/lots', { cohort: c })} />
+            : <><h3>Product routes</h3>
+                <RouteIndex hrefFor={id => linkTo(['routes', id])} /></>}
         </section>
       )}
 

@@ -99,6 +99,36 @@ ENRICH = {
             "404": {"description": "Zones file missing or unparseable.", **_json(_ERROR)},
         },
     },
+    "GET /api/routes": {
+        "responses": {
+            "200": {"description": "Product route index: one summary row per "
+                                   "saleable product, with live lot and cohort "
+                                   "counts.",
+                    **_json({"type": "object", "properties": {
+                        "dataset": {"type": "string"},
+                        "areas": {"type": "array", "items": {"type": "string"}},
+                        "products": _ARR_OBJ}})},
+            "404": {"description": "Routes file missing.", **_json(_ERROR)},
+        },
+    },
+    "GET /api/routes/<path:product>": {
+        "parameters": [_limit(8, 60, "Cohorts to sample, ranked by last movement.")],
+        "responses": {
+            "200": {"description": "One product's route -- area visits, "
+                                   "transitions and rework loops -- plus a "
+                                   "sample of the cohorts currently walking it. "
+                                   "Accepts a product name (`part_3`) or a "
+                                   "route id (`r_3`).",
+                    **_json({"type": "object", "properties": {
+                        "product": {"type": "string"},
+                        "route": {"type": "string"},
+                        "n_steps": {"type": "integer"},
+                        "visits": _ARR_OBJ,
+                        "cohorts": _ARR_OBJ}})},
+            "404": {"description": "Unknown product, or routes file missing.",
+                    **_json(_ERROR)},
+        },
+    },
     "GET /api/state": {
         "responses": {"200": {"description": "Current mirror snapshot: tools, "
                                              "queues, counters, sim clock.",
@@ -306,6 +336,7 @@ _TAG_DESCRIPTIONS = {
     "events": "Raw event feed.",
     "decisions": "Dispatch decisions.",
     "lots": "Cohort and per-lot burndown.",
+    "routes": "Product routes and the cohorts walking them.",
     "stream": "Server-Sent Events feed.",
     "scenario": "What-if planning against a cloned registry.",
     "sim": "Simulator playback control.",
