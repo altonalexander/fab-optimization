@@ -1,0 +1,20 @@
+This directory vendors PySCFabSim, third-party software distributed under the
+MIT License. The full license text is in `LICENSE` alongside this file and must
+be retained in any copy or redistribution of these files.
+
+    PySCFabSim
+    Copyright (c) 2026 Research Group Production Systems
+    https://github.com/prosysscience/PySCFabSim-release
+
+Vendored via the fork `david-dd/PySCFabSim-revised` at commit
+`ae3d55ef08cd0d6bc9cd114eb800e6c920dbede1`. That fork does not carry a LICENSE
+file; the MIT terms above descend from the upstream project it was forked from
+and continue to govern this code. The copy here has been modified -- see
+`UPSTREAM.md` for the full list of deviations.
+
+The SMT2020 dataset read by this baseline is a separate work with its own terms:
+
+    Kopp, D., Hassoun, M., Kalir, A., & Moench, L. (2020).
+    SMT2020 -- A Semiconductor Manufacturing Testbed.
+    IEEE Transactions on Semiconductor Manufacturing.
+    doi:10.1109/TSM.2020.3001933

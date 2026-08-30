@@ -13,6 +13,7 @@ baseline to be measured against.
 | Vendored on | 2026-08-29 |
 | Consolidated on | 2026-08-30 |
 | Method | squash (no submodule, no subtree) |
+| License | MIT - see `LICENSE` and `NOTICE` in this directory |
 
 Squashed rather than submoduled so `make` works from a plain `git clone` with no
 `--recursive`. We are not contributing upstream and do not need their history —
@@ -68,7 +69,20 @@ is recoverable from upstream at the SHA above.
    (2026-08-30). A completed run was otherwise lost at the final write on any
    checkout without a `greedy/` directory.
 
-Deviations 3-5 are edits inside this vendored tree, which the policy above says
+6. **`eval_results.py` tolerates missing reference files** (undocumented until
+   2026-08-30). Upstream assumed `datasets/{lots,machines}_SMT2020_*.txt` were
+   always present and died on the first missing one; this copy checks
+   `path.isfile` and skips. Roughly 20 lines differ.
+7. **`reproduce_dispatcher_experiments.sh` was rewritten** (undocumented until
+   2026-08-30). Upstream was three unguarded lines; this copy adds
+   `set -euo pipefail`, `cd "$(dirname "$0")"`, an explicit `.venv/bin/python`,
+   offline `wandb` defaults, and the two `build_dashboard.py` invocations.
+
+Also modified but not load-bearing: `.gitignore` (5 lines), and
+`chart_jobs.html` / `chart_tools.html`, which are regenerated run outputs rather
+than upstream source - `chart_jobs.html` is empty upstream.
+
+Deviations 3-7 are edits inside this vendored tree, which the policy above says
 to avoid. They are here rather than in `dispatch/` or `bench/` because each one
 is a property of the baseline's own entry points — a default, an import path, an
 output path — that cannot be expressed from outside. Re-apply them when
@@ -89,3 +103,15 @@ pip install -r requirements.txt
 
 Re-vendor from a fresh clone at the new SHA, re-apply deviation 1, delete the
 clone's `.git/`, update the table above. Do not `git pull` into this directory.
+
+## Licensing
+
+PySCFabSim is MIT-licensed. The fork this was vendored from
+(`david-dd/PySCFabSim-revised`) carries no LICENSE file, but MIT terms travel
+with the code: they descend from the root project,
+`prosysscience/PySCFabSim-release`, and a fork cannot strip them.
+
+MIT requires the copyright and permission notice be retained in "all copies or
+substantial portions of the Software", so the upstream text is committed here as
+`LICENSE`, with provenance and the SMT2020 dataset citation in `NOTICE`. Keep
+both when refreshing the pin.
