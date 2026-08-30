@@ -256,6 +256,9 @@ Endpoints:
 | `GET /api/lots` | cohort index, ranked by last movement, with min/median/max steps left and the spread |
 | `GET /api/lots/<cohort>` | per-lot series, plus a `projection` and a `stats` block per lot |
 
+The selected cohort lives in the URL (`#/lots?cohort=part_3-d0`), so a route
+page can link to one lot group and the link survives a reload.
+
 Points are held in one bounded ring (`BURNDOWN_MAX`, default 150k) rather than
 per-lot series with an eviction policy: LVHM emits ~23k progress events per
 simulated day across ~2k lots in flight, so per-lot retention either leaks or
@@ -315,6 +318,42 @@ the fab time actually arriving, not computed from the speed dial.
 ```bash
 cd dispatch/ui && node --test src/stream_geom.test.mjs
 ```
+
+## The routes view
+
+One page per product, at its own URL. A route is static reference data --
+`viz/extract_routes.py` collapses each SMT2020 `route_*.txt` to its process-area
+column -- so it is read from `viz/routes_lvhm.json` and cached on mtime rather
+than mirrored from the event stream. What *is* live is which cohorts are
+currently walking each route, grouped out of the burndown mirror on request.
+
+| Route | Returns |
+|---|---|
+| `GET /api/routes` | one summary row per product: steps, visits, per-area step counts, and how many lots and cohorts of it are being tracked |
+| `GET /api/routes/<product>` | that product's visits, transitions and rework loops, plus a sample of the cohorts on it (`?limit=`, default 8). Accepts `part_3`, `r_3` or `3` |
+
+This was a framed static page (`public/route-explorer.html`) until it needed
+per-product URLs, which an iframe cannot have: the frame has one address for
+all ten routes, so nothing could link to *the route part_3 runs*. The rewrite
+buys the two cross-links that matter:
+
+- the lots view's cohort note links to `#/routes/<product>` — the route those
+  lots are walking;
+- each route page lists a sample of cohorts, each linking back to
+  `#/lots?cohort=<id>`, which is why the lots view now carries its selected
+  cohort in the URL instead of in component state.
+
+The single-diagram explorer is still built and still served; the index links to
+it, because all ten routes side by side is the one view per-product pages
+cannot give.
+
+```bash
+cd dispatch/ui && node src/routepages.test.mjs
+```
+
+renders both views to static markup against the real routes JSON — no browser,
+no API — and pins the step counts, the per-visit strip, the rework rows and
+both sets of cross-links.
 
 ## Adding a machine configuration
 

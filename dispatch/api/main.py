@@ -783,6 +783,168 @@ def state():
 
 
 # ---------------------------------------------------------------------------
+# Routes. The product routes are static reference data extracted from SMT2020
+# by viz/extract_routes.py -- a route does not change while the fab runs, so it
+# is read once and cached rather than mirrored from the event stream. What is
+# live is which cohorts are currently walking each route, and those are grouped
+# out of the burndown mirror on demand.
+# ---------------------------------------------------------------------------
+
+ROUTES_FILE = os.getenv(
+    "ROUTES_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "..", "viz", "routes_lvhm.json"))
+# part.txt is the dataset's own product -> route table. It is read when present
+# so a dataset that does not use the part_N/route_N convention still resolves;
+# the derived fallback below only covers the convention.
+PART_TABLE = os.getenv(
+    "PART_TABLE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                 "..", "..", "data", "smt2020", "SMT2020_LVHM", "part.txt"))
+
+_routes_cache = {"mtime": None, "data": None}
+
+
+def _load_part_table():
+    """PART -> route key ("part_3" -> "3"), from the dataset's part.txt."""
+    try:
+        with open(PART_TABLE) as f:
+            header = f.readline().rstrip("\n").split("\t")
+            idx = {n: i for i, n in enumerate(header)}
+            out = {}
+            for line in f:
+                if not line.strip():
+                    continue
+                c = line.rstrip("\n").split("\t")
+                # ROUTE is "r_3"; the routes JSON keys on the bare "3".
+                route = c[idx["ROUTE"]]
+                out[c[idx["PART"]]] = route[2:] if route.startswith("r_") else route
+            return out
+    except Exception:
+        return {}
+
+
+def _load_routes():
+    """Parsed routes JSON, reloaded only when the file changes on disk."""
+    try:
+        mtime = os.path.getmtime(ROUTES_FILE)
+    except OSError:
+        return None
+    if _routes_cache["mtime"] != mtime:
+        with open(ROUTES_FILE) as f:
+            doc = json.load(f)
+        parts = _load_part_table()
+        if not parts:
+            parts = {"part_%s" % k: k for k in doc.get("routes", {})}
+        # Both directions are precomputed: the index needs product -> route and
+        # every detail lookup needs route -> product.
+        doc["_by_part"] = parts
+        doc["_part_of"] = {v: k for k, v in parts.items()}
+        _routes_cache.update(mtime=mtime, data=doc)
+    return _routes_cache["data"]
+
+
+def _route_summary(product, key, r):
+    """The index row. Deliberately omits `seq` and `visits` -- those run to a
+    few hundred entries per route, and inlining them would turn a ten-product
+    index into a megabyte of JSON."""
+    areas = r.get("areas", {})
+    return {
+        "product": product,
+        "route": r.get("id", "r_%s" % key),
+        "key": key,
+        "n_steps": r.get("n_steps", 0),
+        "n_visits": r.get("n_visits", 0),
+        "n_areas": len(areas),
+        "areas": areas,
+        "batch_steps": r.get("batch_steps", 0),
+        "sampled": r.get("sampled", 0),
+        "rework_steps": len(r.get("rework", [])),
+        # The bay a lot of this product spends the most steps in. It is the one
+        # thing that distinguishes the ten LVHM routes at a glance.
+        "dominant_area": max(areas, key=areas.get) if areas else None,
+    }
+
+
+@app.get("/api/routes")
+def routes_index():
+    """Product route index.
+
+    One row per saleable product, with its route's step and visit counts and
+    per-area step totals. Summaries only: the full step sequence is served per
+    product by /api/routes/<product>.
+    """
+    doc = _load_routes()
+    if not doc:
+        return jsonify({"error": "routes file not found: %s" % ROUTES_FILE}), 404
+    rows = []
+    for product, key in doc["_by_part"].items():
+        r = doc["routes"].get(key)
+        if r:
+            rows.append(_route_summary(product, key, r))
+    # part_2 before part_10: the products are numbered, and a lexical sort puts
+    # the tenth product second.
+    rows.sort(key=lambda x: (_as_int(x["key"], 0) or 0, x["product"]))
+
+    # How many lots and cohorts of each product the mirror is holding, so the
+    # index can say which routes are live rather than only which exist.
+    _, meta, sim_t, warm_t = mirror.burndown_view(cohorts=[])
+    lots = Counter(m["part"] for m in meta.values())
+    cohorts = defaultdict(set)
+    for m in meta.values():
+        cohorts[m["part"]].add(m["cohort"])
+    for row in rows:
+        row["lots_tracked"] = lots.get(row["product"], 0)
+        row["cohorts_tracked"] = len(cohorts.get(row["product"], ()))
+
+    return jsonify({"dataset": doc.get("dataset"), "areas": doc.get("areas", []),
+                    "now_t": sim_t, "warm_t": warm_t, "products": rows})
+
+
+@app.get("/api/routes/<path:product>")
+def route_detail(product):
+    """One product's route, plus a sample of the cohorts currently walking it.
+
+    `visits` collapses consecutive same-area steps into one visit to that bay,
+    which is what makes a 500-step route readable: the re-entrancy that defines
+    a wafer fab shows up as repeated visits to the same area rather than as a
+    flat list. `cohorts` is a live sample from the burndown mirror, ranked by
+    last movement, and is empty when no feed is attached.
+    """
+    doc = _load_routes()
+    if not doc:
+        return jsonify({"error": "routes file not found: %s" % ROUTES_FILE}), 404
+    key = doc["_by_part"].get(product)
+    # The route id resolves as well as the product name, so a link built from
+    # "r_3" or "3" lands on the same page as "part_3" instead of 404ing.
+    if key is None:
+        cand = product[2:] if product.startswith("r_") else product
+        if cand in doc["routes"]:
+            key, product = cand, doc["_part_of"].get(cand, product)
+    r = doc["routes"].get(key) if key is not None else None
+    if not r:
+        return jsonify({"error": "unknown product: %s" % product}), 404
+
+    _, meta, sim_t, warm_t = mirror.burndown_view(cohorts=[])
+    rows = [c for c in _cohort_rows(meta) if c["part"] == product]
+    limit = _as_int(request.args.get("limit"), 8) or 8
+
+    detail = _route_summary(product, key, r)
+    detail.update({
+        "dataset": doc.get("dataset"),
+        "visits": r.get("visits", []),
+        "transitions": r.get("transitions", []),
+        "rework": r.get("rework", []),
+        "area_visits": r.get("area_visits", {}),
+        "now_t": sim_t,
+        "warm_t": warm_t,
+        "cohorts": rows[:limit],
+        "total_cohorts": len(rows),
+    })
+    return jsonify(detail)
+
+
+# ---------------------------------------------------------------------------
 # Floorplan. Geometry is static and cached; state streams separately.
 # ---------------------------------------------------------------------------
 

@@ -53,9 +53,24 @@ const fmtDur = sec => {
 const fmtSigned = sec =>
   sec == null ? '—' : `${sec >= 0 ? '+' : ''}${(sec / 86400).toFixed(1)}d`
 
-export default function CohortBurndown() {
+/**
+ * `cohort`/`onCohort` are optional. When App passes them the selection lives in
+ * the URL (#/lots?cohort=part_3-d0), which is what lets a route page link to
+ * one cohort; unpassed, the component keeps its own selection and behaves as
+ * it did before. `routeHref` builds the link back to a product's route page.
+ */
+export default function CohortBurndown({ cohort: cohortProp, onCohort,
+                                         routeHref } = {}) {
   const [index, setIndex] = useState(null)
-  const [cohort, setCohort] = useState(null)
+  const [ownCohort, setOwnCohort] = useState(null)
+  const controlled = typeof onCohort === 'function'
+  const cohort = controlled ? cohortProp : ownCohort
+  const setCohort = controlled ? onCohort : setOwnCohort
+  // Held in a ref, not a dependency: App passes an inline arrow, so a direct
+  // dependency would give the index fetch a new identity every parent render
+  // and re-fetch /api/lots on each one.
+  const setCohortRef = useRef(setCohort)
+  setCohortRef.current = setCohort
   const [data, setData] = useState(null)
   const [mode, setMode] = useState('envelope')   // envelope | lines
   const [metric, setMetric] = useState('steps')  // steps | time
@@ -135,8 +150,11 @@ export default function CohortBurndown() {
       .then(d => {
         setIndex(d)
         setErr(null)
+        // Only when nothing is selected: a URL naming a cohort must win over
+        // "the most recently moved one", or a pasted link would bounce to a
+        // different cohort the moment the index arrived.
         if (!cohortRef.current && d.cohorts && d.cohorts.length) {
-          setCohort(d.cohorts[0].cohort)
+          setCohortRef.current(d.cohorts[0].cohort)
         }
       })
       .catch(() => setErr('could not reach /api/lots'))
@@ -231,7 +249,13 @@ export default function CohortBurndown() {
   return (
     <div className="burndown" ref={wrapRef}>
       <div className="burndown-controls">
+        {/* A <select> cannot hold a link per option, so the route link for
+            the selected cohort lives in the note below this row. */}
         <select value={cohort || ''} onChange={e => setCohort(e.target.value)}>
+          {/* The index holds the 60 most recently moved cohorts. A link from a
+              route page can name one outside that window, and a <select> whose
+              value is not among its options renders blank, so it is added. */}
+          {cohort && !row && <option value={cohort}>{cohort}</option>}
           {index.cohorts.map(c => (
             <option key={c.cohort} value={c.cohort}>
               {c.cohort} — {c.lots} lots, spread {c.spread}
@@ -266,7 +290,13 @@ export default function CohortBurndown() {
 
       {row && (
         <p className="muted" style={{ marginTop: 2 }}>
-          <b>{row.lots}</b> lots of <b>{row.part}</b>, spread{' '}
+          <b>{row.lots}</b> lots of{' '}
+          {routeHref
+            ? <a href={routeHref(row.part)} title={`route walked by ${row.part}`}>
+                <b>{row.part}</b>
+              </a>
+            : <b>{row.part}</b>}
+          , spread{' '}
           <b>{row.spread}</b> steps between fastest and slowest.{' '}
           {row.spread > 0
             ? 'A widening band means the cohort is desynchronising and will stall at the next batch step.'
