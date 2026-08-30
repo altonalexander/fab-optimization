@@ -55,7 +55,7 @@ is recoverable from upstream at the SHA above.
 3. **Scenario default is LVHM, not HVLM** (2026-08-30). `simulation/greedy.py`,
    `greedy_runner.py` and `exp_set_gen.py` defaulted to HVLM; this project
    standardises on LVHM, so a run launched without `--dataset` no longer
-   silently measures the other fab. See `bench/SCENARIO.md` for the reasoning
+   silently measures the other fab. See `docs/adr/0001-lvhm-default-scenario.md` for the reasoning
    and for what would overturn it. HVLM still works when passed explicitly.
 4. **`main.py` bootstraps `sys.path` from `__file__`** (2026-08-30). Upstream
    relied on the environment providing `simulation/` on the path; here that was

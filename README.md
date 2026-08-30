@@ -8,10 +8,14 @@ reason: **they must read the same data.**
 dispatch/            the C++ stack (fabdisp) — four zones, sub-ms fast path
 baselines/pyscfabsim/  discrete-event fab simulator + PPO agent (vendored, read-only)
 data/smt2020/        the shared SMT2020 load — the reason this is one repo
-                     (LVHM is the standard scenario; see bench/SCENARIO.md)
+                     (LVHM is the standard scenario; see docs/adr/0001)
 bench/               comparison harness, per-tool probe, committed results
+docs/adr/            why things are the way they are, and what would change them
 scripts/             dev-up.sh and friends
 ```
+
+Start with [`docs/adr/0000`](docs/adr/0000-motivation-scope-and-boundaries.md)
+for what this project is for and, more usefully, what it is not.
 
 If the dispatcher and the simulator are fed different SMT2020 loads, every
 number comparing them is meaningless, and nothing in either program would tell
@@ -247,7 +251,7 @@ Honest accounting, because the numbers here have been wrong before:
 - **The dispatcher has never been compared to the simulator on equal terms.**
   The instance generators disagree — 1,625 feasible pairs vs 859 at ~200 lots —
   and the headline +34.4% lift measures 21–30% across the two harnesses. The
-  KPI mapping is an open modelling question, not glue. `bench/INTEGRATION.md`
+  KPI mapping is an open modelling question, not glue. [`docs/adr/0002`](docs/adr/0002-dispatcher-inside-pyscfabsim.md)
   proposes the fix: run the dispatcher *inside* PySCFabSim.
 - The tactical cycle needs **≥2s of solve time at 400 lots**, not the ≥1s once
   stated. A 1s-tuned cycle runs greedy on every tick while the backend table

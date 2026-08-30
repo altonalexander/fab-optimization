@@ -1,6 +1,10 @@
-# Proposed: run the dispatcher inside PySCFabSim
+# 0002 — Run the dispatcher inside PySCFabSim to compare it
 
-Status: **proposal, not built.** Nothing in this file is implemented. It records
+**Status:** Proposed, not built. This is the experiment that would settle
+claim 2 in [0000](0000-motivation-scope-and-boundaries.md), and it has not been
+run.
+
+**Original note:** proposal, not built. Nothing in this file is implemented. It records
 the intended shape of the comparison harness that `README.md` says does not yet
 exist.
 

@@ -54,7 +54,7 @@ time at this scale. The fallback is load-bearing, not decorative.
 ## Which scenario
 
 **LVHM, by default, everywhere.** The reasoning, the assumptions it rests on,
-and the tests that would overturn it are in [`SCENARIO.md`](SCENARIO.md). Read
+and the tests that would overturn it are in [`docs/adr/0001`](../docs/adr/0001-lvhm-default-scenario.md). Read
 it before quoting any number as being about "the fab" — it is about one of two
 fabs, and section 5 records evidence that already pushes back on the rationale.
 

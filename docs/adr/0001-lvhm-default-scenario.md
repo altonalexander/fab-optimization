@@ -1,4 +1,6 @@
-# Why LVHM, what that assumes, and what would overturn it
+# 0001 — LVHM is the default scenario
+
+*Why LVHM, what that assumes, and what would overturn it.*
 
 **Decision (2026-08-30):** every entry point in this repo defaults to the
 SMT2020 **LVHM** scenario. HVLM still runs when passed explicitly.
