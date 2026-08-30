@@ -40,3 +40,6 @@ dispatch/build-ortools/
 
 # warm-up snapshots: regenerable, and large
 bench/snapshots/
+
+# sim playback control: runtime state written by the feed and the API
+bench/.sim_control.json

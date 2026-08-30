@@ -109,6 +109,23 @@ public:
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(cfg_.burst_interval_ms));
         }
+
+        // Bring back anything still down. Recovery only ever fires inside the
+        // burst loop and only at 50%, so without this a run ends with tools
+        // permanently offline in the mirror and every later consumer inherits
+        // a fab that is missing capacity it never lost.
+        for (const auto& tool : down_) {
+            Envelope e;
+            e.type    = EventType::ToolStatus;
+            e.source  = "mes";
+            e.seq     = ++seq_;
+            e.ts_ns   = now_ns();
+            e.tool_id = tool;
+            e.online  = true;
+            p_.send(topics::kToolEvents, e.tool_id, e.encode());
+            emitted_++;
+        }
+        down_.clear();
         p_.flush();
     }
 

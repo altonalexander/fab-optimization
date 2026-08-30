@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
+import { useRoute, linkTo, TABS } from './router.js'
+import ToolAvailability from './ToolAvailability.jsx'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
@@ -372,7 +374,7 @@ function ScenarioPanel({ tools }) {
   )
 }
 
-function ToolDetail({ id, onBack }) {
+function ToolDetail({ id, backHref }) {
   const [t, setT] = useState(null)
   const [err, setErr] = useState(null)
 
@@ -389,12 +391,12 @@ function ToolDetail({ id, onBack }) {
     return () => { live = false; clearInterval(iv) }
   }, [id])
 
-  if (err) return <div><button className="link" onClick={onBack}>← tools</button><div className="err">{err}</div></div>
+  if (err) return <div><a className="link" href={backHref}>← tools</a><div className="err">{err}</div></div>
   if (!t) return <div className="muted">loading {id}…</div>
 
   return (
     <div>
-      <button className="link" onClick={onBack}>← all tools</button>
+      <a className="link" href={backHref}>← all tools</a>
       <div className="tool-head">
         <h3>{t.id}</h3>
         <span className={t.online ? 'tag tag-ok' : 'tag tag-warn'}>
@@ -443,14 +445,20 @@ function ToolDetail({ id, onBack }) {
   )
 }
 
-function ToolIndex({ onOpen }) {
+// Filters live in the URL rather than in component state: "the ETCH tools
+// that are down" is the thing people actually want to send to someone, and a
+// tab that forgets its filter on every visit is a tab you re-type into.
+function ToolIndex({ query, setQuery, toolHref }) {
   const [data, setData] = useState(null)
   const [open, setOpen] = useState({})
-  const [q, setQ] = useState('')
-  const [type, setType] = useState('all')
+  const q = query.q || ''
+  const setQ = v => setQuery({ q: v || undefined })
+  const type = query.type || 'all'
+  const setType = v => setQuery({ type: v === 'all' ? undefined : v })
   // Delay_* are queue-time placeholders pinned near 100% busy. Left in, they
   // top the ranking by dispatch count and bury the real constraint.
-  const [showDelay, setShowDelay] = useState(false)
+  const showDelay = query.delay === '1'
+  const setShowDelay = v => setQuery({ delay: v ? '1' : undefined })
 
   useEffect(() => {
     let live = true
@@ -476,6 +484,7 @@ function ToolIndex({ onOpen }) {
 
   return (
     <div>
+      <ToolAvailability />
       <div className="tool-index-head">
         <p className="muted">
           {data.total} tools in {data.groups.length} groups, busiest first.
@@ -519,15 +528,15 @@ function ToolIndex({ onOpen }) {
             {isOpen && (
               <div className="tgroup-body">
                 {g.tools.map(t => (
-                  <button key={t.id} className={t.online ? 'tcard' : 'tcard tcard-down'}
-                          onClick={() => onOpen(t.id)}>
+                  <a key={t.id} className={t.online ? 'tcard' : 'tcard tcard-down'}
+                     href={toolHref(t.id)}>
                     <div className="tcard-id">{t.id}</div>
                     <div className="tcard-row">
                       <span>q {t.queue ?? '—'}</span>
                       <span>{t.dispatches} disp</span>
                       {!t.online && <span className="danger">down</span>}
                     </div>
-                  </button>
+                  </a>
                 ))}
               </div>
             )}
@@ -554,11 +563,149 @@ function Embedded({ src, title }) {
   )
 }
 
+
+// ---------------------------------------------------------------------------
+// Playback badge. The feed (bench/tools/sim_feed.py) replays a simulated fab
+// at a multiple of realtime, so "live" alone was ambiguous: 400x live and 1x
+// live look identical in the header but mean very different things about what
+// a minute of watching is worth. The badge states the rate and, on click,
+// lets you change it or hold the run still.
+// ---------------------------------------------------------------------------
+
+const SPEED_HELP =
+  'Playback speed — how fast the simulated fab is replayed. 1x is realtime ' +
+  '(one simulated second per second); 400x replays a simulated day in about ' +
+  'three and a half minutes. Speed changes pacing only: the run itself is ' +
+  'unchanged, so the same seed gives the same fab at every speed.'
+
+function fmtSpeed(v) {
+  if (v === null || v === undefined) return '—'
+  return `${Number.isInteger(v) ? v : Number(v).toFixed(1)}x`
+}
+
+function SpeedControl({ connected }) {
+  const [ctl, setCtl] = useState(null)
+  const [open, setOpen] = useState(false)
+  const [err, setErr] = useState(null)
+  const box = useRef(null)
+
+  // Polled, not streamed: the feed is a separate process that can be
+  // restarted or re-flagged out of band, so the header has to re-read the
+  // truth rather than trust the last thing this tab posted.
+  useEffect(() => {
+    let alive = true
+    const load = () => fetch('/api/sim/control')
+      .then(r => r.json())
+      .then(j => { if (alive) setCtl(j) })
+      .catch(() => {})
+    load()
+    const iv = setInterval(load, 5000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [])
+
+  // Close on outside click and on Escape, so the popover never strands the
+  // rest of the header behind it.
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = e => { if (box.current && !box.current.contains(e.target)) setOpen(false) }
+    const onKey = e => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const send = body => {
+    // Optimistic: at 400x the round trip is longer than the next repaint, and
+    // a button that lags half a second reads as broken. The 5s poll corrects
+    // it if the POST fails.
+    setCtl(c => ({ ...c, ...body }))
+    setErr(null)
+    fetch('/api/sim/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(async r => {
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`)
+        setCtl(j)
+      })
+      .catch(e => setErr(String(e.message || e)))
+  }
+
+  const available = !!ctl?.available
+  const paused = !!ctl?.paused
+  const speeds = ctl?.speeds?.length ? ctl.speeds : [1, 10, 20, 50, 100, 400]
+
+  const label = !connected ? 'reconnecting'
+    : paused ? 'paused'
+      : available ? `live · ${fmtSpeed(ctl.speed)}` : 'live'
+
+  const title = available
+    ? `${SPEED_HELP}\n\nClick to pause or change speed.`
+    : 'Live stream from the API. No simulator feed is reporting a playback ' +
+      'speed, so there is nothing to pace here.'
+
+  const cls = !connected ? 'live live-off' : paused ? 'live live-paused' : 'live live-on'
+
+  return (
+    <div className="live-wrap" ref={box}>
+      <button
+        type="button"
+        className={cls}
+        title={title}
+        aria-haspopup={available ? 'dialog' : undefined}
+        aria-expanded={open}
+        disabled={!available}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="dot" />{label}
+        {available && <span className="live-caret">▾</span>}
+      </button>
+
+      {open && available && (
+        <div className="speed-pop" role="dialog" aria-label="Playback speed">
+          <div className="speed-pop-head">
+            <strong>Playback</strong>
+            <span className="muted">sim time per wall second</span>
+          </div>
+          <button
+            type="button"
+            className="speed-toggle"
+            onClick={() => send({ paused: !paused })}
+          >
+            {paused ? '▶  Resume' : '❚❚  Pause'}
+          </button>
+          <div className="speed-grid">
+            {speeds.map(v => (
+              <button
+                key={v}
+                type="button"
+                className={Number(ctl.speed) === v ? 'active' : ''}
+                onClick={() => send({ speed: v, paused: false })}
+              >{v}x</button>
+            ))}
+          </div>
+          <p className="speed-note">{SPEED_HELP}</p>
+          {err && <p className="speed-err">{err}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const { state, feed, connected, history, link } = useLiveState()
   const [zones, setZones] = useState(null)
-  const [tab, setTab] = useState('live')
-  const [openTool, setOpenTool] = useState(null)
+  // The URL is the single source of truth for "where am I": tab, open tool and
+  // every filter. Reload, back button, and a link pasted into chat all land on
+  // the same view.
+  const { segments, query, navigate, setQuery } = useRoute()
+  const tab = TABS.includes(segments[0]) ? segments[0] : 'live'
+  const openTool = tab === 'tools' ? (segments[1] || null) : null
   const topo = useMemo(() => analyzeTopology(zones), [zones])
   // Remembered per browser so the rail does not reappear every reload for
   // someone who closed it. Wrapped: some contexts throw on storage access.
@@ -591,9 +738,7 @@ export default function App() {
           <h1>Fab Dispatch</h1>
           <div className="sub">zone 3 · enterprise · read-only mirror</div>
         </div>
-        <div className={connected ? 'live live-on' : 'live live-off'}>
-          <span className="dot" />{connected ? 'live' : 'reconnecting'}
-        </div>
+        <SpeedControl connected={connected} />
       </header>
 
       <div className="stats-row">
@@ -611,10 +756,10 @@ export default function App() {
         <div className="shell-main">
 
       <nav className="tabs">
-        {['live', 'lots', 'tools', 'floor', 'routes', 'results', 'scenario', 'topology'].map(t => (
-          <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
+        {TABS.map(t => (
+          <a key={t} className={tab === t ? 'active' : ''} href={linkTo(`/${t}`)}>
             {t}
-          </button>
+          </a>
         ))}
       </nav>
 
@@ -685,15 +830,21 @@ export default function App() {
       {tab === 'tools' && (
         <section>
           {openTool
-            ? <ToolDetail id={openTool} onBack={() => setOpenTool(null)} />
-            : <><h3>Tools</h3><ToolIndex onOpen={setOpenTool} /></>}
+            ? <ToolDetail id={openTool} backHref={linkTo('/tools')} />
+            : <><h3>Tools</h3>
+                <ToolIndex query={query} setQuery={setQuery}
+                           toolHref={id => linkTo(['tools', id])} /></>}
         </section>
       )}
 
       {tab === 'floor' && (
         <section>
           <h3>Cleanroom floor</h3>
-          <FloorMap onOpenTool={(id) => { setOpenTool(id); setTab('tools') }} />
+          <FloorMap onOpenTool={(id) => navigate(['tools', id])}
+                    sel={query.bay || null}
+                    onSel={(k) => setQuery({ bay: k || undefined })}
+                    heat={query.heat === '1'}
+                    onHeat={(v) => setQuery({ heat: v ? '1' : undefined })} />
         </section>
       )}
 

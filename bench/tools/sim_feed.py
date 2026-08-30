@@ -34,7 +34,10 @@ then feed it, all tools, at ten times realtime:
       --days 3 --speed 10
 
 --speed is sim-seconds per wall-second. 1 is realtime, 10 is ten times
-realtime (a simulated day takes ~2.4 hours of wall clock), 0 is unpaced.
+realtime (a simulated day takes ~2.4 hours of wall clock), 0 is unpaced. The
+dashboard's playback menu changes this live: it POSTs to /api/sim/control,
+which writes $SIM_CONTROL_FILE (default bench/.sim_control.json), and the
+pacing loop here polls that file. Delete the file to fall back to --speed.
 At --speed 10 the whole fab emits ~6 events/second, which the broker and the
 dashboard absorb without effort.
 
@@ -78,6 +81,32 @@ TOOL_STATE_TOPIC = 'fab.tool.state'
 # dashboard restart instant instead of re-simulating.
 CACHE_DIR = os.path.join(REPO, 'bench', 'snapshots')
 
+# Playback control, written by the API when someone uses the dashboard's speed
+# menu and polled here. A file rather than a socket because the feed is a host
+# process started by hand: it must survive the API restarting, and there is
+# nothing to reconnect to when it is not running. This is playback pacing
+# only -- it changes when events are emitted, never what is simulated, so a
+# run's trajectory is identical at 1x and 400x.
+CONTROL_FILE = os.getenv(
+    'SIM_CONTROL_FILE', os.path.join(REPO, 'bench', '.sim_control.json'))
+CONTROL_POLL_S = 0.25     # wall seconds between re-reads; the file is tiny
+
+
+def write_control(speed, paused=False):
+    """Publish the feed's current pacing so the dashboard can show and change it.
+
+    Written on start-up so a fresh feed reports its --speed rather than
+    whatever the last session left behind.
+    """
+    try:
+        os.makedirs(os.path.dirname(CONTROL_FILE), exist_ok=True)
+        tmp = CONTROL_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump({'speed': float(speed), 'paused': bool(paused),
+                       'updated': time.time(), 'source': 'sim_feed'}, f)
+        os.replace(tmp, CONTROL_FILE)   # atomic: no half-read by the poller
+    except OSError:
+        pass                            # pacing control is a convenience
 # Warm-up history points kept per lot in the snapshot. The raw history is one
 # point per completed step, so a 583-step route would carry 583 of them and the
 # compacted state topic would hold megabytes per run. Decimated to this many,
@@ -301,6 +330,14 @@ class FeedPlugin(IPlugin):
                  burndown=True, cohort_mode='product-day'):
         self.sink = sink
         self.speed = speed
+        # Playback control, refreshed from CONTROL_FILE at most every
+        # CONTROL_POLL_S. base_speed is what --speed asked for; the file
+        # overrides it while it exists, so deleting the file restores the
+        # command line rather than freezing at the last dashboard setting.
+        self.base_speed = speed
+        self.paused = False
+        self._control_checked = 0.0
+        self._control_mtime = None
         self.tool_filter = tool_filter
         # A 730-day run is ~39M events and 4.3 GB. Recording a window instead
         # turns that into megabytes without changing the simulation: the sim
@@ -317,6 +354,17 @@ class FeedPlugin(IPlugin):
         # spent on. Keyed by lot idx and dropped when the lot completes, so it
         # is bounded by WIP rather than by total lots released.
         self._last_split = {}
+        # Tools taken down by a breakdown or a PM, and the simulated time each
+        # one comes back. PySCFabSim fires a plugin hook when an outage STARTS
+        # but none when it ends -- it just shifts the machine's events forward
+        # by the sampled length -- so without this the feed is one-way and the
+        # dashboard's tool roster decays monotonically to all-down.
+        self._down_until = {}
+        # Last (breakdown, PM) seconds seen per machine. BreakdownEvent.handle
+        # adds the sampled outage length to these counters *before* calling the
+        # plugin, so the delta is the exact length without resampling the
+        # distribution (which would give a different number every time).
+        self._wear = {}
         # Route length, captured once per lot and reused.
         #
         # It cannot be recomputed per event: on the last step the simulator
@@ -372,14 +420,72 @@ class FeedPlugin(IPlugin):
         self.sink.write(topic, payload, key)
         self.emitted += 1
 
+    def _read_control(self):
+        """Pick up speed/pause changes made from the dashboard.
+
+        Poll-throttled and mtime-guarded: at 400x this runs thousands of times
+        a second, and a stat() per quarter-second is the whole cost.
+        """
+        now = time.time()
+        if now - self._control_checked < CONTROL_POLL_S:
+            return
+        self._control_checked = now
+        try:
+            mtime = os.path.getmtime(CONTROL_FILE)
+        except OSError:
+            # No file (or it was removed): fall back to the command line.
+            if self._control_mtime is not None:
+                self._control_mtime = None
+                self.speed, self.paused = self.base_speed, False
+            return
+        if mtime == self._control_mtime:
+            return
+        self._control_mtime = mtime
+        try:
+            with open(CONTROL_FILE) as f:
+                ctl = json.load(f)
+        except (OSError, ValueError):
+            return                      # half-written file; try again next poll
+        if isinstance(ctl.get('speed'), (int, float)):
+            self.speed = float(ctl['speed'])
+        self.paused = bool(ctl.get('paused'))
+
     def _pace(self, sim_t):
+        self._read_control()
+        # Pause is not speed 0: speed 0 means unpaced (as fast as possible),
+        # so a paused feed has to block here instead of falling through.
+        while self.paused:
+            time.sleep(CONTROL_POLL_S)
+            self._control_checked = 0.0
+            self._read_control()
+            # Resuming should not replay the wall time spent paused as sim
+            # backlog; the next delta is measured from wherever we resume.
+            self.last_sim_t = sim_t
         if self.speed <= 0:
+            self.last_sim_t = sim_t
             return
         if self.last_sim_t is not None:
             delta = (sim_t - self.last_sim_t) / self.speed
             if delta > 0:
                 time.sleep(min(delta, 2.0))
         self.last_sim_t = sim_t
+
+    def _recover_due(self, now):
+        """Bring back every tool whose outage has elapsed.
+
+        Called from the hooks that already carry a simulated clock, so recovery
+        rides the existing event stream rather than needing a timer of its own.
+        A tool with no further activity anywhere in the fab therefore recovers
+        on the next event from any tool -- close enough for a dashboard, and it
+        cannot leave a tool down forever.
+        """
+        if not self._down_until:
+            return
+        due = [t for t, at in self._down_until.items() if at <= now]
+        for tool in due:
+            del self._down_until[tool]
+            self._write(TOOL_TOPIC, envelope(
+                type='TOOL_STATUS', tool=tool, online=1))
 
     def _name(self, machine):
         return f'{machine.family}_{machine.idx}'
@@ -502,6 +608,7 @@ class FeedPlugin(IPlugin):
 
     def on_step_done(self, instance, lot, step):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         self._burn(instance, lot, 'active')
 
     def on_sim_init(self, instance):
@@ -516,6 +623,7 @@ class FeedPlugin(IPlugin):
 
     def on_dispatch(self, instance, machine, lots, machine_end_time, lot_end_time):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         if self.tool_filter and not self._name(machine).startswith(self.tool_filter):
             return
         self._pace(instance.current_time)
@@ -531,6 +639,7 @@ class FeedPlugin(IPlugin):
 
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
         self._burn(instance, lot, 'done')
         self._last_split.pop(lot.idx, None)
@@ -539,6 +648,7 @@ class FeedPlugin(IPlugin):
 
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
+        self._recover_due(instance.current_time)
         for lot in lots:
             self._write(LOT_TOPIC, envelope(
                 type='LOT_READY', lot=self._lot_id(lot),
@@ -598,29 +708,58 @@ class FeedPlugin(IPlugin):
         return n
 
     def on_breakdown(self, *args):
-        self._tool_event(args, online=0)
+        self._tool_down(args, kind='breakdown')
 
     def on_preventive_maintenance(self, *args):
-        self._tool_event(args, online=0)
+        self._tool_down(args, kind='pm')
 
-    def _tool_event(self, args, online):
+    def _outage_length(self, machine, kind):
+        """Seconds this outage will last, taken from the simulator's own books.
+
+        BreakdownEvent.handle() samples the length once and adds it to
+        machine.bred_time (breakdown) or machine.pmed_time (PM) before calling
+        us, so the delta since the last outage on this machine is that exact
+        sample. Resampling event.length instead would give a recovery time
+        unrelated to the one the simulator is actually running.
+        """
+        attr = 'bred_time' if kind == 'breakdown' else 'pmed_time'
+        total = float(getattr(machine, attr, 0.0) or 0.0)
+        key = (id(machine), attr)
+        prev = self._wear.get(key, 0.0)
+        self._wear[key] = total
+        return max(0.0, total - prev)
+
+    def _tool_down(self, args, kind):
         # interface.py declares on_breakdown(machine, event) but events.py
         # calls it as (instance, event) -- accept either rather than trusting
         # the signature.
-        machine = None
+        machine, now = None, getattr(self, '_now', None)
         for a in args:
-            if hasattr(a, 'machine'):
+            if hasattr(a, 'current_time'):
+                now = a.current_time
+            if machine is None and hasattr(a, 'machine'):
                 machine = a.machine
-                break
-            if hasattr(a, 'idx') and hasattr(a, 'family'):
+            elif machine is None and hasattr(a, 'idx') and hasattr(a, 'family'):
                 machine = a
-                break
         if machine is None:
             return
-        if self.tool_filter and not self._name(machine).startswith(self.tool_filter):
+        tool = self._name(machine)
+        if self.tool_filter and not tool.startswith(self.tool_filter):
             return
+        length = self._outage_length(machine, kind)
+        self._now = now
         self._write(TOOL_TOPIC, envelope(
-            type='TOOL_STATUS', tool=self._name(machine), online=online))
+            type='TOOL_STATUS', tool=tool, online=0, reason=kind,
+            down_s=round(length, 1)))
+        if now is not None:
+            # A second outage while already down extends rather than shortens:
+            # whichever end is later is when the tool is actually usable again.
+            self._down_until[tool] = max(self._down_until.get(tool, 0.0),
+                                         now + length)
+        else:
+            # No clock to schedule against. Recover on the next event rather
+            # than stranding the tool offline for the rest of the run.
+            self._down_until[tool] = 0.0
 
 
 def main():
@@ -740,6 +879,10 @@ def main():
 
     feed = FeedPlugin(out, speed, a.tool_prefix, from_day, a.to_day,
                       burndown=not a.no_burndown, cohort_mode=a.cohort_mode)
+    # base_speed is the post-warm-up rate the dashboard should show and revert
+    # to, not the 0 the warm-up runs at.
+    feed.base_speed = a.speed
+    write_control(a.speed)
     instance = FileInstance(files, run_to, True, [feed], None, a.batch_strat)
     rule = dispatcher_map[a.dispatcher]
 
@@ -762,6 +905,7 @@ def main():
                 save_snapshot(cpath, snap)
                 feed.from_s = None            # stop suppressing
                 feed.speed = a.speed          # start pacing
+                feed._control_checked = 0.0   # honour any dashboard change
                 feed.last_sim_t = instance.current_time
                 n = feed.emit_snapshot(snap)
                 print(f'  warm-up complete at day {snap["day"]}: '

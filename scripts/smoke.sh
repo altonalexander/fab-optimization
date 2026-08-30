@@ -52,6 +52,10 @@ assert_num() {
 
 jqp() { "$API_PY" -c "import json,sys;d=json.load(sys.stdin);print($1)" 2>/dev/null; }
 
+# Pull one labelled line out of a test script's own summary, so a passing
+# check still reports the number it passed on rather than just "ok".
+jqp_grep() { awk -v k="$1" '$1==k{$1="";sub(/^ +/,"");print;exit}' "$2"; }
+
 note 'prerequisites'
 for p in "$API_PY" "$SIM_PY"; do
   [[ -x "$p" ]] && ok "$(basename "$(dirname "$(dirname "$p")")") venv" \
@@ -65,6 +69,27 @@ if "$SIM_PY" "$REPO/bench/tools/sim_feed.py" --out "$FEED" --days 1 --speed 0 \
   ok "generated $(wc -l < "$FEED") events"
 else
   bad 'sim_feed failed'; exit 1
+fi
+
+note 'tool recovery'
+# Unit-level first: the endpoint checks below only see the aggregate, and an
+# aggregate that looks healthy can still be hiding a broken recovery path.
+if "$API_PY" "$REPO/dispatch/api/t_recovery.py" >"$RUN/recovery.log" 2>&1; then
+  ok "recovery unit tests ($(grep -c '  ok ' "$RUN/recovery.log") checks)"
+else
+  bad 'recovery unit tests'; sed -n '/FAIL/p' "$RUN/recovery.log"
+fi
+# The feed must emit a matching online=1 for its outages.
+if "$API_PY" "$REPO/dispatch/api/t_feed_recovery.py" "$FEED" >"$RUN/feed.log" 2>&1; then
+  ok "feed pairs outages with recoveries ($(jqp_grep 'recoveries' "$RUN/feed.log"))"
+else
+  bad 'feed is one-way'; sed -n '/FAIL/p' "$RUN/feed.log"
+fi
+# ...and the mirror must hold the roster up even when it does not.
+if "$API_PY" "$REPO/dispatch/api/t_watchdog_replay.py" "$FEED" >"$RUN/wd.log" 2>&1; then
+  ok "watchdog holds the roster on a one-way feed ($(jqp_grep 'online' "$RUN/wd.log"))"
+else
+  bad 'watchdog did not hold the roster'; sed -n '/FAIL/p' "$RUN/wd.log"
 fi
 
 note 'api'
@@ -89,6 +114,18 @@ note '/api/tools'
 T=$(curl -sf -m 10 "$B/api/tools")
 assert_num 'tools discovered'  "$(echo "$T" | jqp "d['total']")"        '>' 500
 assert_num 'groups discovered' "$(echo "$T" | jqp "len(d['groups'])")"  '>' 10
+
+note '/api/tools/availability'
+# The roster must not decay. Tools go down via TOOL_STATUS and used to have no
+# way back: the feed emitted online=0 and never online=1, so a long enough run
+# drained the fab to zero online tools. 95% is well under a real fab's
+# availability and well over anything a one-way feed produces.
+sleep 3                                   # let the sampler take a point or two
+A=$(curl -sf -m 10 "$B/api/tools/availability")
+assert_num 'roster online'  "$(echo "$A" | jqp "100*d['now']['online']/max(1,d['now']['total'])")" '>' 95
+assert_num 'series sampled' "$(echo "$A" | jqp "len(d['ts'])")"     '>' 0
+assert_num 'series aligned' "$(echo "$A" | jqp "len(d['ts'])-len(d['online'])")" '==' 0
+assert_num 'online <= total' "$(echo "$A" | jqp "max([o-t for o,t in zip(d['online'],d['total'])] or [0])")" '<=' 0
 
 note '/api/layout'
 L=$(curl -sf -m 15 "$B/api/layout")

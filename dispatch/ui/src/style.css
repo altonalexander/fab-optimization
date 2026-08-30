@@ -15,6 +15,31 @@ h1{margin:0;font-size:22px;letter-spacing:-.01em}
 .live-on .dot{background:#15803d;box-shadow:0 0 0 3px #15803d22}
 .live-off .dot{background:#9ca3af}
 .live-off{color:var(--mut)}
+.live-paused .dot{background:#b45309;box-shadow:0 0 0 3px #b4530922}
+
+/* Playback control. The badge is a button now: it reports the replay rate and
+   opens the pause / speed menu. */
+.live-wrap{position:relative}
+button.live{cursor:pointer;font:inherit;font-size:12px;color:inherit}
+button.live:disabled{cursor:default}
+button.live:not(:disabled):hover{border-color:#9ca3af}
+.live-caret{color:var(--mut);font-size:10px;margin-left:1px}
+.speed-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:30;width:250px;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:12px;box-shadow:0 8px 24px #0000001f;text-align:left}
+.speed-pop-head{display:flex;justify-content:space-between;align-items:baseline;
+  gap:8px;margin-bottom:8px}
+.speed-pop-head .muted{font-size:10px;color:var(--mut)}
+.speed-toggle{width:100%;padding:7px;border-radius:6px;border:1px solid var(--line);
+  background:var(--bg);font:inherit;font-size:12px;cursor:pointer}
+.speed-toggle:hover{border-color:#9ca3af}
+.speed-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+.speed-grid button{padding:6px 0;border-radius:6px;border:1px solid var(--line);
+  background:var(--card);font:inherit;font-size:12px;cursor:pointer}
+.speed-grid button:hover{border-color:#9ca3af}
+.speed-grid button.active{background:#111827;color:#fff;border-color:#111827}
+.speed-note{font-size:11px;color:var(--mut);margin:10px 0 0;line-height:1.45}
+.speed-err{font-size:11px;color:#b91c1c;margin:6px 0 0}
 
 .stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
   gap:10px;margin-bottom:18px}
@@ -25,9 +50,12 @@ h1{margin:0;font-size:22px;letter-spacing:-.01em}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--line)}
-.tabs button{background:none;border:0;padding:8px 14px;cursor:pointer;
-  color:var(--mut);font-size:13px;border-bottom:2px solid transparent}
-.tabs button.active{color:var(--fg);border-bottom-color:var(--fg);font-weight:600}
+/* Tabs and tool cards are anchors now, not buttons -- they carry real hrefs so
+   they can be copied, opened in a new tab and middle-clicked. */
+.tabs a{background:none;border:0;padding:8px 14px;cursor:pointer;
+  color:var(--mut);font-size:13px;border-bottom:2px solid transparent;
+  text-decoration:none}
+.tabs a.active{color:var(--fg);border-bottom-color:var(--fg);font-weight:600}
 
 section{background:var(--card);border:1px solid var(--line);border-radius:8px;
   padding:16px;margin-bottom:16px}
@@ -92,6 +120,20 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 
 /* --- assistant ---------------------------------------------------------- */
 /* Tool index / detail ----------------------------------------------------- */
+/* Availability strip above the tool index. Fixed height so the groups below
+   it do not jump as points arrive. */
+.avail{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:12px 14px 6px;margin-bottom:14px}
+.avail-head{display:flex;justify-content:space-between;align-items:baseline;
+  gap:16px;flex-wrap:wrap}
+.avail-pct{font-size:20px;font-weight:600}
+.avail-ok{color:#15803d}
+.avail-warn{color:#b45309}
+.avail-bad{color:#b91c1c}
+.avail-notes{display:flex;gap:14px;font-size:12px;flex-wrap:wrap}
+.avail-svg{width:100%;height:92px;display:block;margin-top:4px}
+.avail-empty{height:92px;display:flex;align-items:center;font-size:12px}
+
 .tool-index-head{display:flex;justify-content:space-between;align-items:center;
   gap:16px;flex-wrap:wrap}
 .tool-search{padding:7px 11px;border:1px solid var(--line);border-radius:6px;
@@ -107,9 +149,9 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   font-size:12px;flex-wrap:wrap}
 .tgroup-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
   gap:8px;padding:0 14px 14px}
-.tcard{text-align:left;border:1px solid var(--line);border-radius:6px;
+.tcard{display:block;text-align:left;border:1px solid var(--line);border-radius:6px;
   background:#fff;padding:8px 10px;cursor:pointer;font-family:inherit;
-  font-size:12px;color:var(--fg)}
+  font-size:12px;color:var(--fg);text-decoration:none}
 .tcard:hover{border-color:#9ca3af}
 .tcard-down{border-color:#fca5a5;background:#fef2f2}
 .tcard-id{font-family:ui-monospace,monospace;font-size:11px;margin-bottom:4px;
@@ -117,8 +159,9 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 .tcard-row{display:flex;gap:10px;color:#6b7280}
 .tool-head{display:flex;align-items:center;gap:12px;margin:4px 0 4px}
 .tool-head h3{margin:0}
-.link{background:none;border:0;color:#2563eb;cursor:pointer;padding:0;
-  font-size:13px;font-family:inherit;margin-bottom:8px}
+.link{display:inline-block;background:none;border:0;color:#2563eb;cursor:pointer;
+  padding:0;font-size:13px;font-family:inherit;margin-bottom:8px;
+  text-decoration:none}
 .link:hover{text-decoration:underline}
 
 /* Embedded static pages ---------------------------------------------------- */
