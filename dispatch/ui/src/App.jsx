@@ -839,37 +839,62 @@ function WipChart({ history }) {
 // exactly this reason; this is that.
 // ---------------------------------------------------------------------------
 
-function TimelineBadge({ state }) {
+function TimelineBadge({ state, navigate }) {
   const tl = state && state.timeline
-  if (!tl) return null
+  const sim = state && state.sim
 
-  // The day worth showing is the live one; the snapshot day is where the run
-  // started and only matters when the two disagree.
-  const day = tl.stream_day ?? tl.snapshot_day
-  const run = tl.stream_run || tl.snapshot_run
+  // Ticks between state frames instead of stepping once a second. The API
+  // sends the simulated clock `t` together with `t_at`, the wall-clock instant
+  // it was read, so the elapsed wall time since then times the playback speed
+  // is how far the fab has moved since. Without that the clock would sit still
+  // and jump, which reads as a stall rather than as a slow heartbeat.
+  const [, tick] = useState(0)
+  useEffect(() => {
+    const iv = setInterval(() => tick(n => n + 1), 250)
+    return () => clearInterval(iv)
+  }, [])
 
+  if (!tl && !sim) return null
+
+  let simDay = null
+  if (sim && sim.t != null) {
+    const elapsed = sim.t_at ? Math.max(0, Date.now() / 1000 - sim.t_at) : 0
+    const speed = sim.paused ? 0 : (Number(sim.speed) || 0)
+    simDay = (sim.t + elapsed * speed) / 86400
+  } else if (tl) {
+    // Fall back to the last decision's day. Coarser -- it only moves when a
+    // decision lands -- but better than showing nothing.
+    simDay = tl.stream_day ?? tl.snapshot_day
+  }
+
+  const run = tl ? (tl.stream_run || tl.snapshot_run) : null
   // consistent === null means one side has not been seen yet. That is not a
   // fault, and flagging it as one would teach people to ignore the badge.
-  const broken = tl.consistent === false
+  const broken = tl ? tl.consistent === false : false
+  const paused = !!(sim && sim.paused)
 
   const title = broken
     ? `Timeline mismatch: snapshot is run ${tl.snapshot_run} at day `
       + `${tl.snapshot_day ?? '?'}, stream is run ${tl.stream_run} at day `
       + `${tl.stream_day ?? '?'}. The view is stitching two runs together and `
-      + `should not be trusted. Restart the feed as a single producer with `
-      + `--warmup-days N.`
-    : `Simulated day ${day ?? '—'}, producer run ${run || '—'}. `
-      + `Snapshot and live stream agree.`
+      + `should not be trusted. Restart the feed as a single producer.`
+    : `Simulated fab clock${paused ? ' (paused)' : ''}`
+      + `${run ? `, producer run ${run}` : ''}. Click for the live view.`
+
+  const cls = 'tl-badge'
+    + (broken ? ' tl-badge-bad' : '')
+    + (paused ? ' tl-badge-paused' : '')
 
   return (
-    <div className={broken ? 'tl-badge tl-badge-bad' : 'tl-badge'} title={title}>
+    <button className={cls} title={title} onClick={() => navigate('/')}>
       {broken && <span className="tl-warn" aria-hidden="true">⚠</span>}
       <span className="tl-day">
-        day {day == null ? '—' : Number(day).toFixed(1)}
+        day {simDay == null ? '—' : simDay.toFixed(2)}
       </span>
+      {paused && <span className="tl-paused-text">paused</span>}
       {run && <span className="tl-run">{run}</span>}
       {broken && <span className="tl-bad-text">timeline mismatch</span>}
-    </div>
+    </button>
   )
 }
 
@@ -1038,7 +1063,7 @@ export default function App() {
         {/* The live pill and, when the rail is closed, the only way back into
             the assistant -- kept together in the top-right corner. */}
         <div className="header-right">
-          <TimelineBadge state={state} />
+          <TimelineBadge state={state} navigate={navigate} />
           <SpeedControl connected={connected} />
           {!assistantOpen && (
             <button className="rail-reopen" onClick={() => setAssistantOpen(true)}
