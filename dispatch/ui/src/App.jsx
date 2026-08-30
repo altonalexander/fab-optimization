@@ -234,6 +234,168 @@ function TopologyMetrics({ zones, state, link, connected }) {
   )
 }
 
+// A picture of the same policy the table below states in words. Every rect,
+// arrow and label is read out of zones.yaml — nothing here is hand-placed, so
+// adding a zone or a boundary redraws the diagram instead of stale-ing it.
+//
+// Vertical position IS the trust gradient: zone 0 (hostile equipment) at the
+// top, zone 3 (the only zone a human logs into) at the bottom. A dual-homed
+// service is drawn straddling the line it is allowed to cross, which is the
+// visual claim the whole design rests on: the only way down the page is
+// through one of three reviewed processes.
+function ZoneDiagram({ zones }) {
+  if (!zones || !zones.zones) return <div className="muted">loading topology…</div>
+
+  const BAND_H = 92, GAP = 104, X0 = 8, BAND_W = 516, W = 772
+  const bands = zones.zones.map((z, i) => ({ z, y: 18 + i * (BAND_H + GAP) }))
+  const H = 18 + bands.length * BAND_H + (bands.length - 1) * GAP + 14
+  const byName = new Map(bands.map(b => [b.z.name, b]))
+  const byId = (id) => bands.find(b => b.z.id === id)
+
+  const boundaries = (zones.boundaries || []).map(b => {
+    const ids = [...b.zones].sort((p, q) => p - q)
+    const lo = byId(ids[0]), hi = byId(ids[ids.length - 1])
+    const y = lo && hi ? (lo.y + BAND_H + hi.y) / 2 : 0
+    return { ...b, y }
+  })
+
+  // A flow endpoint is either a zone (→ band centre) or the mediating service
+  // itself (→ the boundary line). Drawing it that way is why the adapter's two
+  // hops read as one descent from equipment to realtime rather than two
+  // unrelated arrows.
+  const yOf = (name, bnd) =>
+    byName.has(name) ? byName.get(name).y + BAND_H / 2 : bnd.y
+
+  // SVG <text> does not wrap, and the denied rules are written as prose in
+  // zones.yaml, so they are broken into tspans here rather than truncated:
+  // "no path exists from a browser to the dispatcher" is the sentence most
+  // worth reading in the whole diagram.
+  const wrap = (s, n) => {
+    const lines = []
+    let cur = ''
+    for (const w of String(s).split(/\s+/)) {
+      if (cur && (cur + ' ' + w).length > n) { lines.push(cur); cur = w }
+      else cur = cur ? cur + ' ' + w : w
+    }
+    if (cur) lines.push(cur)
+    return lines
+  }
+
+  return (
+    <svg className="zone-diagram" viewBox={`0 0 ${W} ${H}`}
+         role="img" aria-label="Network segmentation and boundary crossings">
+      <defs>
+        <marker id="zd-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="#475569" />
+        </marker>
+      </defs>
+
+      {boundaries.map((b, i) => (
+        <g key={`b${i}`}>
+          <line x1={X0} y1={b.y} x2={X0 + BAND_W} y2={b.y}
+                stroke="#94a3b8" strokeWidth="1" strokeDasharray="5 4" />
+
+          {(b.allowed || []).map((a, j) => {
+            const x = X0 + 150 + j * 128
+            const y1 = yOf(a.from, b), y2 = yOf(a.to, b)
+            const down = y2 > y1
+            const pad = 6
+            return (
+              <g key={`a${j}`}>
+                <line x1={x} y1={y1 + (down ? pad : -pad)}
+                      x2={x} y2={y2 + (down ? -pad : pad)}
+                      stroke="#475569" strokeWidth="1.5"
+                      markerEnd="url(#zd-arrow)" />
+                <text x={x + 6} y={(y1 + y2) / 2 - 2} className="zd-flow">
+                  {a.proto}
+                </text>
+                <text x={x + 6} y={(y1 + y2) / 2 + 10} className="zd-flow zd-dim">
+                  {a.port == null ? (a.mode || '') : `:${a.port}`}
+                  {a.port != null && a.mode ? ` · ${a.mode}` : ''}
+                </text>
+              </g>
+            )
+          })}
+
+          {/* The pill sits ON the line, half in each zone: that is what
+              dual-homed means, and it is the only thing on the line. */}
+          <rect x={X0 + 6} y={b.y - 14} width={126} height={28} rx={14}
+                fill="#fff" stroke="#475569" strokeWidth="1.5" />
+          <text x={X0 + 69} y={b.y + 4} textAnchor="middle" className="zd-svc">
+            {b.service}
+          </text>
+          <text x={X0 + 69} y={b.y + 26} textAnchor="middle"
+                className="zd-flow zd-dim">
+            {b.direction}
+          </text>
+
+          {(() => {
+            const blocks = (b.denied || []).map(d => wrap(d, 40))
+            const total = blocks.reduce((n, l) => n + l.length, 0)
+                        + blocks.length - 1
+            let row = 0
+            return blocks.map((lines, j) => {
+              const g = (
+                <text key={`d${j}`} x={X0 + BAND_W + 22}
+                      y={b.y - (total * 11) / 2 + row * 11} className="zd-deny">
+                  {lines.map((ln, k) => (
+                    <tspan key={k} x={X0 + BAND_W + 22} dy={k ? 11 : 0}>
+                      {k === 0 ? `✕ ${ln}` : `   ${ln}`}
+                    </tspan>
+                  ))}
+                </text>
+              )
+              row += lines.length + 1
+              return g
+            })
+          })()}
+        </g>
+      ))}
+
+      {bands.map(({ z, y }) => {
+        const c = ZONE_COLORS[z.name] || '#475569'
+        return (
+          <g key={z.id}>
+            <rect x={X0} y={y} width={BAND_W} height={BAND_H} rx={8}
+                  fill={c} fillOpacity="0.06" stroke={c} strokeWidth="2" />
+            <rect x={X0 + 12} y={y + 12} width={62} height={17} rx={4} fill={c} />
+            <text x={X0 + 43} y={y + 24} textAnchor="middle" className="zd-badge">
+              ZONE {z.id}
+            </text>
+            <text x={X0 + 84} y={y + 25} className="zd-name">{z.name}</text>
+            <text x={X0 + BAND_W - 12} y={y + 25} textAnchor="end"
+                  className={z.egress ? 'zd-tag zd-tag-warn' : 'zd-tag zd-tag-ok'}>
+              {z.egress ? 'egress' : 'no egress'}
+            </text>
+            <text x={X0 + 13} y={y + 46} className="zd-flow zd-dim">
+              {z.subnet} · {(z.protocols || []).join(', ')}
+              {z.latency_budget_ms != null
+                ? ` · ${z.latency_budget_ms}ms budget` : ''}
+            </text>
+            {(() => {
+              // Members share one row, so the pill shrinks to fit the widest
+              // zone rather than spilling past the band it belongs to.
+              const n = (z.members || []).length
+              if (!n) return null
+              const pitch = Math.min(116, (BAND_W - 26) / n)
+              const w = pitch - 6
+              return z.members.map((m, i) => (
+                <g key={m}>
+                  <rect x={X0 + 13 + i * pitch} y={y + 58} width={w} height={20}
+                        rx={4} fill="#fff" stroke={c} strokeOpacity="0.45" />
+                  <text x={X0 + 13 + i * pitch + w / 2} y={y + 72}
+                        textAnchor="middle" className="zd-member">{m}</text>
+                </g>
+              ))
+            })()}
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
 function ZoneMap({ zones, roles }) {
   if (!zones) return <div className="muted">loading topology…</div>
   return (
@@ -897,6 +1059,7 @@ export default function App() {
                            connected={connected} />
           <section>
             <h3>Network segmentation</h3>
+            <ZoneDiagram zones={zones} />
             <ZoneMap zones={zones} roles={topo && topo.roles} />
           </section>
         </>
