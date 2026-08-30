@@ -181,7 +181,14 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 /* Timeline provenance badge ------------------------------------------------ */
 .tl-badge{display:flex;align-items:center;gap:7px;padding:4px 10px;
   border:1px solid var(--line);border-radius:999px;background:var(--card);
-  font-size:12px;white-space:nowrap;cursor:default}
+  font-size:12px;white-space:nowrap;cursor:pointer;font-family:inherit;
+  color:inherit}
+.tl-badge:hover{border-color:#9ca3af}
+/* Tabular figures so a ticking clock does not jitter its own width. */
+.tl-day{font-variant-numeric:tabular-nums}
+.tl-badge-paused{background:#fffbeb;border-color:#f59e0b}
+.tl-paused-text{font-size:10px;text-transform:uppercase;letter-spacing:.04em;
+  color:#92400e}
 .tl-day{font-weight:600}
 .tl-run{font-family:ui-monospace,monospace;font-size:10px;color:#6b7280}
 /* Loud on purpose: a stitched timeline makes every chart wrong, and the whole
