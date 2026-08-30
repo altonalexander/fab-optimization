@@ -238,16 +238,17 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   color:#6b7280;padding:0 4px}
 .rail-toggle:hover{color:var(--fg)}
 
-/* Collapsed state: this button is the only way back in, so it is deliberately
-   loud -- a big pill in the bottom-right corner, under the rail it opens. */
-.rail-reopen{position:fixed;right:22px;bottom:22px;
-  display:flex;align-items:center;gap:8px;
-  padding:14px 22px;border:0;
-  border-radius:999px;background:#111827;color:#fff;cursor:pointer;
-  font-size:15px;font-weight:600;letter-spacing:.01em;font-family:inherit;
-  box-shadow:0 6px 20px rgba(0,0,0,.30);z-index:41}
-.rail-reopen:hover{background:#1f2937;box-shadow:0 8px 26px rgba(0,0,0,.36)}
-.rail-reopen-icon{font-size:17px;line-height:1}
+/* Collapsed state: this button is the only way back in, so it sits in the
+   header next to the live pill and is the loudest thing up there -- solid
+   fill against the outlined pills around it. */
+.header-right{display:flex;align-items:center;gap:10px}
+.rail-reopen{display:inline-flex;align-items:center;gap:7px;
+  padding:6px 14px;border:0;border-radius:999px;
+  background:#111827;color:#fff;cursor:pointer;
+  font-size:13px;font-weight:600;letter-spacing:.01em;font-family:inherit;
+  box-shadow:0 1px 6px rgba(0,0,0,.20)}
+.rail-reopen:hover{background:#1f2937;box-shadow:0 2px 10px rgba(0,0,0,.28)}
+.rail-reopen-icon{font-size:14px;line-height:1}
 
 /* The rail owns the height; the chat fills it rather than a fixed 520px. */
 .rail .chat{height:auto;flex:1;min-height:0}

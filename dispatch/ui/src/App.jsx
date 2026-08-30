@@ -750,7 +750,18 @@ export default function App() {
                title="Swagger UI, generated from the API's URL map">API docs</a>
           </div>
         </div>
-        <SpeedControl connected={connected} />
+        {/* The live pill and, when the rail is closed, the only way back into
+            the assistant -- kept together in the top-right corner. */}
+        <div className="header-right">
+          <SpeedControl connected={connected} />
+          {!assistantOpen && (
+            <button className="rail-reopen" onClick={() => setAssistantOpen(true)}
+                    title="Open the assistant">
+              <span className="rail-reopen-icon" aria-hidden="true">&#9776;</span>
+              Assistant
+            </button>
+          )}
+        </div>
       </header>
 
       <div className="stats-row">
@@ -911,14 +922,6 @@ export default function App() {
           <ChatPanel />
         </aside>
       </div>
-
-      {!assistantOpen && (
-        <button className="rail-reopen" onClick={() => setAssistantOpen(true)}
-                title="Open the assistant">
-          <span className="rail-reopen-icon" aria-hidden="true">&#9776;</span>
-          Assistant
-        </button>
-      )}
     </div>
   )
 }
