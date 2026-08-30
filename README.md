@@ -91,16 +91,35 @@ second UI being maintained.
 
 ## Running it
 
-**The dashboard, locally, no Docker:**
+**The dashboard, locally, no Docker.** The simulator runs in two modes:
+
+*Mode 1 — headless.* No feed, no pacing, as fast as possible. This is what you
+use for KPIs and parameter tuning:
 
 ```bash
-scripts/dev-up.sh            # builds, installs, starts api :8000 and ui :5173
-scripts/dev-up.sh --status
-scripts/dev-up.sh --stop
+baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 30 --top 15
 ```
 
-Run it directly, not through a pipe — see the note in the script. Live panels
-stay empty without Kafka; that needs the Docker path below.
+*Mode 2 — producer.* The simulator emits events the dashboard consumes, paced,
+so you can watch near-realtime:
+
+```bash
+# terminal 1 — api :8000 and ui :5173, reading a file feed instead of Kafka
+DEMO_LOTS=1 FEED_FILE=/tmp/fab-feed.jsonl scripts/dev-up.sh
+
+# terminal 2 — the simulator as producer; --speed is sim-seconds per wall-second
+baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+    --out /tmp/fab-feed.jsonl --days 3 --speed 400 --tool-prefix Litho --truncate
+```
+
+Then open http://localhost:5173/. `--speed 0` fills the dashboard as fast as
+the sim runs; Ctrl-C the producer to pause. `--tool-prefix` matters: the whole
+fab emits ~22k dispatch events per simulated day.
+
+Run `dev-up.sh` directly, not through a pipe — see the note in the script.
+`FEED_FILE` replaces Kafka rather than supplementing it; without either, the
+live panels stay empty and `DEMO_LOTS=1` is what keeps the scenario button
+working.
 
 **The full four-zone stack:**
 
@@ -154,9 +173,10 @@ Honest accounting, because the numbers here have been wrong before:
 - `dispatch/README.md`'s "at 400 lots a 1s budget is optimal" is **wrong** on
   the measured build; the threshold is between 1s and 2s. A 1s-tuned cycle would
   silently run greedy while reporting cpsat linked.
-- `/api/scenario/compare` cannot succeed as the UI calls it: the UI posts only
-  `tool_overrides`, the scenario binary requires a `lots` array, and nothing
-  injects one. It returns 500 every time.
+- `src/mes_producer_main.cpp` and `src/equipment_sim_main.cpp` **do not exist**,
+  but `infra/Dockerfile.simulator` compiles them with `|| true`. The Docker
+  `mes-producer` service therefore cannot supply data. `bench/tools/sim_feed.py`
+  is the working producer; the C++ one has never existed.
 - Gurobi and HiGHS are declared backends that fall through to greedy.
 
 See `BUILD.md` for the toolchain and the OR-Tools recipe,
