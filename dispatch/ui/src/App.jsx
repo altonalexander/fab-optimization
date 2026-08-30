@@ -23,7 +23,18 @@ function useLiveState() {
   const [feed, setFeed] = useState([])
   const [connected, setConnected] = useState(false)
   const [history, setHistory] = useState([])
+  // Measured link metrics, not modelled ones: every number below is derived
+  // from messages that actually arrived on this browser's SSE connection.
+  const [link, setLink] = useState({
+    eventRate: null,     // envelopes/s across the data zone, 10s window
+    lagMs: null,         // api snapshot timestamp -> arrival at this browser
+    heartbeatMs: null,   // observed interval between state frames
+    rateHistory: [],     // sparkline of eventRate
+    totalMsgs: 0,
+  })
   const feedRef = useRef([])
+  const marksRef = useRef([])          // arrival times of event/decision frames
+  const lastStateRef = useRef(null)    // arrival time of the previous state frame
 
   useEffect(() => {
     let es
@@ -33,6 +44,7 @@ function useLiveState() {
       es.onerror = () => { setConnected(false); es.close(); setTimeout(connect, 3000) }
       es.onmessage = (e) => {
         const msg = JSON.parse(e.data)
+        const now = Date.now()
         if (msg.kind === 'state') {
           setState(msg.state)
           setHistory(h => [...h.slice(-119), {
@@ -41,7 +53,29 @@ function useLiveState() {
             inFlight: msg.state.in_flight,
             completed: msg.state.completed,
           }])
+          // Rate over a 10s trailing window. Short enough to react, long
+          // enough that a single burst does not make the number meaningless.
+          const marks = marksRef.current.filter(t => now - t < 10000)
+          marksRef.current = marks
+          const parsed = Date.parse(msg.state.ts)
+          const lag = Number.isNaN(parsed) ? null : Math.max(0, now - parsed)
+          const beat = lastStateRef.current ? now - lastStateRef.current : null
+          lastStateRef.current = now
+          setLink(l => {
+            const rate = marks.length / 10
+            return {
+              ...l,
+              eventRate: rate,
+              lagMs: lag,
+              heartbeatMs: beat,
+              rateHistory: [...l.rateHistory.slice(-59), {
+                t: new Date().toLocaleTimeString(), rate: Number(rate.toFixed(2)),
+              }],
+            }
+          })
         } else if (msg.kind === 'event' || msg.kind === 'decision') {
+          marksRef.current.push(now)
+          setLink(l => ({ ...l, totalMsgs: l.totalMsgs + 1 }))
           feedRef.current = [msg, ...feedRef.current].slice(0, 60)
           setFeed(feedRef.current)
         }
@@ -53,7 +87,7 @@ function useLiveState() {
     return () => es && es.close()
   }, [])
 
-  return { state, feed, connected, history }
+  return { state, feed, connected, history, link }
 }
 
 function Stat({ label, value, sub, accent }) {
@@ -66,7 +100,133 @@ function Stat({ label, value, sub, accent }) {
   )
 }
 
-function ZoneMap({ zones }) {
+// Derives the flow graph from the boundary policy itself, so these counts
+// cannot drift from zones.yaml: an edge is an entry under boundaries[].allowed,
+// and a node is whatever that entry names (a zone, or the dual-homed service
+// that mediates it). Source = emits but never receives, sink = the reverse,
+// relay = both. Nothing here is hand-maintained.
+function analyzeTopology(zones) {
+  if (!zones || !zones.zones) return null
+  const out = new Map(), inn = new Map()
+  const touch = (m, k) => m.set(k, (m.get(k) || 0) + 1)
+  const edges = []
+  for (const b of zones.boundaries || []) {
+    for (const a of b.allowed || []) {
+      if (!a.from || !a.to) continue
+      edges.push({ ...a, service: b.service })
+      touch(out, a.from); touch(inn, a.to)
+      if (!inn.has(a.from)) inn.set(a.from, 0)
+      if (!out.has(a.to)) out.set(a.to, 0)
+    }
+  }
+  const nodes = [...new Set([...out.keys(), ...inn.keys()])]
+  const roleOf = (n) => {
+    const o = out.get(n) || 0, i = inn.get(n) || 0
+    if (o && !i) return 'source'
+    if (i && !o) return 'sink'
+    return 'relay'
+  }
+  const roles = Object.fromEntries(nodes.map(n => [n, roleOf(n)]))
+  const protocols = new Set()
+  for (const z of zones.zones) (z.protocols || []).forEach(p => protocols.add(p))
+  const budget = zones.zones
+    .map(z => z.latency_budget_ms)
+    .filter(v => typeof v === 'number')
+  return {
+    edges,
+    roles,
+    sources: nodes.filter(n => roles[n] === 'source'),
+    sinks: nodes.filter(n => roles[n] === 'sink'),
+    relays: nodes.filter(n => roles[n] === 'relay'),
+    dualHomed: (zones.boundaries || []).map(b => b.service),
+    protocols: [...protocols],
+    tightestBudgetMs: budget.length ? Math.min(...budget) : null,
+  }
+}
+
+const fmtMs = (v) => v == null ? '—' : v < 10 ? v.toFixed(1) : Math.round(v)
+
+function TopologyMetrics({ zones, state, link, connected }) {
+  const g = useMemo(() => analyzeTopology(zones), [zones])
+  if (!g) return null
+
+  // The realtime zone's budget is a policy number; the lag we measure is the
+  // enterprise-side mirror path (zone 2 -> 3 -> browser). They are different
+  // paths, so they are labelled separately rather than compared.
+  const lagAccent = link.lagMs != null && link.lagMs > 2000 ? '#b91c1c' : undefined
+
+  return (
+    <>
+      <div className="stats-row">
+        <Stat label="event throughput"
+              value={link.eventRate == null ? '—' : link.eventRate.toFixed(1)}
+              sub="envelopes/s · 10s window" />
+        <Stat label="lot throughput"
+              value={state ? state.throughput_lots_per_hour : '—'}
+              sub="lots/hr · 120s window" />
+        <Stat label="mirror lag" value={fmtMs(link.lagMs)}
+              accent={lagAccent} sub="ms · zone 2→3→browser" />
+        <Stat label="heartbeat" value={fmtMs(link.heartbeatMs)}
+              sub="ms between state frames" />
+        <Stat label="sources" value={g.sources.length}
+              sub={g.sources.join(', ') || '—'} />
+        <Stat label="sinks" value={g.sinks.length}
+              sub={g.sinks.join(', ') || '—'} />
+        <Stat label="relays" value={g.relays.length}
+              sub={g.relays.join(', ') || '—'} />
+        <Stat label="boundary crossings" value={g.edges.length}
+              sub={`${g.dualHomed.length} dual-homed services`} />
+        <Stat label="rt budget"
+              value={g.tightestBudgetMs == null ? '—' : g.tightestBudgetMs}
+              sub="ms · zone 1 policy, not measured" />
+        <Stat label="frames seen" value={link.totalMsgs}
+              accent={connected ? undefined : '#b91c1c'}
+              sub={connected ? 'stream live' : 'stream down'} />
+      </div>
+
+      <section>
+        <h3>Event rate</h3>
+        {link.rateHistory.length < 2
+          ? <div className="muted">sampling…</div>
+          : (
+            <ResponsiveContainer width="100%" height={160}>
+              <LineChart data={link.rateHistory}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={40} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Line type="monotone" dataKey="rate" stroke="#1d4ed8" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+      </section>
+
+      <section>
+        <h3>Boundary crossings</h3>
+        <table className="tbl">
+          <thead>
+            <tr><th>service</th><th>from</th><th>to</th><th>protocol</th>
+                <th>port</th><th>mode</th></tr>
+          </thead>
+          <tbody>
+            {g.edges.map((e, i) => (
+              <tr key={i}>
+                <td><code>{e.service}</code></td>
+                <td>{e.from}</td>
+                <td>{e.to}</td>
+                <td>{e.proto}</td>
+                <td>{e.port == null ? '—' : e.port}</td>
+                <td>{e.mode || 'bidirectional'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </>
+  )
+}
+
+function ZoneMap({ zones, roles }) {
   if (!zones) return <div className="muted">loading topology…</div>
   return (
     <div className="zones">
@@ -77,6 +237,9 @@ function ZoneMap({ zones }) {
               ZONE {z.id}
             </span>
             <strong>{z.name}</strong>
+            {roles && roles[z.name] && (
+              <span className="member">{roles[z.name]}</span>
+            )}
             <span className={z.egress ? 'tag tag-warn' : 'tag tag-ok'}>
               {z.egress ? 'egress' : 'no egress'}
             </span>
@@ -391,10 +554,11 @@ function Embedded({ src, title }) {
 }
 
 export default function App() {
-  const { state, feed, connected, history } = useLiveState()
+  const { state, feed, connected, history, link } = useLiveState()
   const [zones, setZones] = useState(null)
   const [tab, setTab] = useState('live')
   const [openTool, setOpenTool] = useState(null)
+  const topo = useMemo(() => analyzeTopology(zones), [zones])
   // Remembered per browser so the rail does not reappear every reload for
   // someone who closed it. Wrapped: some contexts throw on storage access.
   const [assistantOpen, setAssistantOpen] = useState(() => {
@@ -520,7 +684,14 @@ export default function App() {
       )}
 
       {tab === 'topology' && (
-        <section><h3>Network segmentation</h3><ZoneMap zones={zones} /></section>
+        <>
+          <TopologyMetrics zones={zones} state={state} link={link}
+                           connected={connected} />
+          <section>
+            <h3>Network segmentation</h3>
+            <ZoneMap zones={zones} roles={topo && topo.roles} />
+          </section>
+        </>
       )}
 
       <footer className="muted">
