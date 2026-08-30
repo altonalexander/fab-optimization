@@ -374,6 +374,22 @@ function ToolIndex({ onOpen }) {
   )
 }
 
+// The route explorer and the bench results are self-contained static pages
+// with their own design system. They are framed rather than ported: rewriting
+// 360KB of hand-tuned SVG into React would lose fidelity and buy nothing,
+// since neither page fetches anything -- their data is embedded.
+function Embedded({ src, title }) {
+  return (
+    <div className="embed-wrap">
+      <iframe src={src} title={title} className="embed-frame" loading="lazy" />
+      <div className="embed-foot muted">
+        Static page ·{' '}
+        <a href={src} target="_blank" rel="noreferrer">open full screen</a>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const { state, feed, connected, history } = useLiveState()
   const [zones, setZones] = useState(null)
@@ -430,7 +446,7 @@ export default function App() {
         <div className="shell-main">
 
       <nav className="tabs">
-        {['live', 'tools', 'floor', 'scenario', 'topology'].map(t => (
+        {['live', 'tools', 'floor', 'routes', 'results', 'scenario', 'topology'].map(t => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -482,6 +498,20 @@ export default function App() {
         <section>
           <h3>Cleanroom floor</h3>
           <FloorMap onOpenTool={(id) => { setOpenTool(id); setTab('tools') }} />
+        </section>
+      )}
+
+      {tab === 'routes' && (
+        <section>
+          <h3>Route explorer</h3>
+          <Embedded src="/route-explorer.html" title="Fab Route Explorer" />
+        </section>
+      )}
+
+      {tab === 'results' && (
+        <section>
+          <h3>Simulation results</h3>
+          <Embedded src="/bench-results.html" title="Fab Dispatch Bench" />
         </section>
       )}
 

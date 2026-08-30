@@ -121,6 +121,16 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   font-size:13px;font-family:inherit;margin-bottom:8px}
 .link:hover{text-decoration:underline}
 
+/* Embedded static pages ---------------------------------------------------- */
+/* Tall enough to be usable inside the dashboard shell, with the escape hatch
+   below it -- these pages were designed full-width and some views want it. */
+.embed-wrap{border:1px solid var(--line);border-radius:8px;overflow:hidden;
+  background:var(--card)}
+.embed-frame{display:block;width:100%;height:calc(100vh - 260px);min-height:520px;
+  border:0}
+.embed-foot{padding:6px 12px;border-top:1px solid var(--line);font-size:11px;
+  background:#fafafa}
+
 /* Floor map --------------------------------------------------------------- */
 .floor-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start}
 .floor-wrap:has(.floor-panel){grid-template-columns:minmax(0,1fr) 260px}
