@@ -179,5 +179,4 @@ Honest accounting, because the numbers here have been wrong before:
   is the working producer; the C++ one has never existed.
 - Gurobi and HiGHS are declared backends that fall through to greedy.
 
-See `BUILD.md` for the toolchain and the OR-Tools recipe,
-`docs-background-information.md` for the original design rationale.
+See `BUILD.md` for the toolchain and the OR-Tools recipe.
