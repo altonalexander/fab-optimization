@@ -660,9 +660,14 @@ class FeedPlugin(IPlugin):
             self._write(LOT_TOPIC, envelope(
                 type='LOT_STARTED', lot=self._lot_id(lot), tool=tool,
                 recipe=lot.actual_step.step_name, prio=1))
+        # run stamps every stream, not just burndown. A consumer that cannot
+        # tell which run an event came from cannot notice that it is stitching
+        # two timelines together -- state from day 5 drawn against decisions
+        # from day 30, silently, which is exactly what happened.
         self._write(DECISION_TOPIC, envelope(
             tool=tool, lots=len(lots), queue=len(machine.waiting_lots),
             day=round(instance.current_time / 86400, 4),
+            run=self.run_id,
             setup=machine.current_setup or '-'))
 
     def on_lot_done(self, instance, lot):
@@ -721,7 +726,7 @@ class FeedPlugin(IPlugin):
                 type='LOT_STATE', lot=L['lot'], product=L['product'],
                 part=L.get('part') or L['product'],
                 step=L['step'], tool=L['tool'], done_steps=L['done_steps'],
-                run=self.run_id, warm_t=self._warm_t,
+                run=self.run_id, warm_t=self._warm_t, day=snap['day'],
                 cohort=self._cohort_of(L['lot']), hist=hist or None),
                 key=L['lot'])
             n += 1
@@ -729,7 +734,8 @@ class FeedPlugin(IPlugin):
             if self.tool_filter and not T['tool'].startswith(self.tool_filter):
                 continue
             self.sink.write(TOOL_STATE_TOPIC, envelope(
-                type='TOOL_STATE', tool=T['tool'], online=T['online']),
+                type='TOOL_STATE', tool=T['tool'], online=T['online'],
+                run=self.run_id, day=snap['day']),
                 key=T['tool'])
             n += 1
         self.emitted += n
@@ -905,7 +911,10 @@ def main():
     # do not publish the first N days.
     from_day = a.warmup_days if warm_s is not None else a.from_day
     speed = 0.0 if warm_s is not None else a.speed
-    if warm_s is not None:
+    if warm_s == 0:
+        print('  no warm-up: snapshotting the WIP the dataset ships with, '
+              'then streaming', file=sys.stderr)
+    elif warm_s is not None:
         print(f'  warming up to day {a.warmup_days:g} (unpaced, silent) — '
               f'about {a.warmup_days * 3 / 30:.0f} min of CPU',
               file=sys.stderr)
@@ -935,7 +944,11 @@ def main():
             # actually achieved rather than from an estimate, because the
             # machine is usually shared and the achieved rate is the only
             # honest predictor.
-            if warm_s is not None and not warmed \
+            # warm_s > 0 guards --warmup-days 0, which is a legitimate and
+            # useful request -- snapshot the WIP the dataset ships with and
+            # stream from there, no warm-up at all -- and which divided by zero
+            # here before it ever reached the snapshot.
+            if warm_s and not warmed \
                     and instance.current_time >= next_report:
                 el = time.time() - t_start
                 done_frac = instance.current_time / warm_s

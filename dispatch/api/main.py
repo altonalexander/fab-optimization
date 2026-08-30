@@ -139,6 +139,15 @@ class FabMirror:
         # evicted long before anyone drills into it, so the detail view would
         # always show an empty history. Bounded per tool, so still no leak.
         self.tool_recent = defaultdict(lambda: deque(maxlen=40))
+        # Timeline provenance: which producer run and simulated day the
+        # snapshot came from, and which the live stream is on. Without both
+        # sides the mirror cannot notice it is stitching two runs together --
+        # a day-5 WIP snapshot drawn against a day-30 decision stream looked
+        # entirely healthy.
+        self.snapshot_run = None
+        self.snapshot_day = None
+        self.stream_run = None
+        self.stream_day = None
         # Cohort burndown. `burndown` holds compact points; `lot_meta` holds the
         # per-lot constants (cohort, route length, due date) that would
         # otherwise be repeated on every point.
@@ -411,7 +420,40 @@ class FabMirror:
                       "wq": wq, "wb": wb, "wp": wp, "rem_s": rem_s})
         return series, meta, sim_t, warm_t
 
+    def note_timeline(self, run, day, source):
+        """Record which run/day a record came from.
+
+        Cheap, and the difference between a wrong dashboard and a dashboard
+        that says it is wrong.
+        """
+        if source == "snapshot":
+            if run:
+                self.snapshot_run = run
+            if day is not None:
+                self.snapshot_day = day
+        else:
+            if run:
+                self.stream_run = run
+            if day is not None:
+                self.stream_day = day
+
+    def timeline_view(self):
+        """Provenance, and whether snapshot and stream are the same run.
+
+        None for `consistent` means one side has not been seen yet. Unknown is
+        not the same as disagreeing, and flagging it as a fault would teach
+        people to ignore the badge.
+        """
+        ok = (self.snapshot_run == self.stream_run
+              if (self.snapshot_run and self.stream_run) else None)
+        return {
+            "snapshot_run": self.snapshot_run, "snapshot_day": self.snapshot_day,
+            "stream_run": self.stream_run, "stream_day": self.stream_day,
+            "consistent": ok,
+        }
+
     def add_decision(self, d):
+        self.note_timeline(d.get("run"), _as_float(d.get("day")), "stream")
         with self.lock:
             self.decisions.append({**d, "ts": time.time()})
             # Decisions carry the simulated clock as a day number. Advancing
@@ -497,6 +539,7 @@ class FabMirror:
                 "completed": self.counts.get("LOT_COMPLETE", 0),
                 "throughput_lots_per_hour": round(rate, 1),
                 "decisions_seen": len(self.decisions),
+                "timeline": self.timeline_view(),
                 # The simulated clock, and the pacing that clock is running
                 # at, on the same frame as the counts they describe. Polled
                 # separately they would disagree: a live chart plotted against
@@ -537,6 +580,47 @@ def parse_envelope(payload: str) -> dict:
             k, v = tok.split("=", 1)
             out[k] = v
     return out
+
+
+def apply_state_record(topic, ev):
+    """Apply one compacted state record. Shared by bootstrap and the live loop.
+
+    A snapshot record is authoritative: it replaces whatever the mirror
+    believed, in both directions. Extracted so the two paths cannot drift --
+    a snapshot arriving after boot has to land exactly as one arriving during
+    it, and before this was shared, one path simply did not exist.
+    """
+    mirror.note_timeline(ev.get("run"), _as_float(ev.get("day")), "snapshot")
+    if topic == "fab.lot.state":
+        lot = ev.get("lot")
+        if not lot:
+            return 0
+        tool = ev.get("tool")
+        with mirror.lock:
+            mirror.lots_ready.pop(lot, None)
+            mirror.in_flight.pop(lot, None)
+            if tool:
+                mirror.in_flight[lot] = tool
+            else:
+                mirror.lots_ready[lot] = ev
+            # Same record also carries the warm-up burndown, which is the only
+            # place an active lot's past exists.
+            mirror._apply_lot_state(ev)
+        return 1
+    tool = ev.get("tool")
+    if not tool:
+        return 0
+    online = ev.get("online") != "0"
+    with mirror.lock:
+        mirror.tools[tool] = {"online": online, "last_seen": time.time()}
+        # Snapshots restore down tools too. Arm the watchdog for them, or a
+        # tool that was offline when the snapshot was taken is never swept.
+        if online:
+            mirror.down_since.pop(tool, None)
+            mirror.recovered_by.pop(tool, None)
+        else:
+            mirror.down_since.setdefault(tool, time.time())
+    return 1
 
 
 def bootstrap_from_state(Consumer):
@@ -602,41 +686,9 @@ def bootstrap_from_state(Consumer):
             remaining -= 1
             ev = parse_envelope(msg.value().decode("utf-8", "replace"))
             if msg.topic() == "fab.lot.state":
-                lot = ev.get("lot")
-                if not lot:
-                    continue
-                tool = ev.get("tool")
-                with mirror.lock:
-                    # A snapshot record is authoritative: it replaces whatever
-                    # the mirror believed, in both directions.
-                    mirror.lots_ready.pop(lot, None)
-                    mirror.in_flight.pop(lot, None)
-                    if tool:
-                        mirror.in_flight[lot] = tool
-                    else:
-                        mirror.lots_ready[lot] = ev
-                    # Same record also carries the warm-up burndown, which is
-                    # the only place an active lot's past exists.
-                    mirror._apply_lot_state(ev)
-                lots += 1
+                lots += apply_state_record(msg.topic(), ev)
             else:
-                tool = ev.get("tool")
-                if tool:
-                    online = ev.get("online") != "0"
-                    with mirror.lock:
-                        mirror.tools[tool] = {
-                            "online": online,
-                            "last_seen": time.time(),
-                        }
-                        # Snapshots restore down tools too. Arm the watchdog
-                        # for them, or a tool that was offline when the
-                        # snapshot was taken is never swept.
-                        if online:
-                            mirror.down_since.pop(tool, None)
-                            mirror.recovered_by.pop(tool, None)
-                        else:
-                            mirror.down_since.setdefault(tool, time.time())
-                    tools += 1
+                tools += apply_state_record(msg.topic(), ev)
     except Exception as e:
         print(f"[bootstrap] {e!r}", file=sys.stderr, flush=True)
     finally:
@@ -660,8 +712,15 @@ def kafka_consumer_loop():
         "enable.auto.commit": True,      # a mirror may lose its place safely
     })
     bootstrap_from_state(Consumer)
+    # The state topics are consumed live as well as at bootstrap. A snapshot
+    # published after the API started -- which is the normal case, since the
+    # feed is a separate process people start whenever -- would otherwise never
+    # be applied: bootstrap already ran against an empty topic and nothing
+    # would look again. That produced a dashboard showing 41 lots instead of
+    # 2,164. A compacted state topic is current truth whenever it arrives, not
+    # only at boot.
     c.subscribe(["fab.lot.events", "fab.tool.events", "fab.dispatch.decisions",
-                 "fab.lot.burndown"])
+                 "fab.lot.burndown", "fab.lot.state", "fab.tool.state"])
     app.logger.info("kafka mirror attached to %s", KAFKA_BROKERS)
 
     while True:
@@ -672,6 +731,8 @@ def kafka_consumer_loop():
         topic = msg.topic()
         if topic == "fab.dispatch.decisions":
             mirror.add_decision(parse_envelope(payload))
+        elif topic in ("fab.lot.state", "fab.tool.state"):
+            apply_state_record(topic, parse_envelope(payload))
         else:
             mirror.apply(topic, parse_envelope(payload))
 

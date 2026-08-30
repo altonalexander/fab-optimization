@@ -6,8 +6,15 @@
 # Live panels stay empty without Kafka -- see NOTE at the end of the run.
 #
 #   scripts/dev-up.sh          start, wait for health, print URLs
+#   scripts/dev-up.sh --feed   also start the simulator feed (the dashboard is
+#                              empty without a producer)
+#   scripts/dev-up.sh --fresh  drop kafka + postgres volumes first, so no
+#                              snapshot from an older run is bootstrapped
 #   scripts/dev-up.sh --stop   stop whatever this script started
 #   scripts/dev-up.sh --status show what is listening
+#
+# FEED_DAYS / FEED_WARMUP / FEED_SPEED override the feed defaults
+# (40 days, no warm-up, 20x realtime).
 #
 # KNOWN ISSUE: run this directly, not through a pipe. Piping it
 # (`dev-up.sh | tee`) blocks after the services start -- a descendant keeps the
@@ -35,7 +42,7 @@ port_pid() { lsof -ti tcp:"$1" 2>/dev/null | head -1; }
 
 stop_all() {
   info 'stopping'
-  for name in api ui; do
+  for name in api ui feed; do
     pidfile="$RUN/$name.pid"
     if [[ -f "$pidfile" ]]; then
       pid="$(cat "$pidfile")"
@@ -72,11 +79,21 @@ status() {
   echo
 }
 
-case "${1:-}" in
-  --stop)   stop_all; exit 0 ;;
-  --status) status;   exit 0 ;;
-  --help|-h) sed -n '2,12p' "$0"; exit 0 ;;
-esac
+FRESH=0
+WANT_FEED=0
+for arg in "$@"; do
+  case "$arg" in
+    --stop)   stop_all; exit 0 ;;
+    --status) status;   exit 0 ;;
+    --help|-h) sed -n '2,20p' "$0"; exit 0 ;;
+    # Destructive and therefore explicit: drops the Kafka and Postgres volumes
+    # so the next start has no snapshot from an older run to bootstrap from.
+    # Stale state is what produced a day-5 fab drawn against a day-30 stream.
+    --fresh)  FRESH=1 ;;
+    --feed)   WANT_FEED=1 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
 
 # ---------------------------------------------------------------- prereqs ---
 info 'prerequisites'
@@ -111,6 +128,14 @@ else
   c_warn 'no docker'
 fi
 
+if (( DOCKER_OK )) && (( FRESH )); then
+  c_warn 'dropping kafka + postgres volumes (--fresh)'
+  ( cd "$DISPATCH/infra" && docker compose \
+      -f docker-compose.yml -f docker-compose.dev.yml \
+      --profile data down -v ) >"$RUN/fresh.log" 2>&1 \
+    && c_ok 'volumes dropped' || c_warn 'teardown reported errors'
+fi
+
 if (( DOCKER_OK )) && [[ "${SKIP_INFRA:-0}" != "1" ]]; then
   ( cd "$DISPATCH/infra" && docker compose \
       -f docker-compose.yml -f docker-compose.dev.yml \
@@ -124,9 +149,16 @@ if (( DOCKER_OK )) && [[ "${SKIP_INFRA:-0}" != "1" ]]; then
     sleep 1
   done
   # A broker that is up but has no topics looks identical to a broken feed.
-  docker exec fab-data-kafka /usr/bin/kafka-topics \
-      --bootstrap-server localhost:9092 --list 2>/dev/null \
-      | grep -q 'fab.lot.state' \
+  # Retried: kafka-init runs as its own container and finishes a few seconds
+  # after the broker reports healthy, so checking once races it and cries wolf.
+  TOPICS_OK=0
+  for _ in $(seq 1 20); do
+    if docker exec fab-data-kafka /usr/bin/kafka-topics \
+         --bootstrap-server localhost:9092 --list 2>/dev/null \
+         | grep -q 'fab.lot.state'; then TOPICS_OK=1; break; fi
+    sleep 1
+  done
+  (( TOPICS_OK )) \
     && c_ok 'kafka topics present (incl. compacted state)' \
     || c_warn 'kafka topics missing -- cold-start bootstrap will find nothing'
 else
@@ -215,6 +247,50 @@ rc=0
 wait_for "http://localhost:$API_PORT/health"          'api /health'        30 || rc=1
 wait_for "http://localhost:$UI_PORT/"                 'ui index'           30 || rc=1
 wait_for "http://localhost:$UI_PORT/api/state"        'ui -> api proxy'    15 || rc=1
+
+# ---------------------------------------------------------------- feed -----
+# The dashboard is empty without a producer, and the producer is a policy
+# choice (dataset, days, speed, where to start), so it is opt-in rather than
+# implied. One process does the snapshot AND the streaming: two processes mean
+# two run ids and a timeline the mirror will correctly flag as stitched.
+info 'feed'
+SIM_PY="$REPO/baselines/pyscfabsim/.venv/bin/python3"
+FEED_CMD=("$SIM_PY" "$REPO/bench/tools/sim_feed.py"
+          --days "${FEED_DAYS:-40}" --warmup-days "${FEED_WARMUP:-0}"
+          --speed "${FEED_SPEED:-20}")
+if (( WANT_FEED )); then
+  if [[ ! -x "$SIM_PY" ]]; then
+    c_bad "no baseline venv at $SIM_PY -- see baselines/pyscfabsim/UPSTREAM.md"
+  elif [[ -n "$(pgrep -f 'bench/tools/sim_feed.py' || true)" ]]; then
+    c_warn 'a feed is already running -- not starting a second'
+  else
+    ( cd "$REPO" && setsid nohup "${FEED_CMD[@]}" \
+        >"$RUN/feed.log" 2>&1 </dev/null & echo $! >"$RUN/feed.pid" )
+    c_ok "feed starting (log $RUN/feed.log)"
+  fi
+else
+  c_warn 'no feed started (--feed to start one). The dashboard will be empty:'
+  printf '        %s \\\n            --days %s --warmup-days %s --speed %s\n' \
+    "baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py" \
+    "${FEED_DAYS:-40}" "${FEED_WARMUP:-0}" "${FEED_SPEED:-20}"
+fi
+
+info 'timeline'
+# The one check that catches a stitched timeline: the mirror reports the run
+# its snapshot came from and the run the live stream is on. Disagreement means
+# every chart is drawing two fabs at once.
+TL=$(curl -sf -m 5 "http://localhost:$API_PORT/api/state" 2>/dev/null \
+     | "$API_PY" -c 'import json,sys
+try:
+    t = json.load(sys.stdin).get("timeline") or {}
+except Exception:
+    t = {}
+print(t.get("consistent"), t.get("snapshot_day"), t.get("stream_day"))' 2>/dev/null)
+case "$TL" in
+  False*) c_bad  "timeline MISMATCH ($TL) -- snapshot and stream are different runs" ;;
+  True*)  c_ok   "timeline consistent ($TL)" ;;
+  *)      c_warn "timeline not established yet (no feed, or none seen)" ;;
+esac
 
 info 'urls'
 echo "    dashboard   http://localhost:$UI_PORT/"
