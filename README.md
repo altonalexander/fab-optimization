@@ -93,14 +93,19 @@ fact two homes is how they drift.
 state machine with the wire codec stubbed; the Kafka bodies are sketched against
 librdkafka and not yet compiled.
 
-**The viewer** — two of them today, which is one too many.
-`dispatch/ui/` is a React 18 + Vite dashboard reading the Flask API
-(`/api/state`, `/api/stream`, `/api/zones`, `/api/scenario/compare`).
-`bench/tools/tool_probe.py` is a terminal per-tool view over the simulator.
-They share no transport. Unifying them is the next piece of work: have the
-simulator publish `DispatchDecision` and `EquipmentState` onto the same stream
-the API already speaks, so the React app can grow a tool view instead of a
-second UI being maintained.
+**The viewer** — one of them now. `dispatch/ui/` is a React 18 + Vite
+dashboard reading the Flask API (`/api/state`, `/api/stream`, `/api/zones`,
+`/api/scenario/compare`). `bench/tools/tool_probe.py` used to carry a second
+one: a `--follow` mode that drew its own terminal view of a tool with its own
+pacing and breakpoints, over a private copy of the run loop. That is gone. The
+probe is now headless-only — run the window, report the time budget — and both
+it and `sim_feed.py` drive the simulator through `bench/tools/sim_runner.py`,
+so a measured run and a published run are the same run rather than two.
+
+What remains of the unification is the transport: the probe still computes the
+per-tool time budget in-process instead of publishing `EquipmentState` onto the
+stream the API already speaks. Once it does, the React tool view can show the
+busy/setup/pm/down/blocked/starved split that today only the terminal has.
 
 ## Cold start
 
@@ -234,13 +239,15 @@ cd baselines/pyscfabsim
 # per-tool view (from the repo root)
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 30 --top 15
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py \
-    --days 30 --tool 970 --follow --speed 3600 --pause-every 20
+    --days 30 --tool 970 --tail 40
 ```
 
-`--follow` re-simulates and paces the render; it is not playback from a stored
-stream. Recording one would be ~2.5 GB per 730-day scenario at 22.5k dispatch
-events per simulated day, which is an argument for letting Kafka's log be the
-recording rather than building a bespoke one.
+The probe is headless: it runs the window as fast as it can and reports. To
+watch a run unfold, feed the dashboard with `bench/tools/sim_feed.py` and use
+its playback controls — that path pages through Kafka's log, so nothing has to
+re-simulate to redraw. Recording a bespoke stream instead would be ~2.5 GB per
+730-day scenario at 22.5k dispatch events per simulated day, which is the
+argument for letting the log be the recording.
 
 ## Status
 

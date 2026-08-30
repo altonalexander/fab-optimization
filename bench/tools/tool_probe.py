@@ -6,8 +6,15 @@ it away by family. This keeps it per machine, adds the two idle buckets the
 simulator does not separate (starved vs blocked), and can replay the decision
 sequence for one tool.
 
+This is the headless view: run the whole window as fast as possible and report
+what happened. Watching a tool while it runs is the dashboard's job -- there
+was a --follow mode here that drew its own terminal view with its own pacing,
+a second implementation of what dispatch/ui already does over the API, and it
+is gone. Feed the dashboard with sim_feed.py instead.
+
 Lives in bench/ on purpose: baselines/pyscfabsim is vendored read-only, so this
 constructs FileInstance itself rather than editing greedy.py's plugin list.
+sim_runner does the bootstrapping and owns the dispatch loop.
 
 Needs the baseline's interpreter (pandas, matplotlib); .venv is gitignored, so
 see baselines/pyscfabsim/UPSTREAM.md if it is not built yet.
@@ -28,22 +35,16 @@ busy+setup high and starve low  => this tool is the constraint.
 starve high                     => it is waiting on something upstream.
 """
 import argparse
-import os
 import sys
-import time
 from collections import defaultdict
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
-SIM = os.path.join(REPO, 'baselines', 'pyscfabsim')
-# PySCFabSim imports its own modules flat ("from classes import Lot"), so the
-# simulation/ dir itself has to be on the path, and datasets/ resolves relative
-# to cwd.
-sys.path.insert(0, os.path.join(SIM, 'simulation'))
-sys.path.insert(0, SIM)
-os.chdir(SIM)
+# Must precede the baseline imports: it puts the vendored simulator on the path
+# and chdirs into it.
+import sim_runner  # noqa: E402
+from sim_runner import RESET_AT, SECONDS_PER_DAY  # noqa: E402
 
 from plugins.interface import IPlugin  # noqa: E402
+
 
 
 class ToolProbe(IPlugin):
@@ -243,191 +244,45 @@ def print_focus(probe, rs, tail):
     print()
 
 
-class Follower:
-    """Realtime / playback view of one tool while the sim runs.
-
-    PySCFabSim is discrete-event: it jumps to the next event timestamp and has
-    no step loop to throttle. So "realtime" has to be imposed from outside --
-    we sleep for the wall-clock equivalent of the sim time that just elapsed.
-    --speed is sim-seconds per wall-second; 3600 means an hour a second.
-    """
-
-    def __init__(self, probe, tool, speed, pause_every, pause_at_day, tail=8):
-        self.probe = probe
-        self.tool = tool
-        self.speed = speed
-        self.pause_every = pause_every
-        self.pause_at = pause_at_day * 86400 if pause_at_day else None
-        self.tail = tail
-        self.last_sim_t = None
-        self.since_pause = 0
-        self.paused_once = False
-        self.interactive = sys.stdin.isatty()
-
-    def pace(self, sim_t):
-        if self.speed <= 0:
-            return
-        if self.last_sim_t is not None:
-            delta = (sim_t - self.last_sim_t) / self.speed
-            if delta > 0:
-                time.sleep(min(delta, 2.0))   # cap so a long jump cannot hang
-        self.last_sim_t = sim_t
-
-    def render(self, instance, machine):
-        span = instance.current_time - self.probe.window_start
-        if span < 3600:
-            # Percentages of a window under an hour are noise, not signal.
-            sys.stdout.write('\033[2J\033[H')
-            print(f"  TOOL {self.tool}  {machine.family}   "
-                  f"day {instance.current_time/86400:8.3f}")
-            print(f"\n    warming up -- percentages appear after "
-                  f"the first simulated hour")
-            print(f"\n    queue now {len(machine.waiting_lots)}")
-            return
-        r = row_for(self.probe, machine, span)
-        sys.stdout.write('\033[2J\033[H')     # clear, home
-        print(f"  TOOL {r['idx']}  {r['family']}   "
-              f"day {instance.current_time/86400:8.3f}   "
-              f"speed {self.speed:g}x")
-        print()
-        print(f"    busy {r['busy']*100:5.1f}%   setup {r['setup']*100:5.1f}%   "
-              f"pm {r['pm']*100:4.1f}%   down {r['down']*100:4.1f}%")
-        print(f"    blocked {r['block']*100:5.1f}%   starved {r['starve']*100:5.1f}%")
-        print()
-        print_bar(r)
-        print()
-        print(f"    queue now {len(machine.waiting_lots):<5} "
-              f"avg {r['q_avg']:.1f}  max {r['q_max']}   "
-              f"| {r['disp']} dispatches, {r['chg']} changeovers")
-        print()
-        print('  recent decisions:')
-        print(f"    {'day':>9} {'queue':>6} {'batch':>6}  {'setup':<18} step / lot")
-        print('    ' + '-' * 74)
-        for d in self.probe.decisions[-self.tail:]:
-            chg = f"{d['setup_from'] or '-'}->{d['setup_to'] or '-'}"
-            if d['setup_from'] == d['setup_to']:
-                chg = f"({d['setup_to'] or '-'})"
-            first = d['picked'][0] if d['picked'] else ('', '')
-            print(f"    {d['t']/86400:>9.3f} {d['queue']:>6} {d['batch']:>6}  "
-                  f"{chg[:18]:<18} {first[1][:24]:<24} {first[0][:16]}")
-        print()
-
-    def maybe_pause(self, instance, machine):
-        """Breakpoint at a decision point: the sim is fully consistent here,
-        between one dispatch and the next event."""
-        hit = False
-        if self.pause_at is not None and not self.paused_once \
-                and instance.current_time >= self.pause_at:
-            hit, self.paused_once = True, True
-        if self.pause_every and self.since_pause >= self.pause_every:
-            hit, self.since_pause = True, 0
-        if not hit:
-            return
-        if not self.interactive:
-            print('  [paused at decision point -- stdin is not a tty, '
-                  'continuing]')
-            return
-        try:
-            input('  [decision point] ENTER to continue, Ctrl-C to stop > ')
-        except EOFError:
-            pass
-
-    def step(self, instance, machine, dispatched):
-        if machine.idx != self.tool:
-            return
-        if dispatched:
-            self.since_pause += 1
-        self.pace(instance.current_time)
-        self.render(instance, machine)
-        self.maybe_pause(instance, machine)
-
-
 def main():
     p = argparse.ArgumentParser(
         description='per-tool behaviour from a PySCFabSim run')
-    p.add_argument('--dataset', default='SMT2020_LVHM')
-    p.add_argument('--days', type=int, default=400)
-    p.add_argument('--dispatcher', default='fifo')
-    p.add_argument('--seed', type=int, default=0)
+    sim_runner.add_common_args(p, days_default=400)
     p.add_argument('--top', type=int, default=15)
     p.add_argument('--tool', type=int, default=None, help='drill into one machine idx')
     p.add_argument('--tail', type=int, default=30, help='decisions to show for --tool')
-    p.add_argument('--follow', action='store_true',
-                   help='watch --tool live while the sim runs')
-    p.add_argument('--speed', type=float, default=3600.0,
-                   help='sim-seconds per wall-second in --follow '
-                        '(3600 = an hour a second; 0 = as fast as possible)')
-    p.add_argument('--pause-every', type=int, default=0,
-                   help='in --follow, pause every N decisions on the tool')
-    p.add_argument('--pause-at', type=float, default=None,
-                   help='in --follow, pause once at this simulated day')
     p.add_argument('--include-delay', action='store_true',
                    help='keep Delay_* pseudo-tools in the ranking')
-    p.add_argument('--batch-strat', default='Demand',
-                   choices=['Max', 'Min', 'RoundRobin', 'Demand'])
     a = p.parse_args()
 
-    if not a.dataset.startswith('SMT2020_'):
-        a.dataset = 'SMT2020_' + a.dataset
-
-    from dispatching.dispatcher import dispatcher_map
-    from file_instance import FileInstance
-    from randomizer import Randomizer
-    from read import read_all
-    from events import ResetEvent
-    from greedy import get_lots_to_dispatch_by_machine
+    a.dataset = sim_runner.normalize_dataset(a.dataset)
 
     print(f'  loading {a.dataset}, {a.days} days, rule={a.dispatcher}, seed={a.seed}',
           file=sys.stderr)
 
-    files = read_all('datasets/' + a.dataset)
-    run_to = 3600 * 24 * a.days
-    Randomizer().random.seed(a.seed)
-
     probe = ToolProbe(focus=a.tool)
-    instance = FileInstance(files, run_to, True, [probe], None, a.batch_strat)
+    instance, run_to = sim_runner.build(
+        a.dataset, a.days, a.seed, [probe], a.batch_strat)
 
     # Match greedy.py: after one year the machine counters are zeroed, so the
-    # numbers describe steady state rather than the fill-up transient.
-    reset_at = 31536000
+    # numbers describe steady state rather than the fill-up transient. The
+    # probe's own counters have to be zeroed at the same instant, or the two
+    # halves of the time budget would cover different windows.
+    from events import ResetEvent
     use_reset = a.days > 365
     if use_reset:
-        instance.add_event(ResetEvent(reset_at))
-
-    rule = dispatcher_map[a.dispatcher]
+        instance.add_event(ResetEvent(RESET_AT))
     reset_done = not use_reset
 
-    follower = None
-    if a.follow:
-        if a.tool is None:
-            p.error('--follow needs --tool N')
-        follower = Follower(probe, a.tool, a.speed, a.pause_every, a.pause_at)
+    def before_dispatch(inst):
+        nonlocal reset_done
+        if not reset_done and inst.current_time >= RESET_AT:
+            probe.note_reset(inst.current_time)
+            reset_done = True
 
-    interrupted = False
-    try:
-        while not instance.done:
-            if instance.next_decision_point():
-                break
-            if instance.current_time > run_to:
-                break
-            if not reset_done and instance.current_time >= reset_at:
-                probe.note_reset(instance.current_time)
-                reset_done = True
-            machine, lots = get_lots_to_dispatch_by_machine(instance, rule)
-            if lots is None:
-                instance.usable_machines.remove(machine)
-                dispatched = False
-            else:
-                instance.dispatch(machine, lots)
-                dispatched = True
-            if follower is not None:
-                follower.step(instance, machine, dispatched)
-    except KeyboardInterrupt:
-        # Stopping early is a normal way to use --follow, so summarise what
-        # ran rather than dumping a traceback.
-        interrupted = True
-        print('\n  stopped at '
-              f'day {instance.current_time/86400:.3f}')
+    interrupted = sim_runner.run(instance, run_to, a.dispatcher,
+                                 before_dispatch=before_dispatch,
+                                 stream=sys.stdout)
 
     if not interrupted:
         instance.finalize()
@@ -435,7 +290,8 @@ def main():
 
     span = instance.current_time - probe.window_start
     print(f'\n  {a.dataset}  rule={a.dispatcher}  seed={a.seed}  '
-          f'window={span/86400:.1f} days of {instance.current_time/86400:.1f} simulated')
+          f'window={span/SECONDS_PER_DAY:.1f} days of '
+          f'{instance.current_time/SECONDS_PER_DAY:.1f} simulated')
     if not use_reset:
         print('  NOTE: run is <=365 days, so no warm-up reset. Numbers include the '
               'fill-up\n        transient and are not comparable to the 730-day results.')
