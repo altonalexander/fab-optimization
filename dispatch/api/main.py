@@ -14,7 +14,7 @@ import queue
 import subprocess
 import threading
 import time
-from collections import deque, Counter
+from collections import deque, Counter, defaultdict
 from datetime import datetime, timezone
 
 from flask import Flask, Response, jsonify, request
@@ -43,6 +43,37 @@ FEED_FILE     = os.getenv("FEED_FILE", "")
 # Bounded everywhere: an unbounded buffer in a long-running mirror is a leak.
 # ---------------------------------------------------------------------------
 
+def _as_int(v, default=None):
+    """The wire format is all strings; never let one crash the ingest thread."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(v, default=None):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def tool_group(tool_id):
+    """Group a tool by type from its id.
+
+    Two naming schemes reach us: the C++ config uses ETCH_11, CVD_07; the
+    simulator feed uses Litho_BE_110_947. Stripping one trailing _<digits>
+    handles both -- ETCH_11 -> ETCH, Litho_BE_110_947 -> Litho_BE_110 -- and
+    leaves anything unnumbered as its own group rather than guessing.
+    """
+    if not tool_id:
+        return "unknown"
+    head, sep, tail = tool_id.rpartition("_")
+    if sep and tail.isdigit() and head:
+        return head
+    return tool_id
+
+
 class FabMirror:
     def __init__(self, maxlen=2000):
         self.lock       = threading.Lock()
@@ -54,6 +85,25 @@ class FabMirror:
         self.decisions  = deque(maxlen=500)
         self.throughput = deque(maxlen=300)   # (ts, completed_total)
         self.subscribers = []                 # SSE queues
+        # Per-tool rollup. The tool view renders this rather than recomputing
+        # from the feed in the browser: two derivations of the same number
+        # drift, and then nobody knows which screen is lying.
+        self.tool_stats = defaultdict(lambda: {
+            "dispatches": 0,     # decisions seen for this tool
+            "lots": 0,           # lots dispatched onto it
+            "started": 0,        # LOT_STARTED events
+            "completed": 0,      # LOT_COMPLETE from a lot it was running
+            "queue": None,       # queue depth at the last decision
+            "setup": None,       # setup at the last decision
+            "last_day": None,    # simulated day of the last decision
+            "last_ts": None,     # wall clock, so staleness is visible
+            "changeovers": 0,
+        })
+        # Per-tool decision ring. The shared `decisions` deque is global and
+        # 500 deep; with a few hundred tools a given tool's last decision is
+        # evicted long before anyone drills into it, so the detail view would
+        # always show an empty history. Bounded per tool, so still no leak.
+        self.tool_recent = defaultdict(lambda: deque(maxlen=40))
 
     def apply(self, topic, ev):
         with self.lock:
@@ -67,8 +117,14 @@ class FabMirror:
                 lot = ev.get("lot")
                 self.lots_ready.pop(lot, None)
                 self.in_flight[lot] = ev.get("tool")
+                if ev.get("tool"):
+                    self.tool_stats[ev["tool"]]["started"] += 1
             elif t == "LOT_COMPLETE":
-                self.in_flight.pop(ev.get("lot"), None)
+                # Credit the completion to whichever tool was running it, which
+                # only in_flight knows -- the event itself carries no tool.
+                tool = self.in_flight.pop(ev.get("lot"), None)
+                if tool:
+                    self.tool_stats[tool]["completed"] += 1
                 self.throughput.append((time.time(), self.counts["LOT_COMPLETE"]))
             elif t == "TOOL_STATUS":
                 self.tools[ev.get("tool")] = {
@@ -80,6 +136,19 @@ class FabMirror:
     def add_decision(self, d):
         with self.lock:
             self.decisions.append({**d, "ts": time.time()})
+            tool = d.get("tool")
+            if tool:
+                s = self.tool_stats[tool]
+                s["dispatches"] += 1
+                s["lots"] += int(d.get("lots") or 0)
+                s["queue"] = _as_int(d.get("queue"))
+                setup = d.get("setup")
+                if setup and s["setup"] is not None and setup != s["setup"]:
+                    s["changeovers"] += 1
+                s["setup"] = setup
+                s["last_day"] = _as_float(d.get("day"))
+                s["last_ts"] = time.time()
+                self.tool_recent[tool].append({**d, "ts": s["last_ts"]})
         self._fanout({"kind": "decision", "decision": d})
 
     def _fanout(self, msg):
@@ -265,6 +334,81 @@ def zones():
 @app.get("/api/state")
 def state():
     return jsonify(mirror.snapshot())
+
+
+def _tool_row(tool_id):
+    """One tool's public shape. Kept in one place so the index and the detail
+    view cannot disagree about what a tool looks like."""
+    with mirror.lock:
+        meta = mirror.tools.get(tool_id, {})
+        s = dict(mirror.tool_stats.get(tool_id, {}))
+        running = [l for l, t in mirror.in_flight.items() if t == tool_id]
+    return {
+        "id": tool_id,
+        "group": tool_group(tool_id),
+        "online": meta.get("online", True),
+        "last_seen": meta.get("last_seen"),
+        "dispatches": s.get("dispatches", 0),
+        "lots": s.get("lots", 0),
+        "started": s.get("started", 0),
+        "completed": s.get("completed", 0),
+        "queue": s.get("queue"),
+        "setup": s.get("setup"),
+        "changeovers": s.get("changeovers", 0),
+        "last_day": s.get("last_day"),
+        "last_ts": s.get("last_ts"),
+        "running": running[:25],
+        "running_count": len(running),
+    }
+
+
+@app.get("/api/tools")
+def tools_index():
+    """Every tool we have heard of, grouped by type.
+
+    Union of the status feed and the decision feed: a tool that has announced
+    itself but never dispatched still belongs on the index, and so does one
+    that dispatched before its status arrived.
+    """
+    with mirror.lock:
+        ids = set(mirror.tools) | set(mirror.tool_stats)
+    rows = [_tool_row(t) for t in sorted(ids)]
+
+    groups = {}
+    for r in rows:
+        g = groups.setdefault(r["group"], {
+            "group": r["group"], "tools": [],
+            "count": 0, "offline": 0, "dispatches": 0, "lots": 0,
+            "queue_max": None,
+        })
+        g["tools"].append(r)
+        g["count"] += 1
+        g["offline"] += 0 if r["online"] else 1
+        g["dispatches"] += r["dispatches"]
+        g["lots"] += r["lots"]
+        if r["queue"] is not None:
+            g["queue_max"] = max(g["queue_max"] or 0, r["queue"])
+
+    # Busiest group first: the index should answer "where is the constraint"
+    # before it answers "what exists".
+    ordered = sorted(groups.values(),
+                     key=lambda g: (g["dispatches"], g["count"]), reverse=True)
+    return jsonify({"groups": ordered, "total": len(rows)})
+
+
+@app.get("/api/tools/<path:tool_id>")
+def tool_detail(tool_id):
+    with mirror.lock:
+        known = tool_id in mirror.tools or tool_id in mirror.tool_stats
+        recent = list(reversed(mirror.tool_recent.get(tool_id, ())))
+        events = [e for e in reversed(mirror.events)
+                  if e.get("tool") == tool_id][:40]
+    if not known:
+        return jsonify({"error": f"unknown tool {tool_id}"}), 404
+    row = _tool_row(tool_id)
+    row["recent_decisions"] = recent
+    row["recent_events"] = events
+    return jsonify(row)
 
 
 @app.get("/api/events")

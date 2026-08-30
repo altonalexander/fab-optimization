@@ -207,10 +207,152 @@ function ScenarioPanel({ tools }) {
   )
 }
 
+function ToolDetail({ id, onBack }) {
+  const [t, setT] = useState(null)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    let live = true
+    const load = () => fetch(`/api/tools/${encodeURIComponent(id)}`)
+      .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j.error)))
+      .then(j => { if (live) { setT(j); setErr(null) } })
+      .catch(e => live && setErr(String(e)))
+    load()
+    // Poll rather than filter the SSE feed: the server owns the rollup, and a
+    // second client-side derivation of the same numbers would drift from it.
+    const iv = setInterval(load, 2000)
+    return () => { live = false; clearInterval(iv) }
+  }, [id])
+
+  if (err) return <div><button className="link" onClick={onBack}>← tools</button><div className="err">{err}</div></div>
+  if (!t) return <div className="muted">loading {id}…</div>
+
+  return (
+    <div>
+      <button className="link" onClick={onBack}>← all tools</button>
+      <div className="tool-head">
+        <h3>{t.id}</h3>
+        <span className={t.online ? 'tag tag-ok' : 'tag tag-warn'}>
+          {t.online ? 'online' : 'down'}
+        </span>
+        <span className="muted">{t.group}</span>
+      </div>
+
+      <div className="stats-row">
+        <Stat label="queue" value={t.queue ?? '—'} sub="at last decision" />
+        <Stat label="running" value={t.running_count} sub="lots in flight" />
+        <Stat label="dispatches" value={t.dispatches} />
+        <Stat label="lots out" value={t.lots} />
+        <Stat label="completed" value={t.completed} />
+        <Stat label="changeovers" value={t.changeovers} sub={t.setup || 'no setup'} />
+      </div>
+
+      {t.running_count > 0 && (
+        <>
+          <h4>In flight</h4>
+          <div className="chips">
+            {t.running.map(l => <span key={l} className="chip">{l}</span>)}
+          </div>
+        </>
+      )}
+
+      <h4>Recent decisions</h4>
+      {t.recent_decisions.length === 0 ? (
+        <div className="muted">no decisions recorded for this tool yet</div>
+      ) : (
+        <table className="tbl">
+          <thead><tr><th>sim day</th><th>queue</th><th>lots</th><th>setup</th></tr></thead>
+          <tbody>
+            {t.recent_decisions.map((d, i) => (
+              <tr key={i}>
+                <td><code>{d.day ?? '—'}</code></td>
+                <td>{d.queue ?? '—'}</td>
+                <td>{d.lots ?? '—'}</td>
+                <td className="muted">{d.setup || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+function ToolIndex({ onOpen }) {
+  const [data, setData] = useState(null)
+  const [open, setOpen] = useState({})
+  const [q, setQ] = useState('')
+
+  useEffect(() => {
+    let live = true
+    const load = () => fetch('/api/tools').then(r => r.json())
+      .then(j => live && setData(j)).catch(() => {})
+    load()
+    const iv = setInterval(load, 4000)
+    return () => { live = false; clearInterval(iv) }
+  }, [])
+
+  if (!data) return <div className="muted">loading tools…</div>
+
+  const needle = q.trim().toLowerCase()
+  const groups = data.groups
+    .map(g => ({ ...g, tools: needle ? g.tools.filter(t => t.id.toLowerCase().includes(needle)) : g.tools }))
+    .filter(g => g.tools.length > 0)
+
+  return (
+    <div>
+      <div className="tool-index-head">
+        <p className="muted">
+          {data.total} tools in {data.groups.length} groups, busiest first.
+          A high queue with the tool online is where lots are waiting.
+        </p>
+        <input className="tool-search" placeholder="filter tools…"
+               value={q} onChange={e => setQ(e.target.value)} />
+      </div>
+
+      {groups.map(g => {
+        // Searching implies you want to see matches, so a filtered group opens
+        // itself rather than making you expand every one.
+        const isOpen = needle ? true : !!open[g.group]
+        return (
+          <div key={g.group} className="tgroup">
+            <button className="tgroup-head" onClick={() => setOpen(o => ({ ...o, [g.group]: !o[g.group] }))}>
+              <span className="tgroup-caret">{isOpen ? '▾' : '▸'}</span>
+              <strong>{g.group}</strong>
+              <span className="muted">{g.count} tools</span>
+              <span className="tgroup-metrics">
+                <span>{g.dispatches.toLocaleString()} dispatches</span>
+                {g.queue_max != null && <span>queue max {g.queue_max}</span>}
+                {g.offline > 0 && <span className="danger">{g.offline} down</span>}
+              </span>
+            </button>
+            {isOpen && (
+              <div className="tgroup-body">
+                {g.tools.map(t => (
+                  <button key={t.id} className={t.online ? 'tcard' : 'tcard tcard-down'}
+                          onClick={() => onOpen(t.id)}>
+                    <div className="tcard-id">{t.id}</div>
+                    <div className="tcard-row">
+                      <span>q {t.queue ?? '—'}</span>
+                      <span>{t.dispatches} disp</span>
+                      {!t.online && <span className="danger">down</span>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function App() {
   const { state, feed, connected, history } = useLiveState()
   const [zones, setZones] = useState(null)
   const [tab, setTab] = useState('live')
+  const [openTool, setOpenTool] = useState(null)
   // Remembered per browser so the rail does not reappear every reload for
   // someone who closed it. Wrapped: some contexts throw on storage access.
   const [assistantOpen, setAssistantOpen] = useState(() => {
@@ -262,7 +404,7 @@ export default function App() {
         <div className="shell-main">
 
       <nav className="tabs">
-        {['live', 'scenario', 'topology'].map(t => (
+        {['live', 'tools', 'scenario', 'topology'].map(t => (
           <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
             {t}
           </button>
@@ -300,6 +442,14 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+
+      {tab === 'tools' && (
+        <section>
+          {openTool
+            ? <ToolDetail id={openTool} onBack={() => setOpenTool(null)} />
+            : <><h3>Tools</h3><ToolIndex onOpen={setOpenTool} /></>}
+        </section>
       )}
 
       {tab === 'scenario' && (

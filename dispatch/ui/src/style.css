@@ -91,6 +91,36 @@ section h3{margin:0 0 12px;font-size:14px}
 footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 
 /* --- assistant ---------------------------------------------------------- */
+/* Tool index / detail ----------------------------------------------------- */
+.tool-index-head{display:flex;justify-content:space-between;align-items:center;
+  gap:16px;flex-wrap:wrap}
+.tool-search{padding:7px 11px;border:1px solid var(--line);border-radius:6px;
+  font-size:13px;font-family:inherit;min-width:200px}
+.tgroup{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;
+  background:var(--card);overflow:hidden}
+.tgroup-head{width:100%;display:flex;align-items:center;gap:10px;padding:10px 14px;
+  background:none;border:0;cursor:pointer;font-size:13px;text-align:left;
+  font-family:inherit;color:var(--fg)}
+.tgroup-head:hover{background:#f9fafb}
+.tgroup-caret{width:12px;color:#6b7280}
+.tgroup-metrics{margin-left:auto;display:flex;gap:14px;color:#6b7280;
+  font-size:12px;flex-wrap:wrap}
+.tgroup-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));
+  gap:8px;padding:0 14px 14px}
+.tcard{text-align:left;border:1px solid var(--line);border-radius:6px;
+  background:#fff;padding:8px 10px;cursor:pointer;font-family:inherit;
+  font-size:12px;color:var(--fg)}
+.tcard:hover{border-color:#9ca3af}
+.tcard-down{border-color:#fca5a5;background:#fef2f2}
+.tcard-id{font-family:ui-monospace,monospace;font-size:11px;margin-bottom:4px;
+  word-break:break-all}
+.tcard-row{display:flex;gap:10px;color:#6b7280}
+.tool-head{display:flex;align-items:center;gap:12px;margin:4px 0 4px}
+.tool-head h3{margin:0}
+.link{background:none;border:0;color:#2563eb;cursor:pointer;padding:0;
+  font-size:13px;font-family:inherit;margin-bottom:8px}
+.link:hover{text-decoration:underline}
+
 /* Assistant rail --------------------------------------------------------- */
 /* Two columns: content scrolls, the rail stays put. The rail is sticky rather
    than fixed so it still sits inside the page padding and never overlaps the
