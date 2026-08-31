@@ -71,6 +71,76 @@ def kpis(instance, warm_from):
     }
 
 
+class _Sampler:
+    """Hourly KPI series, shaped for the `run_kpi_samples` table.
+
+    The dashboard's Results page plays a run back as a time series, not as a
+    single end-of-run row, so a comparison that only reports final numbers
+    cannot be shown there. This records the series as the run happens.
+
+    Only the columns this harness can compute HONESTLY are filled. util,
+    running and the wq/wb/wp/wd lot-hour split come from the feed's own
+    accounting and are left NULL rather than approximated -- a plausible-looking
+    number for a quantity we did not measure is worse than a gap.
+
+    `opt` is the count of decisions made by the optimizer, which for `slate` is
+    the coverage numerator and for the sort-key rules is zero. That is what
+    makes `optimized_pct` meaningful on the results page: it separates a row
+    that the solver actually drove from one that mostly fell back.
+    """
+
+    EVERY_S = 3600.0
+
+    def __init__(self, rule, warm_from):
+        self.rule = rule
+        self.warm_from = warm_from
+        self.rows = []
+        self._next = 0.0
+        self.decisions = 0
+
+    def note_decision(self):
+        self.decisions += 1
+
+    def maybe(self, instance):
+        t = instance.current_time
+        if t < self._next:
+            return
+        self._next = t + self.EVERY_S
+
+        done, ct, on_time, tard = 0, 0.0, 0, 0.0
+        for lot in instance.done_lots:
+            if lot.done_at is None or lot.release_at < self.warm_from:
+                continue
+            done += 1
+            ct += (lot.done_at - lot.release_at) / SECONDS_PER_DAY
+            late = lot.done_at - lot.deadline_at
+            if late <= 0:
+                on_time += 1
+            else:
+                tard += late / SECONDS_PER_DAY
+
+        # A waiting lot sits in waiting_lots of EVERY machine in its family, so
+        # summing those lists counts it ~12 times. Dedupe by lot id. Only done
+        # hourly, so the extra pass is free.
+        waiting = set()
+        for m in instance.machines:
+            for lot in m.waiting_lots:
+                waiting.add(lot.idx)
+        opt = getattr(self.rule, 'decisions_covered', 0)
+
+        self.rows.append({
+            't': round(t, 3),
+            'warmup': t < self.warm_from,
+            'wip': len(waiting),
+            'thr': done,
+            'ct': round(ct / done, 4) if done else None,
+            'otd': round(100.0 * on_time / done, 3) if done else None,
+            'tard': round(tard, 3),
+            'dec': self.decisions,
+            'opt': int(opt),
+        })
+
+
 class _Fingerprint:
     """Rolling hash of the dispatch sequence.
 
@@ -128,9 +198,12 @@ def run_one(spec, args):
     # The slate is rebuilt on the planning cadence, NOT per decision point --
     # that is production timing, and it is what turns stale-slate degradation
     # into a measured quantity rather than an assumption (adr/0002).
-    before = None
-    if hasattr(rule, 'maybe_rebuild'):
-        before = lambda inst: rule.maybe_rebuild(inst)   # noqa: E731
+    sampler = _Sampler(rule, warm_from)
+
+    def before(inst):
+        if hasattr(rule, 'maybe_rebuild'):
+            rule.maybe_rebuild(inst)
+        sampler.maybe(inst)
 
     # Behavioural fingerprint of the whole run: every dispatch decision, in
     # order. KPIs are a weak equality check -- on a short horizon no lot has
@@ -138,10 +211,14 @@ def run_one(spec, args):
     # "validate". The decision sequence differs on the FIRST divergent choice.
     fp = _Fingerprint()
 
+    def after(instance, machine, dispatched):
+        sampler.note_decision()
+        fp(instance, machine, dispatched)
+
     t0 = time.time()
     interrupted = sim_runner.run(instance, run_to, rule,
                                  before_dispatch=before,
-                                 after_dispatch=fp, stream=sys.stdout)
+                                 after_dispatch=after, stream=sys.stdout)
     wall = time.time() - t0
     if not interrupted:
         instance.finalize()
@@ -152,6 +229,7 @@ def run_one(spec, args):
     if hasattr(rule, 'stats'):
         row['detail'] = rule.stats()
     row['interrupted'] = interrupted
+    row['samples'] = sampler.rows
     print(f"  {row['throughput']} lots, "
           f"CT {row['cycle_time_days']}d, "
           f"on-time {row['on_time_pct']}%, "
