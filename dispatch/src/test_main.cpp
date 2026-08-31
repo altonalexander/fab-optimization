@@ -683,6 +683,171 @@ void bench(double budget) {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// FamilyTool — the SMT2020 semantics (docs/adr/0009). These cover the three
+// gaps that made the old Lot model unable to represent the simulator:
+// asymmetric setup matrix, minimum run length, and batch keys on step+part.
+// ---------------------------------------------------------------------------
+
+static Lot fam_lot(const std::string& id, const std::string& family,
+                   const std::string& setup, const std::string& step = "S1",
+                   const std::string& part = "P1", double proc = 3600.0) {
+    Lot l;
+    l.lot_id = id; l.family = family; l.setup_group = setup;
+    l.recipe = step; l.product_id = part; l.step_process_s = proc;
+    l.batch_min = 1; l.batch_max = 1;
+    return l;
+}
+
+void test_setup_matrix() {
+    t::suite("SetupMatrix (asymmetric)");
+    SetupMatrix m;
+    m.set("A", "B", 600.0);
+    m.set("B", "A", 1200.0);
+    m.set("", "C", 300.0);
+
+    t::eq(m.lookup("A", "B"), 600.0, "ordered pair A->B");
+    // The whole point: SMT2020's setup.txt is not symmetric, and a dispatcher
+    // that assumes it is will mis-order every changeover sequence.
+    t::eq(m.lookup("B", "A"), 1200.0, "B->A differs from A->B");
+    t::eq(m.lookup("A", "A"), 0.0, "no changeover when already in setup");
+    t::eq(m.lookup("Z", "C"), 300.0, "wildcard source falls back to (\"\", to)");
+    t::eq(m.lookup("A", ""), 0.0, "step imposing no setup is free");
+    t::eq(m.lookup("A", "Q"), 0.0, "unlisted pair uses the default");
+
+    SetupMatrix d;
+    d.set_default(90.0);
+    t::eq(d.lookup("A", "B"), 90.0, "configured default applies to unlisted pairs");
+}
+
+void test_family_tool() {
+    t::suite("FamilyTool");
+    SetupMatrix sm;
+    sm.set("A", "B", 600.0);
+    FamilyTool ft("ET_1", "fab", "ETCH", &sm, 1, 1.0);
+    ft.set_current_setup("A");
+
+    // Family routing is what makes the matrix block-diagonal, which is what
+    // makes per-family decomposition exact rather than approximate.
+    t::check(bool(ft.evaluate(fam_lot("L1", "ETCH", "A"))), "own family is eligible");
+    t::eq(int(ft.evaluate(fam_lot("L2", "DIFF", "A")).reason),
+          int(Rejection::RecipeNotQualified), "other family rejected");
+
+    t::eq(ft.evaluate(fam_lot("L1", "ETCH", "A")).setup_s, 0.0,
+          "no setup when already in the group");
+    t::eq(ft.evaluate(fam_lot("L3", "ETCH", "B")).setup_s, 600.0,
+          "changeover costs the matrix entry");
+
+    // Tool speed divides step time; process time is a property of the STEP.
+    FamilyTool fast("ET_2", "fab", "ETCH", &sm, 1, 2.0);
+    t::eq(fast.evaluate(fam_lot("L1", "ETCH", "A", "S1", "P1", 3600.0)).process_s,
+          1800.0, "speed divides the step's process time");
+
+    t::check(ft.admit(fam_lot("L1", "ETCH", "A")), "admit succeeds when free");
+    t::eq(ft.free_capacity(), 0, "capacity consumed");
+    ft.release("L1");
+    t::eq(ft.free_capacity(), 1, "release frees capacity");
+}
+
+void test_min_run_length() {
+    t::suite("FamilyTool minimum run length");
+    SetupMatrix sm;
+    sm.set("A", "B", 600.0);
+    FamilyTool ft("ET_1", "fab", "ETCH", &sm, 1, 1.0);
+    ft.set_min_run_length(3);
+    ft.set_current_setup("A");
+
+    // A real changeover starts the run.
+    t::check(ft.admit(fam_lot("L1", "ETCH", "B")), "changeover admitted");
+    t::eq(ft.current_setup(), std::string("B"), "setup followed the lot");
+    t::eq(ft.min_runs_left(), 2, "run started, one lot consumed");
+
+    ft.release("L1");
+    // greedy.py:122 treats a min-run mismatch as a HARD block (lots=None), not
+    // a preference, so eligibility must reject rather than merely penalise --
+    // otherwise the solver buys its way out of a constraint the simulator will
+    // not let it break.
+    t::eq(int(ft.evaluate(fam_lot("L2", "ETCH", "A")).reason),
+          int(Rejection::BatchIncompatible),
+          "a different setup is blocked mid-run");
+    t::check(bool(ft.evaluate(fam_lot("L3", "ETCH", "B"))),
+             "the owed setup is still eligible mid-run");
+
+    ft.admit(fam_lot("L3", "ETCH", "B"));
+    ft.release("L3");
+    t::eq(ft.min_runs_left(), 1, "run counts down");
+    ft.admit(fam_lot("L4", "ETCH", "B"));
+    ft.release("L4");
+    t::eq(ft.min_runs_left(), 0, "run satisfied");
+    t::check(bool(ft.evaluate(fam_lot("L5", "ETCH", "A"))),
+             "changeover allowed once the run is paid");
+}
+
+void test_family_batching() {
+    t::suite("FamilyTool batch families");
+    SetupMatrix sm;
+    FamilyTool f("DF_1", "fab", "DIFF", &sm, 6, 1.0);
+
+    Lot a = fam_lot("L1", "DIFF", "", "GATE_OX", "PARTA");
+    a.batch_min = 2; a.batch_max = 4;
+    Lot b = fam_lot("L2", "DIFF", "", "GATE_OX", "PARTA");
+    b.batch_min = 2; b.batch_max = 4;
+    // Same step, DIFFERENT part. greedy.py:80 keys batches on
+    // step_name + part_name, so this must not join the batch.
+    Lot c = fam_lot("L3", "DIFF", "", "GATE_OX", "PARTB");
+    c.batch_min = 2; c.batch_max = 4;
+
+    t::check(f.admit(a), "first lot stages");
+    t::check(bool(f.evaluate(b)), "same step+part joins the batch");
+    t::eq(int(f.evaluate(c).reason), int(Rejection::BatchIncompatible),
+          "same step but different part is a different batch");
+
+    t::check(!f.batch_ready(), "one lot is below batch_min");
+    f.admit(b);
+    t::check(f.batch_ready(), "batch_min reached, furnace may fire");
+
+    // The furnace holds 6, but this step's window is 4.
+    t::eq(f.free_capacity(), 2, "capacity bounded by the step's batch_max");
+}
+
+void test_per_family_decomposition() {
+    t::suite("Planner per-family decomposition");
+    SetupMatrix sm;
+    ToolRegistry reg;
+    for (int i = 0; i < 2; ++i)
+        reg.add(std::make_unique<FamilyTool>("ET_" + std::to_string(i), "fab",
+                                             "ETCH", &sm, 1, 1.0));
+    for (int i = 0; i < 2; ++i)
+        reg.add(std::make_unique<FamilyTool>("DF_" + std::to_string(i), "fab",
+                                             "DIFF", &sm, 1, 1.0));
+
+    std::vector<Lot> lots;
+    for (int i = 0; i < 3; ++i) lots.push_back(fam_lot("e" + std::to_string(i), "ETCH", ""));
+    for (int i = 0; i < 3; ++i) lots.push_back(fam_lot("d" + std::to_string(i), "DIFF", ""));
+
+    Planner p(make_solver("greedy"));
+    PlannerConfig cfg;
+    cfg.solve_budget_s = 1.0;
+    PlanResult r = p.plan_by_family(reg, lots, 1, cfg);
+
+    t::eq(r.assigned, 4, "one lot per free tool, across both families");
+
+    // No lot may be placed on a tool outside its own family -- that is the
+    // property the decomposition relies on for exactness.
+    bool cross = false;
+    for (const auto& [lot_id, tok] : r.slate->tokens) {
+        const bool etch_lot = lot_id[0] == 'e';
+        const bool etch_tool = tok.primary.rfind("ET_", 0) == 0;
+        if (etch_lot != etch_tool) cross = true;
+    }
+    t::check(!cross, "no lot assigned outside its station family");
+
+    // Lazy invalidation: a family not named dirty keeps the tokens it had.
+    const std::set<std::string> dirty{"ETCH"};
+    PlanResult r2 = p.plan_by_family(reg, lots, 2, cfg, &dirty);
+    t::eq(r2.assigned, 4, "clean families carry their tokens forward");
+}
+
 int main(int argc, char** argv) {
     std::string mode = argc > 1 ? argv[1] : "";
 
@@ -699,6 +864,12 @@ int main(int argc, char** argv) {
     test_litho_reticle();
     test_probe_tester();
     test_metrology();
+
+    test_setup_matrix();
+    test_family_tool();
+    test_min_run_length();
+    test_family_batching();
+    test_per_family_decomposition();
 
     if (mode != "--audit-only") {
         test_evaluate_admit_consistency();

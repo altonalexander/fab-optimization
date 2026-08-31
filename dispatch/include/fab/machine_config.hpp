@@ -40,6 +40,38 @@ struct Lot {
     int         wafer_count   = 25;
     double      priority      = 1.0;  // from the tactical urgency vector
     double      qtime_slack_s = 1e9;  // seconds before Q-time violation
+
+    // --- SMT2020 / route semantics (see docs/adr/0009) ---------------------
+    // Added for the PySCFabSim bridge. Every field is defaulted, so the tool
+    // classes that predate them (SingleWaferTool, BatchFurnace, ClusterTool,
+    // LithoScanner, ProbeTester) and their tests are unaffected: only
+    // FamilyTool reads them.
+    //
+    // family is the station family the CURRENT step routes to. It is what makes
+    // the assignment problem block-diagonal, and therefore what Planner
+    // decomposes on.
+    std::string family;
+    // setup_group is the SETUP value of the current step. Distinct from recipe:
+    // two recipes can share a setup group and incur no changeover between them.
+    // Empty means "this step imposes no setup", which is NOT the same as a
+    // setup group that happens to be named "" on the tool.
+    std::string setup_group;
+    // Absolute due date, simulator seconds. -1 means "no due date", which is
+    // how a lot with no order deadline must be scored rather than as due now.
+    double      due_s         = -1.0;
+    // Batch window for the current step, in LOTS (PySCFabSim has already
+    // divided the wafer counts through). 1/1 means the step does not batch.
+    int         batch_min     = 1;
+    int         batch_max     = 1;
+    // Seconds this lot has been queued at its current step. Feeds the ageing
+    // term so a lot cannot be starved indefinitely by a stream of urgent work.
+    double      waiting_s     = 0.0;
+    // Expected processing seconds for the current step at nominal tool speed.
+    // In SMT2020 process time is a property of the STEP, not of the machine —
+    // machines within a family differ only by `speed` — so the caller supplies
+    // it and FamilyTool divides by its own speed. 0 means "not supplied", and
+    // FamilyTool then falls back to its configured default.
+    double      step_process_s = 0.0;
 };
 
 // Why a tool refused a lot. Never throw on the eligibility path.
@@ -674,8 +706,17 @@ public:
     }
 
     static AssignmentModel build(const ToolRegistry& reg, const std::vector<Lot>& lots) {
+        return build(reg.all(), lots);
+    }
+
+    // Overload over an explicit tool set. Per-family decomposition (see
+    // docs/adr/0009) needs to build a model for a SUBSET of the registry, and
+    // the block-diagonal structure makes that exact rather than approximate:
+    // a lot is only ever eligible for tools in its own station family, so
+    // splitting the matrix along family lines drops no feasible pair.
+    static AssignmentModel build(const std::vector<MachineConfiguration*>& tools,
+                                 const std::vector<Lot>& lots) {
         AssignmentModel m;
-        const auto tools = reg.all();
 
         for (const auto& l : lots) m.lot_ids.push_back(l.lot_id);
         for (auto* t : tools) {

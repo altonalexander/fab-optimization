@@ -5,6 +5,14 @@ dispatch/hsms_sim
 dispatch/amhs_adapter
 dispatch/fabtest
 dispatch/build/
+# The ctypes shared library (docs/adr/0009). Built by dispatch/build-slate.sh;
+# committing it would ship a binary whose OR-Tools linkage nobody can see.
+dispatch/libfabslate.so
+dispatch/build-ortools/
+dispatch/build-greedy/
+# npm writes this on `make ui`; the repo has never pinned it and adding one
+# here would be an unrelated decision.
+dispatch/ui/package-lock.json
 # No trailing slash: in a git worktree this is usually a symlink to the main
 # checkout's node_modules, and a trailing slash matches only a real directory.
 dispatch/ui/node_modules

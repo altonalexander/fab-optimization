@@ -5,23 +5,107 @@ the invariant this directory exists to protect.
 
 ## Status
 
-Step 1 is done. OR-Tools v9.15 is linked, the C++ CP-SAT path has been run for
-the first time, and the formulation is sound: it beats greedy at every scale
-with 0 violations. Full output and the two corrections it forced are in
-`results/2026-08-29-ortools-linked.txt`.
+**The harness exists.** `tools/compare.py` runs any set of rules — including
+the CP-SAT slate — on one dataset, one seed and one horizon, and prints the
+table. The design decisions behind it are in
+[`docs/adr/0009`](../docs/adr/0009-slate-rule-hybrid-split.md).
 
-Remaining:
+```
+python3 bench/tools/compare.py --days 30 --rules fifo,cr,slate
+python3 bench/tools/compare.py --days 2  --rules cr,slate-cr   # validate first
+```
 
-- Reconcile the instance generators. The C++ generator and the deleted Python
-  one produce different feasibility densities (1,625 vs 859 pairs at ~200 lots),
-  which is why the lift figures differ. Until they agree, cross-harness numbers
-  cannot be quoted together.
-- Map PySCFabSim's metrics (throughput, cycle time, tardiness under FIFO/CR/PPO)
-  onto the dispatcher's assignment objective. This is a real modelling question,
-  not glue code: the baseline optimises a schedule over time, the dispatcher
-  optimises an assignment at an instant. Deciding what a fair comparison even
-  means is the work.
-- Only then is there a harness worth writing.
+It needs `dispatch/libfabslate.so`, built by `dispatch/build-slate.sh`
+(or `make -C dispatch slate`), and the baseline's venv for pandas.
+
+### The validation gate
+
+`slate-cr` routes through the slate's call path — same signature, same tuple
+shape, same rebuild hook — but returns CR's ordering. It **must** reproduce
+`cr` exactly, and `compare.py` checks this by fingerprinting the whole dispatch
+sequence rather than comparing KPIs (on a short horizon no lot has finished and
+every rule scores 0, which would let a broken harness "validate").
+
+Measured, 2 days, LVHM seed 0: **47,149 decisions, identical, fp
+`8d77d45c4c2654a3`.** If this ever fails, nothing else in the table means
+anything.
+
+### What was still open, and what closed it
+
+- ~~Reconcile the instance generators.~~ Moot. There is now ONE generator:
+  every rule runs inside PySCFabSim, so the 1,625-vs-859 feasibility-density
+  mismatch cannot arise.
+- ~~Map PySCFabSim's metrics onto the dispatcher's objective.~~ Done by
+  construction, not by translation. The dispatcher inherits the simulator's
+  routes, horizon and KPIs; `compare.py` computes cycle time, throughput,
+  on-time % and tardiness from `instance.done_lots` for every row identically.
+
+### Still open
+
+- **730-day runs are expensive.** Measured on LVHM: ~1,440 planning cycles per
+  simulated day at N=60s, ~5 ms of CP-SAT each across the dirty families. A
+  full 730-day slate run is hours. 30-day runs are minutes and are what the
+  numbers below come from. Parallelising the per-family solves is the obvious
+  next lever and is not done.
+- **Coverage is ~57%, not ~100%.** That is the share of decision points where
+  the slate had a pick for the machine being asked; the rest fall back to a
+  solver-consistent score. It is reported in every row, because a low-coverage
+  row measures the fallback more than it measures the slate.
+- The pressure ablation (`slate:none` / `slate:due` / `slate:full`) is wired
+  but has not been run as a full ladder.
+
+### First head-to-head — LVHM, 30 days, seed 0, batch=Demand
+
+`compare_SMT2020_LVHM_seed0_30d.json`, produced by the command above.
+
+| rule | cycle time (d) | throughput | on-time % | tardiness (lot·d) | coverage | wall |
+|---|---|---|---|---|---|---|
+| fifo  | 22.822 | 66 |  98.48 | 0.1 | – | 168 s |
+| cr    | 22.008 | 55 | 100.00 | 0.0 | – | 173 s |
+| slate | **21.821** | **70** | 98.57 | 1.5 | 49.6% | 2,698 s |
+
+**Read this as a working harness, not as a result.** The caveats are larger
+than the differences:
+
+- **30 days is the fill-up transient**, not steady state. Only 55–70 lots
+  finish, out of ~2,150 in the initial WIP, and every one of them started
+  mid-route with a `CURSTEP`. Cycle time here is dominated by initial
+  conditions, not by dispatching.
+- **One seed.** A 15-lot throughput spread across three rules on ~60
+  completions is well inside what a seed change could move.
+- **Coverage is 49.6%**, so roughly half of `slate`'s decisions were made by
+  the fallback score, not the solver.
+- `slate` is **15.6x slower in wall clock** than `cr`.
+
+The one thing that does look like signal, and is worth chasing: **`slate` is
+the worst row on tardiness** (1.5 lot·days against `cr`'s 0.0) while winning
+throughput and cycle time. Due-date pressure is in the Tier-1 urgency term, so
+either that term is too weak against the throughput-shaped objective, or the
+per-cycle assignment's blindness to sequencing is costing exactly what
+adr/0002 predicted it might. The pressure ablation
+(`--rules slate:none,slate:due,slate:full`) is the experiment that separates
+those two, and it has not been run.
+
+### Two measurements worth keeping
+
+**A 5 ms per-family budget beats a 50 ms one.** Three simulated hours, LVHM:
+
+| budget | plan time | coverage |
+|---|---|---|
+| 50 ms | 20.5 s | 56.2% |
+| 20 ms | 12.3 s | 58.6% |
+| 5 ms  |  6.3 s | 58.8% |
+
+3.3x faster and *slightly better*. A per-family model is ~25 lots against ~12
+machines; CP-SAT closes it well inside 5 ms and the rest of the budget goes on
+proving optimality nobody collects. This is the decomposition thesis of
+adr/0009 confirmed by measurement.
+
+**Planning only for currently-free tools does not work.** `usable_machines` is
+the handful awaiting a decision at that instant, so a slate built from it holds
+a few tokens and ~94% of decisions fall through. Planning across the whole fab
+and serving lookups as tools free — which is what the production dispatcher
+does — took coverage from 6.3% to 56.6%.
 
 ## Recorded numbers, and their provenance
 

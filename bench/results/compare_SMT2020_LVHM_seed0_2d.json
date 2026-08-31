@@ -1,0 +1,37 @@
+{
+  "dataset": "SMT2020_LVHM",
+  "days": 2,
+  "seed": 0,
+  "batch_strat": "Demand",
+  "solver": "cpsat",
+  "cycle_s": 60.0,
+  "budget_s": 0.005,
+  "rows": [
+    {
+      "rule": "cr",
+      "wall_s": 17.7,
+      "decisions": 47149,
+      "fingerprint": "8d77d45c4c2654a3",
+      "throughput": 0,
+      "cycle_time_days": 0.0,
+      "on_time_pct": 0.0,
+      "tardiness_lot_days": 0.0,
+      "interrupted": false
+    },
+    {
+      "rule": "slate-cr",
+      "wall_s": 14.6,
+      "decisions": 47149,
+      "fingerprint": "8d77d45c4c2654a3",
+      "throughput": 0,
+      "cycle_time_days": 0.0,
+      "on_time_pct": 0.0,
+      "tardiness_lot_days": 0.0,
+      "detail": {
+        "solver": "none (cr passthrough)",
+        "consults": 622194
+      },
+      "interrupted": false
+    }
+  ]
+}

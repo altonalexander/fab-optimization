@@ -3,6 +3,7 @@ import ChatPanel from './ChatPanel.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
 import { RouteIndex, RouteProduct } from './RoutePages.jsx'
+import SlatePage from './SlatePage.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
 import StreamChart from './StreamChart.jsx'
@@ -1125,6 +1126,8 @@ export default function App() {
                 <RouteIndex hrefFor={id => linkTo(['routes', id])} /></>}
         </section>
       )}
+
+      {tab === 'slate' && <SlatePage />}
 
       {tab === 'results' && (
         <div className="grid-wide">

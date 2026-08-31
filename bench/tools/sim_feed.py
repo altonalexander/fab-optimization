@@ -1182,10 +1182,24 @@ class FeedPlugin(IPlugin):
             self._release_log.extend([instance.current_time] * len(lots))
         self._tick_kpi(instance)
         for lot in lots:
+            # The route fields (fam/setup/part/batch/proc) are what make the
+            # live ready pool plannable by the slate: dispatch/api's
+            # /api/slate/plan feeds them straight into libfabslate, and without
+            # them the planner has no station family to decompose on and no
+            # setup group to cost a changeover against. They are additive, so a
+            # consumer that does not know about them is unaffected.
+            step = lot.actual_step
             self._write(LOT_TOPIC, envelope(
                 type='LOT_READY', lot=self._lot_id(lot),
-                recipe=getattr(lot.actual_step, 'step_name', ''),
-                prio=1, wafers=25, slack=3600))
+                recipe=getattr(step, 'step_name', ''),
+                prio=1, wafers=25, slack=3600,
+                fam=getattr(step, 'family', ''),
+                setup=getattr(step, 'setup_needed', '') or '',
+                part=lot.part_name,
+                bmin=getattr(step, 'batch_min', 1),
+                bmax=getattr(step, 'batch_max', 1),
+                proc=round(step.processing_time.avg(), 2) if step else 0,
+                due=round(lot.deadline_at, 1)))
             # Seed the burndown at full route length, so a lot that has not
             # moved yet still draws a flat line from its release rather than
             # appearing only once it first completes a step.

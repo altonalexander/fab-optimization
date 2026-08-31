@@ -20,9 +20,18 @@ target_include_directories(fabdisp PRIVATE include)
 add_executable(fabtest src/test_main.cpp)
 target_include_directories(fabtest PRIVATE include)
 
+# The C ABI that bench/tools/slate_rule.py loads with ctypes. See
+# docs/adr/0009 for why this is a C ABI and not pybind11. Built here rather
+# than by hand because find_package(ortools) is what resolves the protobuf
+# include paths that cp_model.pb.h needs; the equivalent g++ line does not.
+add_library(fabslate SHARED src/slate_capi.cpp)
+target_include_directories(fabslate PRIVATE include)
+set_target_properties(fabslate PROPERTIES PREFIX "lib" OUTPUT_NAME "fabslate")
+
 find_package(Threads REQUIRED)
 target_link_libraries(fabdisp PRIVATE Threads::Threads)
 target_link_libraries(fabtest PRIVATE Threads::Threads)
+target_link_libraries(fabslate PRIVATE Threads::Threads)
 
 if(FAB_HAVE_RDKAFKA)
   # apt install librdkafka-dev
@@ -33,7 +42,7 @@ endif()
 if(FAB_HAVE_ORTOOLS)
   # https://developers.google.com/optimization/install/cpp
   find_package(ortools CONFIG REQUIRED)
-  foreach(t fabdisp fabtest)
+  foreach(t fabdisp fabtest fabslate)
     target_compile_definitions(${t} PRIVATE FAB_HAVE_ORTOOLS)
     target_link_libraries(${t} PRIVATE ortools::ortools)
   endforeach()
