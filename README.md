@@ -406,6 +406,12 @@ the reasoning survives the backlog.
   lot, and only on tools with slack. Needs a "hold until *t*" return from
   the rule, a wake event, and a *held for arrival* bucket in the cycle-time
   split so the cost is visible beside the gain.
+- **Downstream-aware dispatch** ([0011](docs/adr/0011-downstream-aware-dispatch.md)).
+  The other half of look-ahead: push need *back* up the route, so an
+  upstream tool sequences for the litho bottleneck twenty steps on (feed it
+  before it starves) or for a furnace batch (send the partners together)
+  rather than for its own queue. A pull rule as a baseline first — it is
+  what the planner's objective must beat, and it says which term matters.
 - **Release control** (no ADR yet). Starts are the dataset's schedule
   verbatim; CONWIP or workload regulation would be a second lever beside
   dispatch, judged on the *starts* KPI. Depends on demand information the

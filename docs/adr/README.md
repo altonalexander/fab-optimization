@@ -16,6 +16,7 @@ overturn it. Not how anything works — that lives beside the code.
 | [0008](0008-what-pyscfabsim-simplifies.md) | What PySCFabSim simplifies (transport, delay, storage, CQT), and what that hides |
 | [0009](0009-slate-rule-hybrid-split.md) | `slate_rule`: where the line between Python and C++ falls |
 | [0010](0010-look-ahead-dispatch-the-hold-decision.md) | Look-ahead dispatch: let a tool hold for a predictable arrival (proposed) |
+| [0011](0011-downstream-aware-dispatch.md) | Downstream-aware dispatch: push bottleneck and batch need back up the route (proposed) |
 
 ## Why these are central and not filed under bench/ or dispatch/
 
