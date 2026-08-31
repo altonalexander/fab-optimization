@@ -1152,8 +1152,23 @@ class FeedPlugin(IPlugin):
         # tell which run an event came from cannot notice that it is stitching
         # two timelines together -- which is exactly what happened: state from
         # day 5 drawn against decisions from day 30, silently.
+        # `queue` is the queue LEFT BEHIND: instance.dispatch() calls
+        # reserve_machine_lot() first, which removes the dispatched lots from
+        # waiting_lots of every machine they were queued at, and only then
+        # calls on_dispatch. So a tool that took the last waiting lot reports
+        # queue=0, which reads as "nothing was waiting" when it means "nothing
+        # is waiting NOW".
+        #
+        # The number a dispatching rule is actually judged on is the CHOICE
+        # SET -- everything it had to pick from -- so emit that too. It is
+        # exact rather than an estimate: reserve() removed precisely these
+        # lots from this machine's list.
+        #
+        # Both are emitted. `queue` keeps its meaning so older rows stay
+        # interpretable; `qbefore` is the one to read.
         self._write(DECISION_TOPIC, envelope(
             tool=tool, lots=len(lots), queue=len(machine.waiting_lots),
+            qbefore=len(machine.waiting_lots) + len(lots),
             day=round(instance.current_time / 86400, 4),
             run=self.run_id, src=src,
             setup=machine.current_setup or '-'))

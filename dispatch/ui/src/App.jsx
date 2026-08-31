@@ -524,13 +524,34 @@ function ToolDetail({ id, backHref }) {
         <div className="muted">no decisions recorded for this tool yet</div>
       ) : (
         <table className="tbl">
-          <thead><tr><th>sim day</th><th>queue</th><th>lots</th><th>setup</th></tr></thead>
+          {/* "chose from" is the choice set -- everything that was waiting
+              when the rule was asked. "left" is what remained after the lot
+              loaded, which is what the feed used to report as "queue" and
+              reads as an empty toolset when it only means the tool took the
+              last lot. A rule is judged on what it chose from, so that is the
+              column first. */}
+          <thead><tr><th>sim day</th><th>chose from</th><th>lots</th>
+                     <th>left</th><th>decided by</th><th>setup</th></tr></thead>
           <tbody>
             {t.recent_decisions.map((d, i) => (
               <tr key={i}>
                 <td><code>{d.day ?? '—'}</code></td>
-                <td>{d.queue ?? '—'}</td>
+                {/* Older rows predate qbefore; reconstruct it, since
+                    reserve() removed exactly these lots from this queue. */}
+                <td>{d.qbefore ?? (d.queue != null && d.lots != null
+                                   ? d.queue + d.lots : '—')}</td>
                 <td>{d.lots ?? '—'}</td>
+                <td className="muted">{d.queue ?? '—'}</td>
+                {/* src outside the 'rule:' namespace is an optimised
+                    decision; see sim_feed's dispatch_source contract. */}
+                <td>
+                  {d.src
+                    ? <span className={String(d.src).startsWith('rule:')
+                                       ? 'chip' : 'chip chip-opt'}>
+                        {String(d.src).replace(/^rule:/, '')}
+                      </span>
+                    : <span className="muted">—</span>}
+                </td>
                 <td className="muted">{d.setup || '—'}</td>
               </tr>
             ))}
