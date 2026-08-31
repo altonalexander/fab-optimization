@@ -1,0 +1,65 @@
+{
+  "dataset": "SMT2020_LVHM",
+  "days": 30,
+  "seed": 0,
+  "batch_strat": "Demand",
+  "solver": "cpsat",
+  "cycle_s": 60.0,
+  "budget_s": 0.005,
+  "rows": [
+    {
+      "rule": "fifo",
+      "wall_s": 168.2,
+      "decisions": 661593,
+      "fingerprint": "67eb91c8b5f28f8a",
+      "throughput": 66,
+      "cycle_time_days": 22.8217,
+      "on_time_pct": 98.48,
+      "tardiness_lot_days": 0.13,
+      "interrupted": false
+    },
+    {
+      "rule": "cr",
+      "wall_s": 172.6,
+      "decisions": 657153,
+      "fingerprint": "ce4755c867e2f4a8",
+      "throughput": 55,
+      "cycle_time_days": 22.0084,
+      "on_time_pct": 100.0,
+      "tardiness_lot_days": 0.0,
+      "interrupted": false
+    },
+    {
+      "rule": "slate",
+      "wall_s": 2698.0,
+      "decisions": 656706,
+      "fingerprint": "0321c0d86171ee8b",
+      "throughput": 70,
+      "cycle_time_days": 21.8208,
+      "on_time_pct": 98.57,
+      "tardiness_lot_days": 1.52,
+      "detail": {
+        "solver": "cpsat",
+        "solver_available": true,
+        "pressure": "full",
+        "cycle_s": 60.0,
+        "builds": 40346,
+        "decisions": 656536,
+        "coverage": 0.496,
+        "consults": 8048014,
+        "lot_token_share": 0.4254,
+        "plan_time_s": 2145.478,
+        "last": {
+          "assigned": 147,
+          "ready": 317,
+          "variables": 8432,
+          "solve_time_s": 0.061796447,
+          "objective": 263415.3031500557,
+          "status": "feasible",
+          "detail": "families solved=16 skipped=0"
+        }
+      },
+      "interrupted": false
+    }
+  ]
+}

@@ -54,6 +54,38 @@ anything.
 - The pressure ablation (`slate:none` / `slate:due` / `slate:full`) is wired
   but has not been run as a full ladder.
 
+### First head-to-head — LVHM, 30 days, seed 0, batch=Demand
+
+`compare_SMT2020_LVHM_seed0_30d.json`, produced by the command above.
+
+| rule | cycle time (d) | throughput | on-time % | tardiness (lot·d) | coverage | wall |
+|---|---|---|---|---|---|---|
+| fifo  | 22.822 | 66 |  98.48 | 0.1 | – | 168 s |
+| cr    | 22.008 | 55 | 100.00 | 0.0 | – | 173 s |
+| slate | **21.821** | **70** | 98.57 | 1.5 | 49.6% | 2,698 s |
+
+**Read this as a working harness, not as a result.** The caveats are larger
+than the differences:
+
+- **30 days is the fill-up transient**, not steady state. Only 55–70 lots
+  finish, out of ~2,150 in the initial WIP, and every one of them started
+  mid-route with a `CURSTEP`. Cycle time here is dominated by initial
+  conditions, not by dispatching.
+- **One seed.** A 15-lot throughput spread across three rules on ~60
+  completions is well inside what a seed change could move.
+- **Coverage is 49.6%**, so roughly half of `slate`'s decisions were made by
+  the fallback score, not the solver.
+- `slate` is **15.6x slower in wall clock** than `cr`.
+
+The one thing that does look like signal, and is worth chasing: **`slate` is
+the worst row on tardiness** (1.5 lot·days against `cr`'s 0.0) while winning
+throughput and cycle time. Due-date pressure is in the Tier-1 urgency term, so
+either that term is too weak against the throughput-shaped objective, or the
+per-cycle assignment's blindness to sequencing is costing exactly what
+adr/0002 predicted it might. The pressure ablation
+(`--rules slate:none,slate:due,slate:full`) is the experiment that separates
+those two, and it has not been run.
+
 ### Two measurements worth keeping
 
 **A 5 ms per-family budget beats a 50 ms one.** Three simulated hours, LVHM:
