@@ -314,8 +314,24 @@ public:
         if (p.deterministic) {
             // Bit-identical output for identical input. When a lot misses
             // Q-time and someone asks why, you must be able to replay it.
-            params.set_interleave_search(true);
             params.set_random_seed(1);
+            // interleave_search is ONLY safe with more than one worker.
+            //
+            // It asks CP-SAT to interleave a set of named subsolvers, one of
+            // which is "fixed" -- and "fixed" needs a decision strategy, which
+            // this model never defines (there is no AddDecisionStrategy call
+            // anywhere in it). With a single worker and a short deadline that
+            // combination reaches
+            //     integer_search.cc:1217]
+            //     Check failed: heuristics.fixed_search != nullptr
+            // which is a CHECK, not an exception: it ABORTS THE PROCESS. It
+            // killed a 30-day benchmark ~20 minutes in, and no error handling
+            // on our side can catch it -- a failed CHECK cannot be trapped. So
+            // it has to be prevented here rather than survived.
+            //
+            // Nothing is lost by gating it: a single worker is deterministic
+            // by construction, which is the property this block exists for.
+            if (p.threads > 1) params.set_interleave_search(true);
         }
 
         Model model;

@@ -6,9 +6,8 @@ fab modelled here it is made about **16 million times** in a two-year run.
 
 Claiming one rule beats another is easy. Measuring it is not, and almost every
 way of trying is wrong in a way that does not announce itself. This is an
-account of building a harness that measures it honestly — including the four
-times the harness was quietly measuring the wrong thing, and how each was
-caught.
+account of building a harness that measures it honestly — including the five
+times it was quietly measuring the wrong thing, and how each was caught.
 
 ---
 
@@ -123,10 +122,11 @@ The rules under test:
 
 ---
 
-## 4. Four ways the measurement was silently wrong
+## 4. Five ways the measurement was silently wrong
 
 This is the part worth reading. Each of these produced *plausible numbers*
-while measuring something other than what the label claimed.
+while measuring something other than what the label claimed. The fifth is in
+§7.1, because it is a property of a benchmark rather than of the harness.
 
 ### 4.1 The tuple shape is load-bearing
 
@@ -266,6 +266,32 @@ small enough that CP-SAT closes it well inside 5 ms; the remaining budget went
 on proving optimality nobody collects. The decomposition argument, confirmed by
 measurement.
 
+**And a fifth way the measurement was wrong — this sweep itself.** It ran over
+*three simulated hours*. Adopting 5 ms as the default and running 30 simulated
+days, the solver **aborted the process** twenty minutes in:
+
+```
+F0000 integer_search.cc:1217] Check failed: heuristics.fixed_search != nullptr
+*** Check failure stack trace: ***   (core dumped)
+```
+
+Not a slow path or a bad answer — a failed `CHECK` inside OR-Tools, which
+cannot be caught, so the run simply died and wrote nothing.
+
+The cause was not the budget. `SolveParams::deterministic` was setting
+`interleave_search(true)`, which asks CP-SAT to interleave named subsolvers
+including `fixed` — and `fixed` requires a decision strategy this model never
+defines. With one worker and a short deadline, that combination trips the
+check. A single worker is deterministic by construction, so the flag was doing
+nothing but harm; it is now gated on `threads > 1`.
+
+The lesson is about the sweep, not the solver: **a benchmark short enough to
+iterate on is short enough to miss the failure mode.** Three hours of simulated
+time explored a narrow enough slice of model shapes that the crash never came
+up, and the number it produced — a genuinely correct speed/coverage
+measurement — was published as a default with a latent process-killing bug
+attached to it.
+
 ### 7.2 Head to head — LVHM, 30 days, seed 0
 
 | rule | cycle time (d) | throughput | on-time % | tardiness (lot·d) | coverage | wall |
@@ -359,6 +385,12 @@ nothing. What makes a comparison worth anything is the machinery that makes it
   greedy is never comparable to one that did not
 - caveats printed by the tool itself, not remembered by the person reading it
 
-Four times during this work the numbers looked fine and were measuring the
-wrong thing. Each was caught by an invariant, not by suspicion. That is the
-argument for building the invariants first.
+Five times during this work the numbers looked fine and were measuring the
+wrong thing. Four were caught by an invariant rather than by suspicion. The
+fifth — a solver flag that aborts the process, hidden behind a benchmark too
+short to reach it — was caught only by running the longer thing, which is the
+uncomfortable part: some failure modes are only visible at the scale you were
+trying to avoid paying for.
+
+That is the argument for building the invariants first, and for not trusting a
+default that has only ever been measured on a short run.
