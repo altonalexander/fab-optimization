@@ -143,6 +143,19 @@ def publish(payload, path, dry_run=False):
                 (run_id, 100.0 * float(cov) if cov is not None else 0.0))
 
             samples = row.get("samples") or []
+            # wip_lots is a column the Results table shows and this harness
+            # genuinely measures, so publish the mean over non-warmup samples.
+            # util_pct and starts_day are NOT published: they come from the
+            # feed's own accounting, this harness does not compute them, and a
+            # fabricated value would be worse than the blank the page shows.
+            live = [s for s in samples if not s.get("warmup")]
+            wip = [s["wip"] for s in live if s.get("wip") is not None]
+            if wip:
+                cur.execute(
+                    "INSERT INTO run_kpis (run_id, metric, product, value)"
+                    " VALUES (%s,'wip_lots','',%s)",
+                    (run_id, sum(wip) / len(wip)))
+
             for s in samples:
                 cur.execute(
                     "INSERT INTO run_kpi_samples"
