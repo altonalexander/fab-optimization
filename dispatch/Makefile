@@ -3,7 +3,7 @@ CXX      ?= g++
 CXXFLAGS ?= -std=c++20 -O2 -pthread -Iinclude
 COMPOSE  := docker compose -f infra/docker-compose.yml
 
-.PHONY: all local dispatcher adapter scenario hsms-sim test bench run api ui infra-up infra-down verify reach clean
+.PHONY: all local dispatcher adapter scenario hsms-sim slate test bench run api ui infra-up infra-down verify reach clean
 
 all: local
 local: dispatcher adapter scenario hsms-sim
@@ -20,6 +20,12 @@ hsms-sim:
 test:
 	$(CXX) $(CXXFLAGS) src/test_main.cpp -o fabtest
 	./fabtest
+
+# The C ABI that bench/tools/slate_rule.py loads with ctypes (docs/adr/0009).
+# Goes through CMake because only find_package(ortools) resolves the protobuf
+# include paths cp_model.pb.h needs.
+slate:
+	@bash build-slate.sh
 
 bench:
 	$(CXX) $(CXXFLAGS) src/test_main.cpp -o fabtest
@@ -70,5 +76,5 @@ ui:
 	cd ui && npm install && npm run dev
 
 clean:
-	rm -f fabdisp amhs_adapter fab_scenario hsms_sim fabtest
+	rm -f fabdisp amhs_adapter fab_scenario hsms_sim fabtest libfabslate.so
 	rm -rf ui/node_modules ui/dist

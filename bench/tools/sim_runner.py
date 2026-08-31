@@ -103,7 +103,12 @@ def run(instance, run_to, dispatcher, before_dispatch=None,
     from dispatching.dispatcher import dispatcher_map
     from greedy import get_lots_to_dispatch_by_machine
 
-    rule = dispatcher_map[dispatcher]
+    # `dispatcher` is normally a name from dispatcher_map. It may also be the
+    # rule itself, which is how slate_rule.SlateRule -- a callable carrying the
+    # planner and its slate -- is passed in without the vendored tree needing
+    # to know it exists. get_lots_to_dispatch_by_machine takes the rule as a
+    # parameter, so no edit inside baselines/pyscfabsim is required.
+    rule = dispatcher if callable(dispatcher) else dispatcher_map[dispatcher]
     try:
         while not instance.done:
             if instance.next_decision_point():

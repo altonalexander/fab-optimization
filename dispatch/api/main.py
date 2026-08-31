@@ -811,7 +811,13 @@ SCENARIO_PATHS = {"/api/scenario", "/api/scenario/compare", "/api/chat",
                   # Playback pacing of the simulator feed. It reaches a
                   # replay process, not the dispatcher, and changes only
                   # when events are emitted -- never fab state.
-                  "/api/sim/control"}
+                  "/api/sim/control",
+                  # Planning the live pool. POST because it carries a solve
+                  # budget, not because it writes anything: it runs
+                  # libfabslate over a SNAPSHOT of the ready pool in this
+                  # process and returns the result. No path to the dispatcher,
+                  # no fab state touched.
+                  "/api/slate/plan"}
 
 
 @app.before_request
@@ -1939,6 +1945,176 @@ def start_feeds():
         threading.Thread(target=feed_file_loop, daemon=True).start()
     else:
         threading.Thread(target=kafka_consumer_loop, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Slate — the CP-SAT planner behind bench/tools/slate_rule.py, exposed live.
+#
+# Two things the dashboard needs and could not get before:
+#   * plan the CURRENT ready pool through the same libfabslate.so the benchmark
+#     uses, so what is shown is what the rule would do -- not a reimplementation
+#   * read the head-to-head comparison runs, so slate can be seen next to
+#     fifo/cr on identical demand
+#
+# The library is loaded lazily and its absence is reported, never faked: a
+# dashboard that invents a plan when the planner is missing is worse than one
+# that says it is missing. See docs/adr/0009.
+# ---------------------------------------------------------------------------
+
+SLATE_LIB = os.getenv("FABSLATE_LIB",
+                      os.path.join(os.path.dirname(os.path.dirname(
+                          os.path.abspath(__file__))), "libfabslate.so"))
+BENCH_RESULTS = os.getenv("BENCH_RESULTS", os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "bench", "results"))
+
+_slate = {"planner": None, "error": None, "tools_sig": None}
+_slate_lock = threading.Lock()
+
+
+def _slate_planner():
+    """Lazily build a planner over the live tool set. Returns (planner, error)."""
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "bench", "tools"))
+    try:
+        import fabslate
+    except Exception as e:                      # pragma: no cover
+        return None, f"fabslate module not importable: {e}"
+
+    with mirror.lock:
+        tools = [{"tool_id": t, "family": tool_group(t) or "UNKNOWN",
+                  "capacity": 1, "online": True, "speed": 1.0}
+                 for t in sorted(mirror.tools)]
+    if not tools:
+        return None, "no tools known yet -- start a feed"
+
+    sig = tuple(t["tool_id"] for t in tools)
+    with _slate_lock:
+        if _slate["planner"] is not None and _slate["tools_sig"] == sig:
+            return _slate["planner"], None
+        try:
+            p = fabslate.Planner("cpsat", lib_path=SLATE_LIB)
+            p.set_tools(tools)
+        except Exception as e:
+            _slate["error"] = str(e)
+            return None, str(e)
+        _slate["planner"] = p
+        _slate["tools_sig"] = sig
+        return p, None
+
+
+@app.get("/api/slate/status")
+def slate_status():
+    """Is the planner usable, and with which solver."""
+    p, err = _slate_planner()
+    if p is None:
+        return jsonify({"available": False, "lib": SLATE_LIB, "error": err})
+    return jsonify({
+        "available": True,
+        "lib": SLATE_LIB,
+        "solver": p.solver,
+        # False means OR-Tools is not linked and every "cpsat" number is really
+        # greedy. The UI must show this, not bury it.
+        "solver_linked": p.solver_available,
+        "tools": len(_slate["tools_sig"] or ()),
+    })
+
+
+@app.post("/api/slate/plan")
+def slate_plan():
+    """Plan the live ready pool and return the slate.
+
+    Needs the route fields sim_feed emits on LOT_READY (fam/setup/part/...).
+    A pool without them cannot be decomposed by station family, and that is
+    reported rather than papered over with a guess.
+    """
+    body = request.get_json(silent=True) or {}
+    budget = float(body.get("budget_s", 0.25))
+
+    p, err = _slate_planner()
+    if p is None:
+        return jsonify({"error": err or "planner unavailable"}), 503
+
+    with mirror.lock:
+        raw = list(mirror.lots_ready.items())
+    lots, missing = [], 0
+    for lid, ev in raw:
+        fam = ev.get("fam")
+        if not fam:
+            missing += 1
+            continue
+        lots.append({
+            "lot_id": lid, "family": fam,
+            "setup_group": ev.get("setup", "") or "",
+            "step": ev.get("recipe", ""), "part": ev.get("part", ""),
+            "batch_min": int(ev.get("bmin", 1) or 1),
+            "batch_max": int(ev.get("bmax", 1) or 1),
+            "wafers": int(ev.get("wafers", 25) or 25),
+            "priority": float(ev.get("prio", 1.0) or 1.0),
+            "step_process_s": float(ev.get("proc", 0.0) or 0.0),
+            "due_s": float(ev.get("due", -1.0) or -1.0),
+        })
+    if not lots:
+        return jsonify({
+            "error": "no plannable lots in the live pool",
+            "ready_seen": len(raw), "missing_route_fields": missing,
+            "hint": "sim_feed must be running and emitting fam/setup/part on "
+                    "LOT_READY",
+        }), 400
+
+    tokens, stats = p.plan(lots, budget_s=budget)
+    by_family = {}
+    for l in lots:
+        by_family[l["family"]] = by_family.get(l["family"], 0) + 1
+    return jsonify({
+        "stats": stats,
+        "lots_planned": len(lots),
+        "missing_route_fields": missing,
+        "families": sorted(({"family": f, "waiting": n}
+                            for f, n in by_family.items()),
+                           key=lambda r: -r["waiting"])[:25],
+        "assignments": [
+            {"lot_id": lots[i]["lot_id"], "family": lots[i]["family"],
+             "tool": tid, "alternate": alt, "rank": rank,
+             "expected_process_s": round(exp, 1)}
+            for i, tid, alt, rank, exp in tokens
+        ],
+    })
+
+
+@app.get("/api/slate/compare")
+def slate_compare():
+    """Head-to-head runs written by bench/tools/compare.py.
+
+    ?run=<name> returns one; no argument lists what is available. This is the
+    fifo/cr/slate table from docs/adr/0002, served to the dashboard rather than
+    left in a terminal.
+    """
+    want = request.args.get("run")
+    try:
+        names = sorted(f for f in os.listdir(BENCH_RESULTS)
+                       if f.startswith("compare_") and f.endswith(".json"))
+    except OSError:
+        names = []
+    if not want:
+        runs = []
+        for n in names:
+            try:
+                with open(os.path.join(BENCH_RESULTS, n)) as f:
+                    d = json.load(f)
+                runs.append({"name": n, "dataset": d.get("dataset"),
+                             "days": d.get("days"), "seed": d.get("seed"),
+                             "solver": d.get("solver"),
+                             "rules": [r["rule"] for r in d.get("rows", [])]})
+            except Exception:
+                continue
+        return jsonify({"dir": BENCH_RESULTS, "runs": runs})
+
+    if want not in names:
+        return jsonify({"error": f"no such run: {want}"}), 404
+    with open(os.path.join(BENCH_RESULTS, want)) as f:
+        return jsonify(json.load(f))
 
 
 # Swagger UI at /docs, ReDoc at /redoc, spec at /openapi.json. Generated from

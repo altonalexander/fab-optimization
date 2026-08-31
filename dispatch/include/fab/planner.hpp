@@ -13,11 +13,15 @@
 // usable, keep serving the previous Slate — that is correct behavior, not an
 // error path.
 
+#include "fab/family_tool.hpp"
 #include "fab/machine_config.hpp"
 #include "fab/slate.hpp"
 #include "fab/solver.hpp"
 
+#include <map>
 #include <memory>
+#include <set>
+#include <string>
 
 namespace fab {
 
@@ -123,9 +127,129 @@ public:
         return r;
     }
 
+    // -----------------------------------------------------------------------
+    // Per-family decomposition. See docs/adr/0009 for why this is a
+    // PRECONDITION rather than an optimization: on LVHM a whole-fab solve is
+    // ~2,500 lots against 1,313 machines, where CP-SAT sits on its time limit
+    // and returns a best incumbent. Split by station family it is ~25 lots
+    // against ~12 machines -- roughly 300 variables -- which closes in
+    // milliseconds. Over ~1M rebuilds in a 730-day run that is the difference
+    // between "runs" and "does not run".
+    //
+    // The split is EXACT, not a heuristic. FamilyTool::evaluate() rejects any
+    // lot whose family differs, so no feasible pair spans two blocks and the
+    // union of the per-family optima is the global optimum of this model. That
+    // holds only while the model has no cross-family constraint; the one
+    // candidate, reticle exclusivity, is confined to litho. Adding a genuine
+    // cross-family constraint later invalidates this and the ADR says so.
+    //
+    // `dirty` is lazy invalidation: when non-null, only families named in it
+    // are re-solved and the rest are carried over from the previous slate.
+    // Most families are quiet in any given cycle.
+    PlanResult plan_by_family(const ToolRegistry& reg,
+                              const std::vector<Lot>& lots,
+                              uint64_t cycle_id,
+                              const PlannerConfig& cfg,
+                              const std::set<std::string>* dirty = nullptr) {
+        PlanResult r;
+        r.ready  = static_cast<int>(lots.size());
+        r.slate  = std::make_shared<Slate>();
+        r.slate->cycle_id = cycle_id;
+        r.status = SolveStatus::NoIncumbent;
+
+        // Bucket tools by family. A tool that is not a FamilyTool has no family
+        // to decompose on, so it goes in one shared bucket keyed "" and is
+        // solved together -- that preserves the old behaviour for the
+        // recipe/reticle tool classes rather than silently dropping them.
+        std::map<std::string, std::vector<MachineConfiguration*>> tools_by_family;
+        for (auto* t : reg.all()) {
+            if (auto* ft = dynamic_cast<FamilyTool*>(t))
+                tools_by_family[ft->family()].push_back(t);
+            else
+                tools_by_family[""].push_back(t);
+        }
+
+        std::map<std::string, std::vector<Lot>> lots_by_family;
+        for (const auto& l : lots) lots_by_family[l.family].push_back(l);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        uint32_t rank = 0;
+        int families_solved = 0, families_skipped = 0;
+
+        for (auto& [fam, flots] : lots_by_family) {
+            auto it = tools_by_family.find(fam);
+            if (it == tools_by_family.end() || it->second.empty()) continue;
+
+            if (dirty && !dirty->count(fam)) {
+                // Carry this family forward untouched. Tokens for its lots came
+                // from a previous solve and are still the best we know.
+                if (last_slate_) {
+                    for (const auto& l : flots) {
+                        auto tk = last_slate_->tokens.find(l.lot_id);
+                        if (tk != last_slate_->tokens.end()) {
+                            r.slate->tokens[l.lot_id] = tk->second;
+                            r.assigned++;
+                        }
+                    }
+                }
+                families_skipped++;
+                continue;
+            }
+
+            AssignmentModel m = SolverExporter::build(it->second, flots);
+            r.variables += static_cast<int>(m.entries.size());
+            if (m.entries.empty()) continue;
+
+            SolveParams sp;
+            sp.time_limit_s = cfg.solve_budget_s;
+            sp.relative_gap = cfg.relative_gap;
+            sp.threads      = cfg.threads;
+            // No warm start across families: hints are indexed by position
+            // within one model, so a hint from a different family would be
+            // meaningless at best and misleading at worst.
+            backend_->set_hint({});
+
+            SolveResult sr = backend_->solve(m, flots, sp);
+            if (!sr.usable()) continue;
+            families_solved++;
+            r.objective += sr.objective;
+
+            for (const auto& [li, ti] : sr.assignment) {
+                RouteToken tok;
+                tok.primary = m.tool_ids[ti];
+                tok.alternate = tok.primary;
+
+                double proc = 0.0, best_alt = 1e18;
+                for (const auto& e : m.entries) {
+                    if (e.lot_index != li) continue;
+                    if (e.tool_index == ti) { proc = e.process_s; continue; }
+                    if (e.cost < best_alt) {
+                        best_alt = e.cost;
+                        tok.alternate = m.tool_ids[e.tool_index];
+                    }
+                }
+                tok.expected_process_s = proc;
+                tok.rank = rank++;
+                r.slate->tokens[m.lot_ids[li]] = tok;
+                r.assigned++;
+            }
+        }
+
+        r.solve_time_s = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (r.assigned > 0) r.status = SolveStatus::Feasible;
+        r.detail = "families solved=" + std::to_string(families_solved) +
+                   " skipped=" + std::to_string(families_skipped);
+
+        for (auto* t : reg.all()) r.slate->tools[t->id()] = t->slice();
+        last_slate_ = r.slate;
+        return r;
+    }
+
 private:
     std::unique_ptr<SolverBackend> backend_;
     std::unordered_map<int, int>   last_assignment_;
+    std::shared_ptr<Slate>         last_slate_;
 };
 
 } // namespace fab
