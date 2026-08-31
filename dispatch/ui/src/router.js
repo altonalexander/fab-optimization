@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 //   #/tools/ETCH_11              #/floor?bay=3,2&heat=1
 // ---------------------------------------------------------------------------
 
-export const TABS = ['live', 'lots', 'tools', 'floor', 'routes', 'results', 'scenario', 'topology']
+export const TABS = ['live', 'lots', 'tools', 'floor', 'routes', 'results', 'topology']
 const DEFAULT = '/live'
 
 export function parseHash(hash = window.location.hash) {

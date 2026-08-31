@@ -6,6 +6,8 @@ import { RouteIndex, RouteProduct } from './RoutePages.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
 import StreamChart from './StreamChart.jsx'
+import KpiPanel, { KPIS, Info, valueOf, WipSinceDay0 } from './KpiPanel.jsx'
+import ResultsPage from './ResultsPage.jsx'
 import { spanFor, fmtSpan, fmtSimTime } from './stream_geom.js'
 
 // ---------------------------------------------------------------------------
@@ -38,6 +40,7 @@ function useLiveState() {
   const feedRef = useRef([])
   const marksRef = useRef([])          // arrival times of event/decision frames
   const lastStateRef = useRef(null)    // arrival time of the previous state frame
+  const simMarksRef = useRef([])       // (wall, simT) pairs, for the measured clock rate
 
   useEffect(() => {
     let es
@@ -70,6 +73,19 @@ function useLiveState() {
           // enough that a single burst does not make the number meaningless.
           const marks = marksRef.current.filter(t => now - t < 10000)
           marksRef.current = marks
+          // Measured playback: simulated seconds advanced per wall second,
+          // over the same window. The requested speed is a setting; this is
+          // what the feed actually achieved, and it is the number that turns
+          // an envelopes/s figure into something comparable across speeds.
+          if (sim.t != null) {
+            const sm = simMarksRef.current.filter(m => now - m.wall < 10000)
+            sm.push({ wall: now, simT: sim.t })
+            simMarksRef.current = sm
+          }
+          const sm = simMarksRef.current
+          const simRate = sm.length >= 2 && sm[sm.length - 1].wall > sm[0].wall
+            ? (sm[sm.length - 1].simT - sm[0].simT) / ((sm[sm.length - 1].wall - sm[0].wall) / 1000)
+            : null
           const parsed = Date.parse(msg.state.ts)
           const lag = Number.isNaN(parsed) ? null : Math.max(0, now - parsed)
           const beat = lastStateRef.current ? now - lastStateRef.current : null
@@ -79,10 +95,17 @@ function useLiveState() {
             return {
               ...l,
               eventRate: rate,
+              simRate,
+              simSpeed: sim.speed ?? null,
+              simPaused: !!sim.paused,
               lagMs: lag,
               heartbeatMs: beat,
               rateHistory: [...l.rateHistory.slice(-59), {
                 t: new Date().toLocaleTimeString(), rate: Number(rate.toFixed(2)),
+                // Playback alongside the rate it drives: the requested speed
+                // and what the feed actually achieved.
+                speed: sim.paused ? 0 : (sim.speed ?? null),
+                simRate: simRate == null ? null : Number(simRate.toFixed(1)),
               }],
             }
           })
@@ -106,15 +129,15 @@ function useLiveState() {
 // `href` makes a tile a link to the view that explains it. A plain <a> rather
 // than an onClick so the hash router, middle-click, and copy-link all keep
 // working for free -- the tile becomes a real URL, not a click handler.
-function Stat({ label, value, sub, accent, href, title }) {
+function Stat({ label, value, sub, accent, href, title, info }) {
   const body = (
     <>
-      <div className="stat-label">{label}</div>
+      <div className="stat-label">{label}{info && <> <Info text={info} /></>}</div>
       <div className="stat-value" style={accent ? { color: accent } : undefined}>{value}</div>
       {sub && <div className="stat-sub">{sub}</div>}
     </>
   )
-  if (!href) return <div className="stat">{body}</div>
+  if (!href) return <div className="stat" title={title}>{body}</div>
   return <a className="stat stat-link" href={href} title={title}>{body}</a>
 }
 
@@ -178,10 +201,24 @@ function TopologyMetrics({ zones, state, link, connected }) {
       <div className="stats-row">
         <Stat label="event throughput"
               value={link.eventRate == null ? '—' : link.eventRate.toFixed(1)}
-              sub="envelopes/s · 10s window" />
+              sub="envelopes/s · 10s window"
+              info="Envelopes reaching this browser per wall second. Scales with playback speed: at 200x the fab emits ten times the events of 20x. Read it against the sim clock rate below." />
+        <Stat label="sim clock rate"
+              value={link.simRate == null ? '—' : `${link.simRate.toFixed(1)}x`}
+              accent={link.simRate != null && link.simSpeed && !link.simPaused
+                      && link.simRate < 0.5 * link.simSpeed ? '#b45309' : undefined}
+              sub={link.simPaused ? 'paused' : link.simSpeed != null
+                     ? `measured · ${link.simSpeed}x requested` : 'sim-seconds per wall-second'}
+              info="Simulated seconds advanced per wall-clock second, measured from the clock stamped on state frames over the last 10 s. The requested speed is a setting; this is what the feed actually keeps up with. Amber when it falls below half the request." />
+        <Stat label="events per fab-hour"
+              value={link.eventRate != null && link.simRate
+                     ? Math.round(link.eventRate / link.simRate * 3600).toLocaleString() : '—'}
+              sub="envelopes per simulated hour"
+              info="Event throughput divided by the measured clock rate: the fab's own event density, independent of playback speed. Roughly constant for a given fab; use it to compare loads across speeds or runs." />
         <Stat label="lot throughput"
-              value={state ? state.throughput_lots_per_hour : '—'}
-              sub="lots/hr · 120s window" />
+              value={state?.kpi ? Math.round(state.kpi.thr) : '—'}
+              sub="lots per fab-day · trailing simulated day"
+              info={KPIS[1].info} />
         <Stat label="mirror lag" value={fmtMs(link.lagMs)}
               accent={lagAccent} sub="ms · zone 2→3→browser" />
         <Stat label="heartbeat" value={fmtMs(link.heartbeatMs)}
@@ -204,13 +241,27 @@ function TopologyMetrics({ zones, state, link, connected }) {
 
       <section>
         <h3>Event rate</h3>
+        <p className="muted" style={{ marginTop: -4 }}>
+          Envelopes per wall second, with the playback speed on its own axis
+          beneath it: the fab emits a fixed number of events per simulated
+          hour, so switching playback from 20x to 200x multiplies this rate
+          tenfold without anything in the fab changing. Read the two together.
+        </p>
         {link.rateHistory.length < 2
           ? <div className="muted">sampling…</div>
           : (
-            <StreamChart
-              data={link.rateHistory} cap={60} height={160}
-              series={[{ key: 'rate', name: 'envelopes/s', color: '#1d4ed8',
-                         fmt: v => v.toFixed(2) }]} />
+            <>
+              <StreamChart
+                data={link.rateHistory} cap={60} height={160}
+                series={[{ key: 'rate', name: 'envelopes/s', color: '#1d4ed8',
+                           fmt: v => v.toFixed(2) }]} />
+              <StreamChart
+                data={link.rateHistory} cap={60} height={120}
+                series={[{ key: 'speed', name: 'playback requested (x realtime)', color: '#b45309',
+                           fmt: v => `${v}x` },
+                         { key: 'simRate', name: 'sim clock measured (x)', color: '#059669',
+                           fmt: v => `${v}x` }]} />
+            </>
           )}
       </section>
 
@@ -418,119 +469,6 @@ function ZoneInvariants({ zones }) {
   )
 }
 
-function ScenarioPanel({ tools }) {
-  const [downed, setDowned] = useState([])
-  const [result, setResult] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState(null)
-
-  const toggle = (id) =>
-    setDowned(d => d.includes(id) ? d.filter(x => x !== id) : [...d, id])
-
-  const run = async () => {
-    setBusy(true); setErr(null); setResult(null)
-    try {
-      const r = await fetch('/api/scenario/compare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tool_overrides: downed.map(id => ({ tool_id: id, online: false })),
-        }),
-      })
-      const j = await r.json()
-      if (!r.ok) setErr(j.error || 'scenario failed')
-      else setResult(j)
-    } catch (e) { setErr(String(e)) }
-    setBusy(false)
-  }
-
-  return (
-    <div>
-      <p className="muted">
-        Take tools down and re-plan. Runs the same C++ planner the dispatcher
-        uses, against a cloned registry — never the live fab.
-      </p>
-      <div className="tool-grid">
-        {tools.map(t => (
-          <button
-            key={t}
-            onClick={() => toggle(t)}
-            className={downed.includes(t) ? 'tool tool-down' : 'tool'}>
-            {t}{downed.includes(t) && <span className="down-x"> DOWN</span>}
-          </button>
-        ))}
-      </div>
-      <button className="run" onClick={run} disabled={busy}>
-        {busy ? 'solving…' : `Re-plan with ${downed.length} tool(s) down`}
-      </button>
-
-      {err && <div className="err">{err}</div>}
-
-      {result && (
-        <div className="result">
-          <div className="stats-row">
-            <Stat label="baseline assigned" value={result.baseline.assigned} />
-            <Stat label="scenario assigned" value={result.scenario.assigned}
-                  accent={result.diff.assigned_delta < 0 ? '#b91c1c' : '#15803d'} />
-            <Stat label="delta" value={result.diff.assigned_delta > 0
-                    ? `+${result.diff.assigned_delta}` : result.diff.assigned_delta} />
-            <Stat label="solve" value={`${result.scenario.solve_ms.toFixed(2)} ms`}
-                  sub={result.scenario.solver_linked
-                    ? result.scenario.solver : `${result.scenario.solver} (greedy fallback)`} />
-          </div>
-
-          {result.diff.rerouted.length > 0 && (
-            <>
-              <h4>Rerouted</h4>
-              <table className="tbl">
-                <thead><tr><th>lot</th><th>from</th><th>to</th></tr></thead>
-                <tbody>
-                  {result.diff.rerouted.map(r => (
-                    <tr key={r.lot_id}>
-                      <td><code>{r.lot_id}</code></td>
-                      <td className="from">{r.from}</td>
-                      <td className="to">{r.to}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
-
-          {result.diff.newly_unassigned.length > 0 && (
-            <>
-              <h4 className="danger">Newly unassignable</h4>
-              <div className="chips">
-                {result.diff.newly_unassigned.map(l => (
-                  <span key={l} className="chip chip-bad">{l}</span>
-                ))}
-              </div>
-            </>
-          )}
-
-          {result.scenario.unassigned.length > 0 && (
-            <>
-              <h4>Held, with reason</h4>
-              <table className="tbl">
-                <thead><tr><th>lot</th><th>recipe</th><th>reason</th></tr></thead>
-                <tbody>
-                  {result.scenario.unassigned.slice(0, 12).map(u => (
-                    <tr key={u.lot_id}>
-                      <td><code>{u.lot_id}</code></td>
-                      <td>{u.recipe}</td>
-                      <td className="muted">{u.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function ToolDetail({ id, backHref }) {
   const [t, setT] = useState(null)
   const [err, setErr] = useState(null)
@@ -704,24 +642,6 @@ function ToolIndex({ query, setQuery, toolHref }) {
   )
 }
 
-// The bench results page is a self-contained static page with its own design
-// system, framed rather than ported: it fetches nothing, its data is embedded,
-// and rewriting 145KB of hand-tuned SVG into React would lose fidelity and buy
-// nothing. Routes used to be framed the same way and no longer are -- see
-// RoutePages.jsx: routes needed per-product URLs, which an iframe cannot have.
-function Embedded({ src, title }) {
-  return (
-    <div className="embed-wrap">
-      <iframe src={src} title={title} className="embed-frame" loading="lazy" />
-      <div className="embed-foot muted">
-        Static page ·{' '}
-        <a href={src} target="_blank" rel="noreferrer">open full screen</a>
-      </div>
-    </div>
-  )
-}
-
-
 // ---------------------------------------------------------------------------
 // Playback badge. The feed (bench/tools/sim_feed.py) replays a simulated fab
 // at a multiple of realtime, so "live" alone was ambiguous: 400x live and 1x
@@ -733,8 +653,9 @@ function Embedded({ src, title }) {
 const SPEED_HELP =
   'Playback speed — how fast the simulated fab is replayed. 1x is realtime ' +
   '(one simulated second per second); 400x replays a simulated day in about ' +
-  'three and a half minutes. Speed changes pacing only: the run itself is ' +
-  'unchanged, so the same seed gives the same fab at every speed.'
+  'three and a half minutes, 1600x in under a minute. Speed changes pacing ' +
+  'only: the run itself is unchanged, so the same seed gives the same fab at ' +
+  'every speed. See docs/adr/0007 for why playback is a cursor, not a throttle.'
 
 function fmtSpeed(v) {
   if (v === null || v === undefined) return '—'
@@ -744,7 +665,7 @@ function fmtSpeed(v) {
 // WIP against the fab's own clock.
 //
 // The series is fab data, so wall clock is the wrong axis for it: the feed
-// replays at 1x to 400x and can be paused, which means equal spacing between
+// replays at 1x to 1600x and can be paused, which means equal spacing between
 // arrivals is not equal fab time. Plotted by arrival, the same-looking window
 // covered ten minutes of fab at 1x and nearly three days at 400x, a slope meant
 // 400x different things depending on the pill in the header, and a paused feed
@@ -953,7 +874,7 @@ function SpeedControl({ connected }) {
 
   const available = !!ctl?.available
   const paused = !!ctl?.paused
-  const speeds = ctl?.speeds?.length ? ctl.speeds : [1, 10, 20, 50, 100, 400]
+  const speeds = ctl?.speeds?.length ? ctl.speeds : [1, 10, 20, 50, 100, 400, 800, 1600]
 
   const label = !connected ? 'reconnecting'
     : paused ? 'paused'
@@ -1035,14 +956,6 @@ export default function App() {
     fetch('/api/zones').then(r => r.json()).then(setZones).catch(() => {})
   }, [])
 
-  const tools = useMemo(() => {
-    const fromState = state ? Object.keys(state.tools) : []
-    return fromState.length ? fromState : [
-      'ETCH_11','ETCH_12','ETCH_13','FURN_02','FURN_03','CVD_07','CVD_08',
-      'LITHO_03','LITHO_04','CD_SEM_01','PROBE_21','PROBE_22',
-    ]
-  }, [state])
-
   const offline = state
     ? Object.entries(state.tools).filter(([, v]) => !v.online).map(([k]) => k) : []
 
@@ -1075,13 +988,25 @@ export default function App() {
         </div>
       </header>
 
+      {/* The fab KPIs, on every page. WIP is live from the mirror (ready +
+          in flight); the rest are the producer's hourly samples, so a tile
+          moves once per simulated hour and matches the KPI charts exactly. */}
       <div className="stats-row">
-        <Stat label="ready" value={state?.ready ?? '—'} />
-        <Stat label="in flight" value={state?.in_flight ?? '—'} />
-        <Stat label="completed" value={state?.completed ?? '—'} />
-        <Stat label="throughput" value={state ? state.throughput_lots_per_hour : '—'}
-              sub="lots/hr" />
+        <Stat label="WIP" value={state ? (state.ready + state.in_flight).toLocaleString() : '—'}
+              sub={state ? `${state.ready} waiting · ${state.in_flight} on a tool` : undefined}
+              info={KPIS[0].info} />
+        {KPIS.slice(1).map(k => {
+          const v = valueOf(k, state?.kpi)
+          const sub = k.key === 'otd' && state?.kpi
+            ? `late lots avg ${Number(state.kpi.tard || 0).toFixed(1)}d late`
+            : k.key === 'optpct' && state?.kpi
+              ? `${Math.round(state.kpi.opt)} of ${Math.round(state.kpi.dec)} decisions/day`
+              : k.unit
+          return <Stat key={k.key} label={k.label} value={v == null ? '—' : k.fmt(v)}
+                       sub={sub} info={k.info} />
+        })}
         <Stat label="tools down" value={offline.length}
+              info="Tools currently reported offline by a breakdown or PM event and not yet recovered. Click for the tool index."
               accent={offline.length ? '#b91c1c' : undefined}
               sub={offline.join(', ') || 'all up'}
               href={linkTo('/tools')}
@@ -1118,15 +1043,38 @@ export default function App() {
       )}
 
       {tab === 'live' && (
+        <div className="grid-wide" style={{ marginBottom: 16 }}>
+          <section>
+            <h3>KPIs since day 0</h3>
+            <p className="muted" style={{ marginTop: -4 }}>
+              The fab from its first simulated hour. <b>Black</b> is warm-up
+              &mdash; simulated before this run started, published with the
+              snapshot &mdash; and <b>blue</b> is the run you are watching. Both
+              are sampled by the producer with one definition, which is what
+              makes a later run under a different dispatcher comparable.
+            </p>
+            <KpiPanel />
+          </section>
+        </div>
+      )}
+
+      {tab === 'live' && (
         <div className="grid">
           <section>
-            <h3>WIP — whole fab</h3>
+            <h3>WIP — whole fab, since day 0</h3>
             <p className="muted" style={{ marginTop: -4 }}>
-              Every lot in the fab, not one tool. <b>Waiting</b> has been
-              released but not started; <b>running</b> is on a tool now. Their
-              sum is total WIP. For one tool, use the tools or floor tab.
+              Every lot in the fab, not one tool. <b>Waiting</b> is in a queue
+              between steps; <b>running</b> is on a tool now. Their sum is
+              total WIP. One sample per simulated hour from the producer, so
+              the warm-up is drawn too. For one tool, use the tools or floor tab.
             </p>
-            <WipChart history={history} />
+            <WipSinceDay0 />
+            <details style={{ marginTop: 10 }}>
+              <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
+                last few fab-hours at playback resolution (mirror samples)
+              </summary>
+              <WipChart history={history} />
+            </details>
           </section>
           <section>
             <h3>Event feed</h3>
@@ -1179,14 +1127,34 @@ export default function App() {
       )}
 
       {tab === 'results' && (
-        <section>
-          <h3>Simulation results</h3>
-          <Embedded src="/bench-results.html" title="Fab Dispatch Bench" />
-        </section>
-      )}
-
-      {tab === 'scenario' && (
-        <section><h3>What-if</h3><ScenarioPanel tools={tools} /></section>
+        <div className="grid-wide">
+          <section>
+            <h3>Runs</h3>
+            <p className="aside">
+              A wafer fab is the hardest scheduling problem in manufacturing. A
+              silicon lot makes hundreds of passes through the same few hundred
+              machines, revisiting the same toolsets at different stages &mdash;
+              so the queue you join depends on every decision made before it.
+              Machines break down, need preventive maintenance, require setup
+              changes between recipes, and some process wafers in batches that
+              must be filled. Every time a machine frees up, something has to
+              choose which waiting lot goes next. That choice is the
+              <b> dispatching rule</b>, and it is made tens of thousands of times a
+              day. This simulator replays a full virtual fab from the public
+              SMT2020 testbed so those rules can be compared on identical demand,
+              identical breakdowns and identical machine sets &mdash; something
+              impossible in a real $10B fab. Every row below is one such replay.
+            </p>
+            <p className="muted" style={{ marginTop: -4 }}>
+              Every simulation run recorded in the Postgres run store, end to
+              end: the same hourly KPI samples the live tab draws, kept per run.
+              Pick a baseline; the table shows each run's post-warm-up means and
+              the delta against it, and the charts lay the selected runs &mdash;
+              including the one streaming right now &mdash; over each other.
+            </p>
+            <ResultsPage />
+          </section>
+        </div>
       )}
 
       {tab === 'topology' && (
@@ -1209,7 +1177,7 @@ export default function App() {
         </div>
 
         {/* Always mounted, never unmounted by tab changes: the conversation
-            has to survive switching between live, scenario and topology, which
+            has to survive switching between live, results and topology, which
             is the whole point of it being a rail rather than a tab. Collapsing
             hides it with [hidden] so chat state is preserved. */}
         <aside className="rail" hidden={!assistantOpen}>

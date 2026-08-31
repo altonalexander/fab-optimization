@@ -47,5 +47,12 @@ $K --bootstrap-server $B --create --if-not-exists \
    --topic fab.lot.burndown --partitions 12 --replication-factor 1 \
    --config retention.ms=86400000 --config compression.type=lz4
 
+# Fab KPI series: compacted, keyed by run. One KPI_HIST record per run holds
+# every warm-up sample; live samples follow one record per simulated hour.
+# A single partition keeps them in order, and the volume is trivial.
+$K --bootstrap-server $B --create --if-not-exists \
+   --topic fab.kpi.state --partitions 1 --replication-factor 1 \
+   --config cleanup.policy=compact
+
 echo "--- topics ---"
 $K --bootstrap-server $B --list

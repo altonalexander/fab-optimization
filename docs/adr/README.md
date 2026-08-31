@@ -12,6 +12,8 @@ overturn it. Not how anything works — that lives beside the code.
 | [0004](0004-kafka-for-state-postgres-for-runs.md) | Kafka holds live state, Postgres holds runs |
 | [0005](0005-cp-kafka-image.md) | cp-kafka rather than apache/kafka |
 | [0006](0006-zeromq-inbound-kafka-outbound.md) | ZeroMQ inbound, Kafka outbound: the transport split |
+| [0007](0007-playback-is-a-cursor-not-a-throttle.md) | Playback is a cursor, not a throttle: run unpaced, replay at will |
+| [0008](0008-what-pyscfabsim-simplifies.md) | What PySCFabSim simplifies (transport, delay, storage, CQT), and what that hides |
 
 ## Why these are central and not filed under bench/ or dispatch/
 

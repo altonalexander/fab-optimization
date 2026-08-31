@@ -73,7 +73,16 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
   setCohortRef.current = setCohort
   const [data, setData] = useState(null)
   const [mode, setMode] = useState('envelope')   // envelope | lines
-  const [metric, setMetric] = useState('steps')  // steps | time
+  // Steps left is the one metric drawn. "Process time left" was a toggle
+  // here; it excluded queue time, which is most of the cycle, and read as a
+  // forecast it was not.
+  const metric = 'steps'
+  // Context around the cohort: its nearest earlier and later cohorts of the
+  // same product, and hot lots released before it that may catch it up.
+  const [neigh, setNeigh] = useState(0)          // 0 | 2 | 5 cohorts each side
+  const [hotN, setHotN] = useState(0)            // 0 | 3 | 6 hot lots
+  const [partIndex, setPartIndex] = useState(null)
+  const [extra, setExtra] = useState({})         // id -> payload (cohort or hot)
   const [focus, setFocus] = useState(null)       // lot id
   const [err, setErr] = useState(null)
   const [zoom, setZoom] = useState({ scale: 1, offset: 0 })
@@ -173,6 +182,42 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
       .catch(() => setErr(`could not load cohort ${cohort}`))
   }, [cohort])
 
+  // --- context: neighbours and hot lots --------------------------------------
+  const rowNow = index?.cohorts?.find(c => c.cohort === cohort) || null
+  const part = rowNow?.part || data?.lots?.[0]?.part || null
+  useEffect(() => {
+    if (!part || (!neigh && !hotN)) { setPartIndex(null); return }
+    fetch(`/api/lots?part=${encodeURIComponent(part)}`).then(r => r.json())
+      .then(d => setPartIndex(d.cohorts || [])).catch(() => setPartIndex([]))
+  }, [part, neigh, hotN, cohort])
+
+  // Nearest by release AND due date together: two cohorts a day apart in
+  // release but a week apart in due date (a hot stream vs a regular one)
+  // are not neighbours in the sense that matters -- meeting at a furnace.
+  const neighbours = useMemo(() => {
+    if (!neigh || !partIndex || !rowNow) return []
+    const near = c => Math.abs(c.release - rowNow.release) + Math.abs((c.due || 0) - (rowNow.due || 0))
+    const others = partIndex.filter(c => c.cohort !== cohort)
+    const before = others.filter(c => c.release < rowNow.release).sort((a, b) => near(a) - near(b)).slice(0, neigh)
+    const after = others.filter(c => c.release >= rowNow.release).sort((a, b) => near(a) - near(b)).slice(0, neigh)
+    return before.map(c => ({ ...c, side: 'before' })).concat(after.map(c => ({ ...c, side: 'after' })))
+  }, [neigh, partIndex, rowNow, cohort])
+
+  useEffect(() => {
+    let alive = true
+    const want = neighbours.map(c => `/api/lots/${encodeURIComponent(c.cohort)}`)
+    if (hotN && part && rowNow) {
+      want.push(`/api/lots/hot?part=${encodeURIComponent(part)}&near_t=${rowNow.release}`
+                + `&min_left=${rowNow.min_left || 0}&limit=${hotN}`)
+    }
+    if (!want.length) { setExtra({}); return }
+    Promise.all(want.map(u => fetch(u).then(r => r.json()).then(d => [u, d]).catch(() => [u, null])))
+      .then(pairs => { if (alive) setExtra(Object.fromEntries(pairs.filter(p => p[1]))) })
+    return () => { alive = false }
+  }, [neighbours, hotN, part, rowNow?.release, rowNow?.min_left])
+
+  const extraLots = useMemo(() => Object.values(extra).flatMap(d => d.lots || []), [extra])
+
   // --- geometry -------------------------------------------------------------
   // The chart is drawn at its container's real width rather than at a fixed
   // 900px scaled down by CSS: scaling the whole SVG shrinks the axis labels
@@ -203,17 +248,19 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
     // Fixed window. An auto-scaling axis would shift the chart under the
     // reader's cursor on every tick, so the domain only moves when they zoom
     // or pan.
-    const [t0, t1] = domainWithProjection(lots, now, metric)
+    // Context lots widen the window (a later cohort is due later) but do not
+    // otherwise take part in the geometry of the selected cohort.
+    const [t0, t1] = domainWithProjection(lots.concat(extraLots), now, metric)
     const span = (t1 - t0) / zoom.scale
     const d0 = t0 + zoom.offset * (t1 - t0)
     const d1 = d0 + span
 
     const warm = data.warm_t ?? null
-    const yMax = maxValue(lots, metric)
+    const yMax = maxValue(lots.concat(extraLots), metric)
     const x = t => M.l + ((t - d0) / (d1 - d0)) * iw
     const y = v => M.t + ih - (v / yMax) * ih
     return { lots, now, warm, d0, d1, yMax, x, y }
-  }, [data, metric, zoom, iw, ih, M.l, M.t])
+  }, [data, metric, zoom, iw, ih, M.l, M.t, extraLots])
 
   // Y positions at which lots in this cohort were actually observed waiting on
   // batch partners. The brief asks for the route's batch steps; SMT2020 does
@@ -224,9 +271,31 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
     () => (view && metric === 'steps' ? computeBands(view.lots) : []),
     [view, metric])
 
+  const context = useMemo(() => {
+    if (!view) return []
+    const out = []
+    for (const [url, d] of Object.entries(extra)) {
+      if (!d || !d.lots || !d.lots.length) continue
+      if (url.includes('/api/lots/hot?')) {
+        // Each hot lot on its own: they are individuals, not a batch set.
+        for (const l of d.lots) {
+          const e = computeEnvelope([l], view.d0, view.d1, view.now, metric, 200, [view.warm])
+          out.push({ id: l.lot, label: `${l.lot} (hot, ${l.cohort})`, kind: 'hot', pts: e })
+        }
+        continue
+      }
+      const n = neighbours.find(c => d.cohort === c.cohort)
+      const e = computeEnvelope(d.lots, view.d0, view.d1, view.now, metric, 200, [view.warm])
+      out.push({ id: d.cohort, label: d.cohort, kind: n?.side || 'after', pts: e,
+                 rank: n ? neighbours.filter(c => c.side === n.side).indexOf(n) : 0 })
+    }
+    return out
+  }, [extra, view, metric, neighbours])
+
   const envelope = useMemo(() => {
     if (!view || mode !== 'envelope') return null
-    const e = computeEnvelope(view.lots, view.d0, view.d1, view.now, metric)
+    const e = computeEnvelope(view.lots, view.d0, view.d1, view.now, metric,
+                              160, [view.warm])
     return e.length ? e : null
   }, [view, mode, metric])
 
@@ -271,14 +340,20 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
                   onClick={() => setMode('lines')}>lots</button>
         </span>
 
-        <span className="seg">
-          <button className={metric === 'steps' ? 'active' : ''}
-                  onClick={() => setMetric('steps')}>steps left</button>
-          <button className={metric === 'time' ? 'active' : ''}
-                  onClick={() => setMetric('time')}
-                  title="Sum of raw process time over the remaining route. Queue time is NOT included, so this is a floor, not a predicted finish.">
-            process time left
-          </button>
+        <span className="seg" title="Show the nearest earlier and later cohorts of this product, chosen by release date and due date together, so they are the ones that will actually meet this cohort at a batch step.">
+          <span className="seg-label">± cohorts</span>
+          {[0, 2, 5].map(n => (
+            <button key={n} className={neigh === n ? 'active' : ''}
+                    onClick={() => setNeigh(n)}>{n === 0 ? 'off' : n}</button>
+          ))}
+        </span>
+
+        <span className="seg" title="Hot lots (priority 20) of this product that are behind this cohort in the route (at least as many steps left as its lead lot), released nearest to it. They move faster, so they are the ones likely to catch it up and contend for the same batches.">
+          <span className="seg-label">hot lots catching up</span>
+          {[0, 3, 6].map(n => (
+            <button key={n} className={hotN === n ? 'active' : ''}
+                    onClick={() => setHotN(n)}>{n === 0 ? 'off' : n}</button>
+          ))}
         </span>
 
         <span className="seg">
@@ -356,6 +431,25 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
                       fill="#dc2626" fillOpacity={dim ? 0.3 : 0.9}
                       stroke="#fff" strokeWidth="1" />
               <title>{`${l.lot} due d${(l.due / 86400).toFixed(1)}`}</title>
+            </g>
+          )
+        })}
+
+        {view && context.map(c => {
+          const pts = c.pts.filter(e => e.t <= view.d1 && e.t >= view.d0)
+          if (pts.length < 2) return null
+          const color = c.kind === 'hot' ? '#dc2626' : c.kind === 'before' ? '#0891b2' : '#d97706'
+          const last = pts[pts.length - 1]
+          return (
+            <g key={`ctx${c.id}`}>
+              <path d={linePath(pts, view, 'med')} fill="none" stroke={color}
+                    strokeWidth={c.kind === 'hot' ? 1.4 : 1.6}
+                    strokeOpacity={c.kind === 'hot' ? 0.9 : 0.55}
+                    strokeDasharray={c.kind === 'hot' ? '5 3' : undefined} />
+              <text x={Math.min(view.x(last.t) + 4, W - M.r - 4)} y={view.y(last.med) - 3}
+                    fontSize="10" fill={color} textAnchor={view.x(last.t) + 60 > W - M.r ? 'end' : 'start'}>
+                {c.label}
+              </text>
             </g>
           )
         })}

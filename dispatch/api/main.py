@@ -56,7 +56,9 @@ SIM_CONTROL_FILE = os.getenv(
                  "..", "..", "bench", ".sim_control.json"))
 # What the dashboard offers. 0 would mean unpaced, which floods the browser,
 # so it is deliberately not on the menu.
-SIM_SPEEDS = [1, 10, 20, 50, 100, 400]
+# 800x and 1600x measured to hold within 3% (docs/adr/0007); the simulator
+# itself tops out near 10,000x.
+SIM_SPEEDS = [1, 10, 20, 50, 100, 400, 800, 1600]
 # Tool recovery watchdog. TOOL_STATUS is the only thing that marks a tool
 # down, so a lost, filtered, or never-emitted online=1 leaves it down forever
 # and the roster decays to all-down -- which is what it did before the feed
@@ -119,6 +121,14 @@ class FabMirror:
         self.counts     = Counter()
         self.decisions  = deque(maxlen=500)
         self.throughput = deque(maxlen=300)   # (ts, completed_total)
+        # Fab KPI series, as published by the producer on fab.kpi.state: the
+        # warm-up samples (one KPI_HIST record) and the live hourly samples,
+        # for the current run only. The mirror draws these; it does not
+        # compute them, so warm-up and live are measured by one definition.
+        self.kpi_run = None
+        self.kpi_warm_t = None
+        self.kpi_hist = []
+        self.kpi_live = {}            # t -> sample (dedupes replays)
         self.subscribers = []                 # SSE queues
         # Per-tool rollup. The tool view renders this rather than recomputing
         # from the feed in the browser: two derivations of the same number
@@ -188,11 +198,29 @@ class FabMirror:
                 tool = self.in_flight.pop(ev.get("lot"), None)
                 if tool:
                     self.tool_stats[tool]["completed"] += 1
-                self.throughput.append((time.time(), self.counts["LOT_COMPLETE"]))
+                # Stamped with the *simulated* clock: throughput is a fab
+                # number, and measured against wall time it scaled with the
+                # playback speed (960/hr at 400x for a fab doing ~60/day).
+                if self.sim_t is not None:
+                    self.throughput.append((self.sim_t, self.counts["LOT_COMPLETE"]))
             elif t == "LOT_PROGRESS":
+                # A progress point is emitted when a lot finishes a step (or
+                # is released); either way it is now off the tool and back in
+                # a queue until the next LOT_STARTED. Without this, "in
+                # flight" meant "has touched any tool since we started
+                # watching", which drifted to all of WIP within a day.
+                lot = ev.get("lot")
+                st = ev.get("state") or "active"
+                if lot and st in ("active", "released") \
+                        and lot in self.in_flight:
+                    self.in_flight.pop(lot, None)
+                    self.lots_ready[lot] = ev
                 self._apply_progress(ev)
             elif t == "LOT_STATE":
                 self._apply_lot_state(ev)
+            elif t in ("KPI", "KPI_HIST"):
+                # apply_kpi takes the lock itself; release ours first.
+                pass
             elif t == "TOOL_STATUS":
                 tool = ev.get("tool")
                 online = ev.get("online") != "0"
@@ -209,6 +237,8 @@ class FabMirror:
                 else:
                     self.down_since.setdefault(tool, time.time())
                     self.recovered_by.pop(tool, None)
+        if ev.get("type") in ("KPI", "KPI_HIST"):
+            self.apply_kpi(ev)
         self._fanout({"kind": "event", "topic": topic, "event": ev})
 
     def _mark_up(self, tool, how):
@@ -256,6 +286,61 @@ class FabMirror:
                 self.availability.append((now, online, total))
             return online, total
 
+    def apply_kpi(self, ev):
+        """One fab.kpi.state record: KPI_HIST (warm-up series) or KPI (live).
+
+        Returns the new run id when this record switched runs without
+        bringing the warm-up series with it -- the caller then rescans the
+        topic for that run's KPI_HIST, which was published earlier than the
+        live consumer's start and would otherwise never be seen.
+        """
+        run = ev.get("run")
+        need_hist = None
+        with self.lock:
+            if run and run != self.kpi_run:
+                self.kpi_run = run
+                self.kpi_hist = []
+                self.kpi_live = {}
+                self.kpi_warm_t = None
+                if ev.get("type") != "KPI_HIST":
+                    need_hist = run
+            if ev.get("type") == "KPI_HIST":
+                fields = (ev.get("fields") or "").split(":")
+                rows = []
+                for chunk in (ev.get("samples") or "").split(","):
+                    if not chunk:
+                        continue
+                    vals = chunk.split(":")
+                    if len(vals) != len(fields):
+                        continue
+                    rows.append({k: _as_float(v, 0.0) for k, v in zip(fields, vals)})
+                self.kpi_hist = rows
+                self.kpi_warm_t = _as_float(ev.get("warm_t"), self.kpi_warm_t)
+            else:
+                t = _as_float(ev.get("t"))
+                if t is None:
+                    return
+                # Every numeric field on the record: the sample's field set
+                # is the producer's to extend, and a mirror that whitelisted
+                # them would silently drop each new one.
+                self.kpi_live[t] = {k: _as_float(v, 0.0) for k, v in ev.items()
+                                    if k not in ("type", "run")}
+                self._advance_sim(t)
+        return need_hist
+
+    def kpi_view(self):
+        with self.lock:
+            live = [self.kpi_live[t] for t in sorted(self.kpi_live)]
+            return {
+                "run": self.kpi_run,
+                "warm_t": self.kpi_warm_t,
+                "hist": list(self.kpi_hist),
+                "live": live,
+                "latest": (live[-1] if live else
+                           (self.kpi_hist[-1] if self.kpi_hist else None)),
+                "now_t": self.sim_t,
+            }
+
     def _apply_lot_state(self, ev):
         """A snapshot record: the lot's position, and how it got there.
 
@@ -294,10 +379,16 @@ class FabMirror:
         m = self.lot_meta.setdefault(lot, {})
         m.setdefault("part", ev.get("part") or ev.get("product") or "?")
         m.setdefault("cohort", ev.get("cohort") or "?")
-        m.setdefault("release", history[0]["t"] if history else 0.0)
-        m.setdefault("due", 0.0)
-        m.setdefault("prio", 0.0)
-        m.setdefault("hot", False)
+        # Due/release/priority ride on the snapshot record when the feed is
+        # new enough to send them; an older record leaves zeros that the
+        # first live LOT_PROGRESS repairs (see _apply_progress).
+        rel = _as_float(ev.get("rel"))
+        due = _as_float(ev.get("due"))
+        m.setdefault("release", rel if rel is not None
+                     else (history[0]["t"] if history else 0.0))
+        m.setdefault("due", due if due is not None else 0.0)
+        m.setdefault("prio", _as_float(ev.get("prio"), 0.0))
+        m.setdefault("hot", ev.get("hot") == "1")
         if history:
             m["history"] = history
             # Seed position from the snapshot so a lot that has not moved since
@@ -363,6 +454,19 @@ class FabMirror:
                 "prio": f("prio"),
                 "hot": ev.get("hot") == "1",
             }
+        else:
+            # A lot first seen via a snapshot record may carry no due date or
+            # release; every live point has both, so the first one fills the
+            # blanks. Without this a warm-up lot never got a due marker and
+            # the chart's time axis never reached its deadline.
+            if not meta.get("due") and f("due"):
+                meta["due"] = f("due")
+            if not meta.get("release") and f("rel"):
+                meta["release"] = f("rel")
+            if not meta.get("prio") and f("prio"):
+                meta["prio"] = f("prio")
+            if ev.get("hot") == "1":
+                meta["hot"] = True
         # Route length is constant for the life of the lot. Rework moves already
         # processed steps back onto the front of the route: the lot has more
         # steps *left*, but the total it must pass through is unchanged. It has
@@ -386,7 +490,8 @@ class FabMirror:
             for k in done[:2000]:
                 self.lot_meta.pop(k, None)
 
-    def burndown_view(self, cohorts=None, max_lots=400, want_points=False):
+    def burndown_view(self, cohorts=None, max_lots=400, want_points=False,
+                      lots=None):
         """Group the ring into per-lot series. Takes the lock only to copy."""
         with self.lock:
             points = list(self.burndown)
@@ -401,12 +506,15 @@ class FabMirror:
             self._all_points = points
 
         wanted = set(cohorts) if cohorts else None
+        wanted_lots = set(lots) if lots is not None else None
         series = {}
         for lot, t, left, reason, wq, wb, wp, rem_s in points:
             m = meta.get(lot)
             if m is None:
                 continue
             if wanted is not None and m["cohort"] not in wanted:
+                continue
+            if wanted_lots is not None and lot not in wanted_lots:
                 continue
             s = series.get(lot)
             if s is None:
@@ -529,11 +637,17 @@ class FabMirror:
             now = time.time()
             sim["t"] = self.sim_t
             sim["t_at"] = self.sim_t_at
-            recent = [c for ts, c in self.throughput if now - ts < 120]
+            # Completions per simulated hour over the trailing window of fab
+            # time (up to THROUGHPUT_WINDOW_S), once at least ten fab-minutes
+            # of it have been seen. Playback speed does not enter into it.
             rate = 0.0
-            if len(recent) >= 2:
-                span = 120.0
-                rate = (recent[-1] - recent[0]) / span * 3600  # lots/hour
+            if self.sim_t is not None and len(self.throughput) >= 2:
+                horizon = self.sim_t - THROUGHPUT_WINDOW_S
+                recent = [(ts, c) for ts, c in self.throughput if ts >= horizon]
+                if len(recent) >= 2:
+                    span = self.sim_t - recent[0][0]
+                    if span >= 600:
+                        rate = (recent[-1][1] - recent[0][1]) / span * 3600
             return {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "counts": dict(self.counts),
@@ -542,6 +656,9 @@ class FabMirror:
                 "in_flight": len(self.in_flight),
                 "completed": self.counts.get("LOT_COMPLETE", 0),
                 "throughput_lots_per_hour": round(rate, 1),
+                "kpi": (self.kpi_live[max(self.kpi_live)] if self.kpi_live
+                        else (self.kpi_hist[-1] if self.kpi_hist else None)),
+                "kpi_run": self.kpi_run,
                 "decisions_seen": len(self.decisions),
                 "timeline": {
                     "snapshot_run": self.snapshot_run,
@@ -580,6 +697,11 @@ def read_sim_control():
     }
 
 
+# Fab time over which the header's throughput is averaged. Four hours is a
+# few hundred completions at LVHM rates -- steady enough to read, short
+# enough that a change in the fab shows up within a shift.
+THROUGHPUT_WINDOW_S = 4 * 3600
+
 mirror = FabMirror()
 
 
@@ -593,6 +715,48 @@ def parse_envelope(payload: str) -> dict:
     return out
 
 
+def rescan_kpi_history(run):
+    """Read fab.kpi.state from the beginning for one run's KPI_HIST.
+
+    The live consumer starts at the bootstrap watermark, so a run whose
+    warm-up series was published before that -- or whose records were
+    interleaved with a lingering older producer's at bootstrap, so the other
+    run won the "newest" vote -- reaches the mirror with live samples only.
+    The topic is compacted, single-partition and small; rescanning it is
+    cheaper than being wrong.
+    """
+    try:
+        from confluent_kafka import Consumer, TopicPartition, OFFSET_BEGINNING
+        c = Consumer({"bootstrap.servers": KAFKA_BROKERS,
+                      "group.id": f"fab-api-kpi-rescan-{os.getpid()}-{time.time():.0f}",
+                      "auto.offset.reset": "earliest", "enable.auto.commit": False})
+        tp = TopicPartition("fab.kpi.state", 0)
+        _lo, hi = c.get_watermark_offsets(tp, timeout=10)
+        c.assign([TopicPartition("fab.kpi.state", 0, OFFSET_BEGINNING)])
+        found = 0
+        remaining, idle = hi, 0
+        while remaining > 0 and idle < 10:
+            msg = c.poll(0.5)
+            if msg is None or msg.error():
+                idle += 1
+                continue
+            idle = 0
+            remaining -= 1
+            ev = parse_envelope(msg.value().decode("utf-8", "replace"))
+            if ev.get("run") == run and ev.get("type") == "KPI_HIST":
+                with mirror.lock:
+                    if mirror.kpi_run != run:
+                        break
+                mirror.apply_kpi(ev)
+                found += 1
+        c.close()
+        print(f"[kpi] rescanned {hi} records for run {run}: "
+              f"{'history restored' if found else 'no KPI_HIST found'}",
+              file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[kpi] rescan failed: {e!r}", file=sys.stderr, flush=True)
+
+
 def apply_state_record(topic, ev):
     """Apply one compacted state record. Shared by bootstrap and the live loop.
 
@@ -601,6 +765,12 @@ def apply_state_record(topic, ev):
     a snapshot arriving after boot has to land exactly as one arriving during
     it, and before this was shared, one path simply did not exist.
     """
+    if topic == "fab.kpi.state":
+        need = mirror.apply_kpi(ev)
+        if need:
+            threading.Thread(target=rescan_kpi_history, args=(need,),
+                             daemon=True).start()
+        return 1
     mirror.note_timeline(ev.get("run"), _as_float(ev.get("day")), "snapshot")
     if topic == "fab.lot.state":
         lot = ev.get("lot")
@@ -608,6 +778,15 @@ def apply_state_record(topic, ev):
             return 0
         tool = ev.get("tool")
         with mirror.lock:
+            # A snapshot from a new run replaces the fab, not just the lots it
+            # names: a lot that completed during the new run's warm-up must
+            # not linger from the old one. (Read 4,194 WIP once: 2,138 stale
+            # plus 2,056 new.) _apply_lot_state resets the burndown books on
+            # the same condition.
+            run = ev.get("run")
+            if run and run != mirror.burndown_run:
+                mirror.lots_ready.clear()
+                mirror.in_flight.clear()
             mirror.lots_ready.pop(lot, None)
             mirror.in_flight.pop(lot, None)
             if tool:
@@ -650,7 +829,7 @@ def bootstrap_from_state(Consumer):
     """
     from confluent_kafka import TopicPartition, OFFSET_BEGINNING
 
-    topics = ["fab.lot.state", "fab.tool.state"]
+    topics = ["fab.lot.state", "fab.tool.state", "fab.kpi.state"]
     c = Consumer({
         "bootstrap.servers": KAFKA_BROKERS,
         # A fresh group every time: this is a rebuild, not a resumable read, so
@@ -679,12 +858,20 @@ def bootstrap_from_state(Consumer):
     if not parts:
         print("[bootstrap] no state topics; starting cold", file=sys.stderr, flush=True)
         c.close()
-        return
+        return {}
     c.assign(parts)
 
     remaining = sum(ends.values())
-    lots = tools = 0
+    lots = tools = skipped = 0
     idle = 0
+    # Two passes. Every feed start is a new run, and until the broker compacts
+    # the topic holds the snapshots of several runs, interleaved across 12
+    # partitions. Applying them in arrival order is wrong twice over: a lot's
+    # record from an older run can land after its newer one, and
+    # _apply_lot_state clears the burndown metadata whenever the run id
+    # changes -- which, interleaved, left 277 of 2,138 lots with metadata.
+    # So: buffer, find the newest run by broker timestamp, apply only that.
+    records = []
     try:
         # Read to the high watermark captured above -- a definite end, so this
         # cannot hang behind a live producer still appending.
@@ -696,18 +883,31 @@ def bootstrap_from_state(Consumer):
             idle = 0
             remaining -= 1
             ev = parse_envelope(msg.value().decode("utf-8", "replace"))
-            mirror.note_timeline(ev.get("run"), _as_float(ev.get("day")),
-                                 "snapshot")
-            if msg.topic() == "fab.lot.state":
-                lots += apply_state_record(msg.topic(), ev)
-            else:
-                tools += apply_state_record(msg.topic(), ev)
+            _kind, ts = msg.timestamp()
+            records.append((ts, msg.topic(), ev))
     except Exception as e:
         print(f"[bootstrap] {e!r}", file=sys.stderr, flush=True)
     finally:
         c.close()
-    print(f"[bootstrap] {lots} lots, {tools} tools from compacted state",
+
+    latest_run, latest_ts = None, -1
+    for ts, _topic, ev in records:
+        if ev.get("run") and ts > latest_ts:
+            latest_run, latest_ts = ev["run"], ts
+    records.sort(key=lambda r: r[0])
+    for _ts, topic, ev in records:
+        if latest_run and ev.get("run") and ev["run"] != latest_run:
+            skipped += 1
+            continue
+        if topic == "fab.lot.state":
+            lots += apply_state_record(topic, ev)
+        else:
+            tools += apply_state_record(topic, ev)
+    print(f"[bootstrap] {lots} lots, {tools} tools from compacted state"
+          + (f" (run {latest_run}; {skipped} records from older runs skipped)"
+             if latest_run else ""),
           file=sys.stderr, flush=True)
+    return ends
 
 
 def kafka_consumer_loop():
@@ -724,7 +924,7 @@ def kafka_consumer_loop():
         "auto.offset.reset": "latest",
         "enable.auto.commit": True,      # a mirror may lose its place safely
     })
-    bootstrap_from_state(Consumer)
+    ends = bootstrap_from_state(Consumer) or {}
     # The state topics are consumed live as well as at bootstrap. A snapshot
     # published after the API started -- which is the normal case, since the
     # feed is a separate process people start whenever -- would otherwise never
@@ -732,8 +932,26 @@ def kafka_consumer_loop():
     # would look again. That produced a dashboard showing 41 lots instead of
     # 2,164. A compacted state topic is current truth whenever it arrives, not
     # only at boot.
+    #
+    # And "live" must mean "from where bootstrap stopped", not `latest`:
+    # `latest` is resolved when partitions are *assigned*, seconds after
+    # subscribe(), and a snapshot published in that window -- exactly what
+    # dev-up.sh does, starting the feed right after the API -- fell through
+    # the gap. The result was a mirror on the previous run's KPI series with
+    # a red timeline badge. on_assign pins the state topics to the bootstrap
+    # high-watermark; the event topics keep `latest`, since their history is
+    # not state.
+    from confluent_kafka import OFFSET_END
+
+    def on_assign(consumer, partitions):
+        for tp in partitions:
+            key = (tp.topic, tp.partition)
+            tp.offset = ends[key] if key in ends else OFFSET_END
+        consumer.assign(partitions)
+
     c.subscribe(["fab.lot.events", "fab.tool.events", "fab.dispatch.decisions",
-                 "fab.lot.burndown", "fab.lot.state", "fab.tool.state"])
+                 "fab.lot.burndown", "fab.lot.state", "fab.tool.state",
+                 "fab.kpi.state"], on_assign=on_assign)
     app.logger.info("kafka mirror attached to %s", KAFKA_BROKERS)
 
     while True:
@@ -744,7 +962,7 @@ def kafka_consumer_loop():
         topic = msg.topic()
         if topic == "fab.dispatch.decisions":
             mirror.add_decision(parse_envelope(payload))
-        elif topic in ("fab.lot.state", "fab.tool.state"):
+        elif topic in ("fab.lot.state", "fab.tool.state", "fab.kpi.state"):
             apply_state_record(topic, parse_envelope(payload))
         else:
             mirror.apply(topic, parse_envelope(payload))
@@ -1512,6 +1730,7 @@ def _cohort_rows(meta):
             "left": [], "last_t": 0.0, "release": m["release"], "due": m["due"],
         })
         c["lots"] += 1
+        c["hot"] = c.get("hot", 0) + (1 if m.get("hot") else 0)
         c["done"] += 1 if m.get("state") == "done" else 0
         c["left"].append(m.get("left", 0))
         c["last_t"] = max(c["last_t"], m.get("last_t", 0.0))
@@ -1533,6 +1752,111 @@ def _cohort_rows(meta):
     return rows
 
 
+# ---------------------------------------------------------------- runs -----
+# The Postgres run store (ADR 0004). Read-only here, like everything else in
+# this zone: the producer writes runs, this serves them for comparison.
+
+def _pg():
+    import psycopg
+    return psycopg.connect(
+        f"host={os.getenv('PGHOST', 'localhost')} port={os.getenv('PGPORT', '25432')} "
+        f"dbname={os.getenv('PGDATABASE', 'fab')} user={os.getenv('PGUSER', 'fab')} "
+        f"password={os.getenv('PGPASSWORD', 'fab')} connect_timeout=3")
+
+
+def _rows(cur):
+    cols = [d[0] for d in cur.description]
+    out = []
+    for r in cur.fetchall():
+        row = {}
+        for k, v in zip(cols, r):
+            if hasattr(v, "isoformat"):
+                v = v.isoformat()
+            elif v is not None and not isinstance(v, (int, float, str, bool)):
+                v = float(v)
+            row[k] = v
+        out.append(row)
+    return out
+
+
+@app.get("/api/runs")
+def runs_index():
+    """Every run in the store, newest first, with its summary KPIs.
+
+    `live_run_key` is the run the mirror is currently showing, so the client
+    can mark which row is the fab on the live tab. A run's summary is the mean
+    of its post-warm-up samples; a run still streaming has none yet, and its
+    series is read from run_kpi_samples as it grows.
+    """
+    try:
+        with _pg() as conn, conn.cursor() as cur:
+            cur.execute("SELECT * FROM run_summary ORDER BY id DESC LIMIT 200")
+            rows = _rows(cur)
+    except Exception as e:
+        return jsonify({"error": f"run store unavailable: {e}", "runs": [],
+                        "live_run_key": mirror.kpi_run}), 503
+    return jsonify({"runs": rows, "live_run_key": mirror.kpi_run})
+
+
+@app.get("/api/runs/<int:run_id>/kpi")
+def run_kpi(run_id):
+    """One run's KPI series, hourly, warm-up flagged, oldest first."""
+    try:
+        with _pg() as conn, conn.cursor() as cur:
+            cur.execute("SELECT t, warmup, wip, running, util, thr, ct, otd, tard, "
+                        "dec, opt, wq, wb, wp, starts, wd FROM run_kpi_samples WHERE run_id=%s "
+                        "ORDER BY t", (run_id,))
+            rows = _rows(cur)
+    except Exception as e:
+        return jsonify({"error": f"run store unavailable: {e}"}), 503
+    return jsonify({"run_id": run_id, "samples": rows})
+
+
+@app.get("/api/runs/<int:run_id>/tools")
+def run_tools(run_id):
+    """Per-tool outcome for one run, busiest first, plus the same rolled up by
+    toolset (family). busy_pct is the share of the run's streamed span the
+    tool had a lot on it; queue_avg is the queue seen at each dispatch."""
+    try:
+        with _pg() as conn, conn.cursor() as cur:
+            # Delay_* is not a tool (ADR 0008); rows from older runs are ignored.
+            cur.execute("SELECT tool, family, busy_pct, dispatches, queue_avg, "
+                        "queue_max FROM run_tools WHERE run_id=%s "
+                        "AND tool NOT LIKE 'Delay\\_%%' "
+                        "ORDER BY busy_pct DESC NULLS LAST, dispatches DESC", (run_id,))
+            tools = _rows(cur)
+    except Exception as e:
+        return jsonify({"error": f"run store unavailable: {e}"}), 503
+    fam = {}
+    for t in tools:
+        f = fam.setdefault(t["family"] or "?", {"family": t["family"] or "?",
+                                                "tools": 0, "busy_sum": 0.0,
+                                                "dispatches": 0, "queue_max": 0})
+        f["tools"] += 1
+        f["busy_sum"] += t["busy_pct"] or 0.0
+        f["dispatches"] += t["dispatches"] or 0
+        f["queue_max"] = max(f["queue_max"], t["queue_max"] or 0)
+    families = sorted(
+        ({**f, "busy_pct": f["busy_sum"] / f["tools"]} for f in fam.values()),
+        key=lambda f: -f["busy_pct"])
+    for f in families:
+        f.pop("busy_sum", None)
+    return jsonify({"run_id": run_id, "tools": tools, "families": families})
+
+
+@app.get("/api/kpi")
+def kpi_series():
+    """Fab-level KPIs over simulated time, warm-up and live, for the current run.
+
+    Every sample is one simulated hour; throughput, cycle time, on-time and
+    tardiness are over the trailing simulated day. `hist` is the warm-up
+    (published once with the snapshot), `live` what the feed has sampled since.
+    Both come from the producer, so an A/B against another run compares like
+    with like.
+    """
+    return jsonify(mirror.kpi_view())
+
+
 @app.get("/api/lots")
 def lots_index():
     """Cohort index for the burndown view.
@@ -1543,15 +1867,56 @@ def lots_index():
     """
     _, meta, sim_t, warm_t = mirror.burndown_view(cohorts=[])
     rows = _cohort_rows(meta)
+    # ?part=part_3 returns every cohort of that product, release-ordered and
+    # uncapped: the neighbour view needs the ones next to a cohort in time,
+    # not the ones that moved most recently.
+    part = request.args.get("part")
+    if part:
+        rows = sorted((r for r in rows if r["part"] == part),
+                      key=lambda r: (r["release"], r["cohort"]))
+        limit = int(request.args.get("limit", 100000))
+    else:
+        limit = int(request.args.get("limit", 60))
     return jsonify({
         "now_t": sim_t,
         "warm_t": warm_t,
-        "cohorts": rows[:int(request.args.get("limit", 60))],
+        "cohorts": rows[:limit],
         "total_cohorts": len(rows),
         "lots_tracked": len(meta),
         "points_held": len(mirror.burndown),
         "points_cap": BURNDOWN_MAX,
     })
+
+
+@app.get("/api/lots/hot")
+def lots_hot():
+    """Hot lots of one product that may be catching up with a cohort.
+
+    ?part=part_3&near_t=<release s>&min_left=<steps>&limit=M. A hot lot
+    (priority 20) with at least as many steps left as the cohort's lead lot is
+    behind it in the route and moving faster, so it will contend for the same
+    furnace batches; the M released nearest the cohort are the ones close
+    enough to matter. Hot lots release weekly and finish in a fraction of the
+    time, so "released before" would find almost none -- the catcher-up is
+    usually the one released just after. Same payload shape as
+    /api/lots/<cohort>, so the chart draws them with the same code.
+    """
+    part = request.args.get("part")
+    near = _as_float(request.args.get("near_t"), 0.0)
+    min_left = _as_float(request.args.get("min_left"), 0.0)
+    limit = int(request.args.get("limit", 3))
+    _, meta, _, _ = mirror.burndown_view(cohorts=[])
+    cand = [(lot, m) for lot, m in meta.items()
+            if m.get("hot") and m.get("part") == part
+            and m.get("state", "active") == "active"
+            and (m.get("left") or 0) >= min_left]
+    cand.sort(key=lambda km: abs((km[1].get("release") or 0) - near))
+    ids = [lot for lot, _ in cand[:limit]]
+    series, meta, sim_t, warm_t = mirror.burndown_view(lots=ids, want_points=True)
+    for lot in ids:
+        if lot not in series and meta.get(lot, {}).get("history"):
+            series[lot] = []
+    return _lots_payload(f"hot:{part}", series, meta, sim_t, warm_t)
 
 
 @app.get("/api/lots/<path:cohort>")
@@ -1571,7 +1936,10 @@ def lots_cohort(cohort):
     for lot, m in meta.items():
         if m.get("cohort") == cohort and m.get("history") and lot not in series:
             series[lot] = []
+    return _lots_payload(cohort, series, meta, sim_t, warm_t)
 
+
+def _lots_payload(cohort, series, meta, sim_t, warm_t):
     if not series:
         return jsonify({"cohort": cohort, "now_t": sim_t, "warm_t": warm_t,
                         "lots": [], "note": "no points held for this cohort"}), 200
@@ -1584,6 +1952,7 @@ def lots_cohort(cohort):
         pts.sort(key=lambda x: x["t"])
         lots.append({
             "lot": lot,
+            "cohort": m.get("cohort"),
             "part": m["part"],
             "route": m.get("route", 0),
             "release": m["release"],

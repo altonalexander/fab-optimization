@@ -91,10 +91,18 @@ export function segments(lot, metric, now) {
  * step. Lots that have not been released at time t are excluded rather than
  * counted as zero, which would drag the floor down and invent a spread.
  */
-export function envelope(lots, d0, d1, now, metric, n = 160) {
+export function envelope(lots, d0, d1, now, metric, n = 160, pin = []) {
+  // `pin` is extra sample times forced onto the grid. The component splits
+  // the result at the warm-up line and inks each side differently; unless a
+  // sample sits exactly on that line, the two halves miss each other by one
+  // grid cell and the band shows a gap at sim start where the fab was
+  // simply waiting.
+  const ts = []
+  for (let i = 0; i <= n; i++) ts.push(d0 + (i / n) * (d1 - d0))
+  for (const t of pin) if (t != null && t >= d0 && t <= d1) ts.push(t)
+  ts.sort((a, b) => a - b)
   const out = []
-  for (let i = 0; i <= n; i++) {
-    const t = d0 + (i / n) * (d1 - d0)
+  for (const t of ts) {
     const vals = []
     for (const l of lots) {
       if (t > now && l.state !== 'done') continue

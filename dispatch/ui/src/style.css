@@ -446,3 +446,49 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
 .lane-map { display: block; max-width: none; }
 .lane-map rect[fill]:hover { outline: 1px solid #111827; outline-offset: -1px; }
 .lane-legend { margin-top: 8px; }
+
+/* KPI tiles and small multiples. The (i) is a real element with the native
+   title tooltip -- no positioning code, works on every browser. */
+.info{display:inline-flex;align-items:center;justify-content:center;
+  width:14px;height:14px;border-radius:50%;border:1px solid #9ca3af;color:#6b7280;
+  font:600 9px/1 ui-sans-serif,system-ui,sans-serif;text-transform:none;letter-spacing:0;
+  vertical-align:middle;cursor:help;margin-left:2px}
+.info:hover{border-color:#111827;color:#111827}
+/* One KPI per row: the whole run is the point, and six charts sharing a
+   row made 90 days of history a thumbnail. */
+.kpi-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.split-row{display:flex;align-items:center;gap:10px;margin:4px 0}
+.split-label{width:200px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.split-bar{flex:1;display:flex;border-radius:4px;overflow:hidden;background:#e5e7eb}
+.split-bar div{color:#fff;font-size:10px;line-height:22px;text-align:center;overflow:hidden;white-space:nowrap}
+.side{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:900px){.side{grid-template-columns:1fr}}
+.aside{border-left:3px solid #111827;background:#f9fafb;padding:10px 14px;border-radius:0 8px 8px 0;
+  font-size:13px;line-height:1.5;color:#374151;margin:0 0 14px}
+table.mini{border-collapse:collapse;width:100%;font-size:12px}
+table.mini th,table.mini td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:left}
+table.mini th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);font-weight:500}
+table.mini td.num,table.mini th.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar-cell{position:relative}
+.bar-cell span{position:absolute;left:0;top:4px;bottom:4px;background:#dbeafe;z-index:0;border-radius:2px}
+.bar-cell b{position:relative;z-index:1;font-weight:500}
+.kpi-card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--card)}
+.kpi-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.kpi-now{font-size:18px;font-weight:600}
+.kpi-now small{font-size:11px;font-weight:400;color:var(--mut)}
+
+/* Results: run table and comparison. */
+.results-toolbar{display:flex;gap:14px;align-items:center;margin:4px 0 10px;flex-wrap:wrap}
+.results-toolbar select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--line);
+  border-radius:6px;background:var(--card)}
+table.runs{border-collapse:collapse;width:100%;font-size:12px}
+table.runs th,table.runs td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+table.runs th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut);font-weight:500;white-space:nowrap}
+table.runs tr.row-live td{background:#eff6ff}
+table.runs tr.row-base td{background:#f9fafb}
+.swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.pill{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;border:1px solid #9ca3af;
+  color:#374151;margin-left:6px;vertical-align:middle;text-transform:uppercase;letter-spacing:.04em}
+.pill-live{border-color:#2563eb;color:#1d4ed8;background:#dbeafe}
+
+.seg-label{font-size:11px;color:var(--mut);padding:0 6px;align-self:center}

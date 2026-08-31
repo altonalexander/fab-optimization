@@ -14,7 +14,8 @@
 #   scripts/dev-up.sh --status show what is listening
 #
 # FEED_DAYS / FEED_WARMUP / FEED_SPEED override the feed defaults
-# (40 days, no warm-up, 20x realtime).
+# (180 days, 90-day warm-up, 20x realtime). The warm-up is simulated once and
+# checkpointed to bench/snapshots/; later starts resume from it in seconds.
 #
 # KNOWN ISSUE: run this directly, not through a pipe. Piping it
 # (`dev-up.sh | tee`) blocks after the services start -- a descendant keeps the
@@ -38,7 +39,21 @@ c_warn() { printf '  \033[33mwarn\033[0m  %s\n' "$1"; }
 c_bad()  { printf '  \033[31mfail\033[0m  %s\n' "$1"; }
 info()   { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
-port_pid() { lsof -ti tcp:"$1" 2>/dev/null | head -1; }
+# lsof is blind on some WSL2 setups (returns nothing for a port our own user
+# holds), which let a second api start, die on bind, and leave a stale one
+# answering. ss is the fallback.
+port_pid() {
+  local pid
+  pid="$(lsof -ti tcp:"$1" 2>/dev/null | head -1)"
+  if [[ -z "$pid" ]] && command -v ss >/dev/null; then
+    local line
+    line="$(ss -ltn "sport = :$1" 2>/dev/null | grep -c LISTEN)"
+    pid="$(ss -ltnp "sport = :$1" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
+    # Listening but no visible pid (another user, a container): still held.
+    [[ -z "$pid" && "$line" -gt 0 ]] && pid='?'
+  fi
+  printf '%s' "$pid"
+}
 
 stop_all() {
   info 'stopping'
@@ -256,23 +271,28 @@ wait_for "http://localhost:$UI_PORT/api/state"        'ui -> api proxy'    15 ||
 info 'feed'
 SIM_PY="$REPO/baselines/pyscfabsim/.venv/bin/python3"
 FEED_CMD=("$SIM_PY" "$REPO/bench/tools/sim_feed.py"
-          --days "${FEED_DAYS:-40}" --warmup-days "${FEED_WARMUP:-0}"
+          --days "${FEED_DAYS:-180}" --warmup-days "${FEED_WARMUP:-90}"
           --speed "${FEED_SPEED:-20}")
 if (( WANT_FEED )); then
   if [[ ! -x "$SIM_PY" ]]; then
     c_bad "no baseline venv at $SIM_PY -- see baselines/pyscfabsim/UPSTREAM.md"
-  elif [[ -n "$(pgrep -f 'bench/tools/sim_feed.py' || true)" ]]; then
+  # Anchored to an interpreter, or any shell whose command line merely
+  # mentions the script (a grep, a kill loop) reads as a running feed.
+  elif [[ -n "$(pgrep -f '^[^ ]*python[0-9.]* [^ ]*bench/tools/sim_feed.py' || true)" ]]; then
     c_warn 'a feed is already running -- not starting a second'
   else
-    ( cd "$REPO" && setsid nohup "${FEED_CMD[@]}" \
-        >"$RUN/feed.log" 2>&1 </dev/null & echo $! >"$RUN/feed.pid" )
+    # The feed writes its own pid: `$!` after setsid was the wrapper, one off
+    # from the python process, so --stop and every kill since missed the feed
+    # and left two producers on the same topics.
+    ( cd "$REPO" && setsid nohup bash -c 'echo $$ >"$0"; exec "$@"' "$RUN/feed.pid" "${FEED_CMD[@]}" \
+        >"$RUN/feed.log" 2>&1 </dev/null & )
     c_ok "feed starting (log $RUN/feed.log)"
   fi
 else
   c_warn 'no feed started (--feed to start one). The dashboard will be empty:'
   printf '        %s \\\n            --days %s --warmup-days %s --speed %s\n' \
     "baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py" \
-    "${FEED_DAYS:-40}" "${FEED_WARMUP:-0}" "${FEED_SPEED:-20}"
+    "${FEED_DAYS:-180}" "${FEED_WARMUP:-90}" "${FEED_SPEED:-20}"
 fi
 
 info 'timeline'

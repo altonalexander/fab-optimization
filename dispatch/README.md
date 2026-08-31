@@ -332,7 +332,7 @@ currently walking each route, grouped out of the burndown mirror on request.
 | `GET /api/routes` | one summary row per product: steps, visits, per-area step counts, and how many lots and cohorts of it are being tracked |
 | `GET /api/routes/<product>` | that product's visits, transitions and rework loops, plus a sample of the cohorts on it (`?limit=`, default 8). Accepts `part_3`, `r_3` or `3` |
 
-This was a framed static page (`public/route-explorer.html`) until it needed
+This was a framed static page (`route-explorer.html`, since removed) until it needed
 per-product URLs, which an iframe cannot have: the frame has one address for
 all ten routes, so nothing could link to *the route part_3 runs*. The rewrite
 buys the two cross-links that matter:

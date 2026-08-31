@@ -1,5 +1,19 @@
 # fab-optimization
 
+A wafer fab is the hardest scheduling problem in manufacturing. A silicon lot
+makes hundreds of passes through the same few hundred machines, revisiting the
+same toolsets at different stages — so the queue you join depends on every
+decision made before it. Machines break down, need preventive maintenance,
+require setup changes between recipes, and some process wafers in batches that
+must be filled. Every time a machine frees up, something has to choose which
+waiting lot goes next. That choice is the **dispatching rule**, and it is made
+tens of thousands of times a day.
+
+This project replays a full virtual fab from the public SMT2020 testbed so
+those rules can be compared on identical demand, identical breakdowns and
+identical machine sets — something impossible in a real $10B fab — and builds
+a dispatcher to beat the rules the testbed ships with.
+
 Lot dispatching for a 300mm fab, plus the simulator used to judge whether the
 dispatching is any good. The two halves live in one repository for exactly one
 reason: **they must read the same data.**
@@ -58,7 +72,11 @@ multi-step routes with rework, setup matrices with minimum-run-lengths,
 batching, time- and piece-based PM, breakdowns, due dates. Runs 730 simulated
 days and reports cycle time, throughput, on-time %, tardiness, utilization.
 Pinned upstream at `ae3d55ef`, read-only — changes belong in `dispatch/` or
-`bench/`. See its `UPSTREAM.md`. It plays three roles: fast batch KPI runs for
+`bench/`. See its `UPSTREAM.md`. What it simplifies — transport is one
+uniform draw for the whole fab, delays are a 400-station pseudo-toolset,
+there is no storage and queue-time constraints are parsed but not enforced —
+and what that hides from an A/B, is inventoried in
+[`docs/adr/0008`](docs/adr/0008-what-pyscfabsim-simplifies.md). It plays three roles: fast batch KPI runs for
 scenario comparison, paced playback for watching one tool, and (designed, not
 built) the environment the dispatcher itself runs inside.
 
@@ -94,8 +112,11 @@ state machine with the wire codec stubbed; the Kafka bodies are sketched against
 librdkafka and not yet compiled.
 
 **The viewer** — one of them now. `dispatch/ui/` is a React 18 + Vite
-dashboard reading the Flask API (`/api/state`, `/api/stream`, `/api/zones`,
-`/api/scenario/compare`). `bench/tools/tool_probe.py` used to carry a second
+dashboard reading the Flask API (`/api/state`, `/api/stream`, `/api/kpi`,
+`/api/runs`, `/api/lots`, `/api/zones`). The what-if tab that called
+`/api/scenario/compare` — the C++ planner re-assigning a synthetic instance
+with tools marked down — is gone from the UI; the endpoint stays for
+`scripts/smoke.sh`, which is what exercises the C++ path. `bench/tools/tool_probe.py` used to carry a second
 one: a `--follow` mode that drew its own terminal view of a tool with its own
 pacing and breakpoints, over a private copy of the run loop. That is gone. The
 probe is now headless-only — run the window, report the time budget — and both
@@ -134,21 +155,32 @@ one record per live key, so a consumer reading from the very beginning reads
 *the fab*, not its history. `fab.lot.state` and `fab.tool.state` exist for
 this and nothing else.
 
-Because a discrete-event simulator cannot *start* at day 90 — it has to
-simulate there, at roughly 3 minutes of CPU per 30 simulated days — the
-snapshot is cached to `bench/snapshots/`, keyed by dataset, seed, dispatcher,
-batch strategy and day. Building it takes minutes; replaying it takes about
-two seconds.
+A discrete-event simulator cannot *start* at day 90 — it has to simulate
+there, at roughly 3 minutes of CPU per 30 simulated days (about 35 s for the
+default 5 days). So the warm-up is paid **once** and cached in
+`bench/snapshots/`, keyed by dataset, seed, dispatcher, batch strategy and day:
+
+- `…_dayN.json` — the dashboard snapshot (positions and per-lot warm-up
+  history). `--snapshot-only` republishes it in ~2 s, which populates the
+  dashboard but streams nothing.
+- `…_dayN_hH.ckpt` — the **whole simulator** at the warm-up line: event
+  queue, tool setups, RNG, and the feed's per-lot books. Any later start with
+  the same key loads it in well under a second and streams live from day N,
+  no re-simulation. `H` is the run horizon (`--days`); a checkpoint can serve
+  any run of that length or shorter. `--rebuild` forces a fresh warm-up.
 
 ```bash
-# once — simulate 90 days silently, snapshot, then stream live from there
+# first time — simulate 90 days silently, checkpoint, snapshot, stream live
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-    --days 93 --warmup-days 90 --speed 10
+    --days 180 --warmup-days 90 --speed 20
 
-# afterwards — republish the cached snapshot, no simulation
-baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-    --warmup-days 90 --snapshot-only
+# every time after — same command; resumes from the checkpoint in <1 s
 ```
+
+A resumed run continues the same fab state but is not bit-identical to an
+uninterrupted one: the simulator iterates a `set` of usable machines and the
+set's layout changes across a pickle round-trip, so ties between equivalent
+tools can break differently. The trajectory is a valid one, not a replay.
 
 The API applies the snapshot before tailing events, so the dashboard is
 populated the moment it starts rather than filling in over the next hour.
@@ -174,7 +206,10 @@ Then open http://localhost:5173/.
 | `--stop` | stop what the script started (it refuses to kill anything it did not) |
 
 `FEED_DAYS` / `FEED_WARMUP` / `FEED_SPEED` override the producer's defaults —
-40 simulated days, no warm-up, 20x realtime.
+180 simulated days, a 90-day warm-up (so the dashboard opens on a fab with
+a full quarter of history and steady-state KPIs to compare against), 20x
+realtime. The first start simulates the warm-up (~10 min of CPU); later
+starts resume from its checkpoint in under a second.
 
 Run it directly rather than through a pipe; see the note at the top of the
 script.
@@ -186,6 +221,71 @@ drawing a snapshot from one run against a live stream from another — which it
 will now tell you about (the header badge goes red), but is better not to do.
 See [`docs/adr/0003`](docs/adr/0003-cold-start-snapshot-and-delta.md).
 
+### The KPIs
+
+The header of every page carries the fab KPIs, each with an (i) that states
+its definition; the live tab draws them from day 0. They are **computed by
+the producer**, not the dashboard: `sim_feed.py` samples them once per
+simulated hour over a trailing simulated day, during warm-up and live alike,
+and publishes them on the compacted `fab.kpi.state` topic keyed by run
+(one `KPI_HIST` record with the warm-up series, then one `KPI` record per
+hour). The mirror only draws them. That is deliberate: warm-up and live —
+and, later, the fifo baseline and the dispatcher — are then measured by one
+piece of code, so an A/B compares like with like.
+
+| KPI | definition |
+|---|---|
+| WIP | lots released and not complete (waiting + on a tool) |
+| throughput | lots that completed their route in the trailing day |
+| starts | lots released in the trailing day — today the dataset's `order.txt` schedule verbatim; the number a release policy (CONWIP, workload regulation, mix) would be judged on |
+| cycle time | mean release→complete of those lots, days |
+| on-time delivery | share of those lots done by their due date; mean tardiness of the late ones alongside |
+| tool utilization | share of real tools with a lot processing at the sample instant; the `Delay_*` pseudo-toolset (400 stations for fixed waits, ADR 0008) is excluded |
+| where cycle time goes | lot-hours in the trailing day spent queueing for a tool, holding for batch partners, processing on a real tool, and sitting in route-prescribed delay steps — as shares |
+| busiest tools / toolsets | per run: share of the streamed span each tool had a lot on it, dispatches, queue seen at dispatch; rolled up by family |
+| optimized decisions | dispatch decisions in the trailing day that did **not** fall back to the default rule — 0% for the fifo baseline by construction. A dispatcher running inside the simulator stamps `instance.dispatch_source` before `instance.dispatch()`; anything not `rule:*` counts |
+
+`/api/kpi` returns the series; `/api/state` carries the latest sample.
+
+The **lots** tab draws one cohort's burndown (steps left against simulated
+time). Two toggles add context: **± cohorts** overlays the nearest earlier
+(cyan) and later (orange) cohorts of the same product, nearest by release
+*and* due date together so they are the ones that will actually meet it at a
+batch step; **hot lots catching up** overlays the M hot lots (priority 20,
+red dashed) of that product that are behind it in the route and released
+nearest to it — the ones moving fast enough to contend for its batches.
+`/api/lots?part=…` and `/api/lots/hot` serve them.
+
+### Runs and the results tab
+
+Every `sim_feed.py` run also records itself in the **Postgres run store**
+(ADR 0004): a `runs` row at start (dataset, seed, dispatcher, batching,
+horizon, warm-up, git sha, the Kafka `run` key), every hourly KPI sample in
+`run_kpi_samples` as it is taken, and on exit a status (`finished`, or
+`stopped` for Ctrl-C/SIGTERM) plus post-warm-up means in `run_kpis`.
+`--no-store` opts out; `--notes` says what a run was for.
+
+The **results** tab reads that store (`/api/runs`, `/api/runs/<id>/kpi`):
+a table of every run with its means and deltas against a chosen baseline,
+and per-KPI charts laying the selected runs over each other — including the
+run currently streaming, whose line grows live. SMT2020 has several
+out-of-the-box rules (`fifo`, `cr`, two `lifo`s, `random`) and four batching
+strategies, so "baseline" is a choice, not a property; the default is the
+oldest finished fifo run.
+
+To record a baseline without disturbing the live dashboard, run the feed
+headless into a file, with its own control file so it cannot change the
+live feed's pacing:
+
+```bash
+SIM_CONTROL_FILE=/tmp/ctl.json baselines/pyscfabsim/.venv/bin/python3 \
+    bench/tools/sim_feed.py --days 120 --warmup-days 90 --speed 0 \
+    --dispatcher cr --out /tmp/cr.jsonl --truncate --notes "cr baseline"
+```
+
+The first run of a new dispatcher pays its own 90-day warm-up; later ones
+resume from that checkpoint.
+
 ### Watching it
 
 The header badge is the simulated fab clock. It shows the current sim day, the
@@ -193,7 +293,12 @@ producer run id, and turns red if the snapshot and the live stream are from
 different runs. Clicking it returns to the live view.
 
 `--speed` is sim-seconds per wall-second: `1` is realtime, `20` (the default)
-is twenty times realtime, `0` is unpaced. The dashboard's playback menu changes
+is twenty times realtime, `0` is unpaced. The dashboard's menu goes to
+1600x; measured, the feed holds the requested rate within 3% to 2000x and
+the simulator itself tops out near 10,000x. Playback is the only throttle in
+the pipeline, and [`docs/adr/0007`](docs/adr/0007-playback-is-a-cursor-not-a-throttle.md)
+is the case for making it a viewer-side cursor over the recorded stream
+rather than a producer-side sleep. The dashboard's playback menu changes
 it live, and that setting persists in `bench/.sim_control.json` — **if the
 clock is not moving, check there first**: a leftover `"paused": true` from an
 earlier session leaves the feed running but silent.

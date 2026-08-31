@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 /**
  * Routes — the product route index and one page per product.
  *
- * This replaces the framed static route-explorer.html. The explorer was a
+ * This replaced the framed static route-explorer.html (since removed). The explorer was a
  * single 210KB page holding all ten routes at once, which meant it had no URL
  * for "the route part_3 runs": you could link to the explorer, never to a
  * product. Now every product is its own address (#/routes/part_3), so the lots
@@ -104,16 +104,6 @@ export function RouteIndexView({ data, hrefFor }) {
 
       <Legend areas={data.areas} color={color} />
 
-      {/* The page these views replaced. It is still built and still served, so
-          it stays linked rather than orphaned: it draws all ten routes as one
-          diagram, which is the one thing per-product pages cannot do. */}
-      <p className="muted" style={{ fontSize: 11, marginTop: 14 }}>
-        All ten routes on one diagram:{' '}
-        <a href="/route-explorer.html" target="_blank" rel="noreferrer">
-          route-explorer.html
-        </a>{' '}
-        (static, built by <code>viz/build_route_diagram.py</code>)
-      </p>
     </div>
   )
 }

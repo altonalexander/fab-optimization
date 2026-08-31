@@ -53,6 +53,8 @@ so the window changes what is recorded, never what is simulated.
 import argparse
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -74,6 +76,16 @@ DECISION_TOPIC = 'fab.dispatch.decisions'
 # Compacted. One record per key = the fab as it stands, not its history.
 LOT_STATE_TOPIC = 'fab.lot.state'
 TOOL_STATE_TOPIC = 'fab.tool.state'
+# Compacted, keyed by run. Carries the fab-level KPI series: one KPI_HIST
+# record per run with every warm-up sample, then one KPI record per live
+# sample. The producer computes these because it is the only party that sees
+# the whole simulation from day 0; the mirror only draws them.
+KPI_STATE_TOPIC = 'fab.kpi.state'
+KPI_SAMPLE_S = 3600        # one sample per simulated hour
+KPI_WINDOW_S = 86400       # throughput / cycle time / on-time over a trailing day
+TOOLS_FLUSH_S = 6 * 3600   # per-tool books to the run store this often
+KPI_FIELDS = ('t', 'wip', 'running', 'util', 'thr', 'ct', 'otd', 'tard',
+              'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd')
 
 # Warm-up is ~3 minutes of CPU per 30 simulated days, so a snapshot is worth
 # keeping. Keyed by everything that changes the trajectory; a cache hit makes a
@@ -162,13 +174,128 @@ def load_snapshot(path):
 
 def save_snapshot(path, snap):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + '.tmp'
+    # Per-process temp name: two feeds resuming the same checkpoint at once
+    # (the live feed and a headless baseline) both rewrite this cache, and a
+    # shared '.tmp' let one replace() fail on the other's rename.
+    tmp = f'{path}.{os.getpid()}.tmp'
     with open(tmp, 'w') as f:
         json.dump(snap, f)
     os.replace(tmp, path)      # atomic: a half-written cache is worse than none
 
 
-def snapshot_of(instance, lot_id, machine_name, history=None):
+# ---------------------------------------------------------------------------
+# Simulator checkpoint.
+#
+# The JSON snapshot above is the *dashboard's* picture of the fab -- positions
+# and history -- and it cannot be simulated from: a discrete-event simulator
+# also needs its pending event queue (every process end, breakdown and PM
+# already scheduled), every tool's setup state, and the RNG. Without those the
+# only way to stream live from day N was to re-simulate days 0..N on every
+# start, ~3 min of CPU per 30 days, every time.
+#
+# So at the warm-up line the whole simulator object is pickled beside the
+# snapshot, together with the RNG state and the feed plugin's per-lot books.
+# A later start with the same key loads it in seconds and continues from
+# exactly where warm-up ended -- the same trajectory a fresh warm-up would
+# have produced, because the RNG is restored too.
+#
+# The file is keyed additionally by the run horizon (`--days`): FileInstance
+# generates lot releases only up to run_to, so a checkpoint built for a
+# 45-day run cannot honestly serve a 60-day one. A shorter run can reuse a
+# longer checkpoint, so lookup takes the smallest sufficient horizon.
+# ---------------------------------------------------------------------------
+CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
+                    '_wear', '_down_until',
+                    '_kpi', '_done_log', '_on_tool', '_busy', '_next_kpi_t',
+                    '_decisions', '_split_log', '_tool_books', '_busy_since',
+                    '_release_log')
+
+
+def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days):
+    name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}'
+            f'_day{day:g}_h{int(days)}.ckpt')
+    return os.path.join(CACHE_DIR, name)
+
+
+def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days):
+    """The cached checkpoint with the smallest horizon that still covers `days`."""
+    import glob
+    pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0) \
+        .replace('_h0.ckpt', '_h*.ckpt')
+    best = None
+    for path in glob.glob(pat):
+        try:
+            h = int(path.rsplit('_h', 1)[1].split('.')[0])
+        except (IndexError, ValueError):
+            continue
+        if h >= days and (best is None or h < best[0]):
+            best = (h, path)
+    return best[1] if best else None
+
+
+def save_checkpoint(path, instance, feed, days):
+    """Pickle the simulator between two events. Plugins are detached first:
+    the feed holds a Kafka producer, which is neither picklable nor wanted."""
+    import cloudpickle
+    from randomizer import Randomizer
+    plugins, instance.plugins = instance.plugins, []
+    try:
+        blob = {
+            'version': 1,
+            'sim_t': instance.current_time,
+            'days': days,
+            'instance': instance,
+            'random': Randomizer().random.getstate(),
+            'feed': {k: getattr(feed, k) for k in CKPT_FEED_FIELDS},
+        }
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'wb') as f:
+            cloudpickle.dump(blob, f, protocol=5)
+        os.replace(tmp, path)
+    finally:
+        instance.plugins = plugins
+
+
+def load_checkpoint(path, feed):
+    """Restore a checkpoint and attach `feed` as its only plugin.
+
+    Returns the instance, or None if the file is unreadable (in which case
+    the caller re-simulates; a stale cache must never be fatal).
+    """
+    try:
+        import cloudpickle
+        from randomizer import Randomizer
+        with open(path, 'rb') as f:
+            blob = cloudpickle.load(f)
+        if blob.get('version') != 1:
+            raise ValueError(f'unknown checkpoint version {blob.get("version")}')
+        # Validate everything before touching the plugin. A checkpoint from
+        # an older field set once failed halfway through this loop, leaving
+        # the warm-up histories from the stale file on the plugin; the fresh
+        # re-simulation then appended to them and every lot's past was
+        # published twice over.
+        # A book the checkpoint predates keeps the plugin's fresh (empty)
+        # value: a trailing-day counter is simply short for its first day.
+        # Anything else wrong with the blob still fails whole, below.
+        books = {k: blob['feed'][k] for k in CKPT_FEED_FIELDS if k in blob['feed']}
+        missing = [k for k in CKPT_FEED_FIELDS if k not in blob['feed']]
+        if missing:
+            print(f'  checkpoint predates {", ".join(missing)}; starting those empty',
+                  file=sys.stderr)
+        instance = blob['instance']
+        Randomizer().random.setstate(blob['random'])
+        for k, v in books.items():
+            setattr(feed, k, v)
+        instance.plugins = [feed]
+        return instance
+    except Exception as e:
+        print(f'  checkpoint unreadable ({e}); will re-simulate', file=sys.stderr)
+        return None
+
+
+def snapshot_of(instance, lot_id, machine_name, history=None, cohort=None,
+                kpi=None):
     """The fab as it stands: one record per lot in WIP, one per tool.
 
     This is what fixes cold start. A mirror rebuilt from the event stream alone
@@ -215,6 +342,17 @@ def snapshot_of(instance, lot_id, machine_name, history=None):
             # every lot appears to have been created at day N with no past --
             # the opposite of what a WIP snapshot is for.
             'hist': decimate(history.get(lid, [])) if history else [],
+            # Due date, release and priority: the burndown draws the due
+            # marker and the required-rate line from these, and a snapshot
+            # lot that lacked them had no deadline on the chart at all.
+            'due': round(float(getattr(lot, 'deadline_at', 0) or 0), 1),
+            'rel': round(float(getattr(lot, 'release_at', 0) or 0), 1),
+            'prio': getattr(lot, 'priority', None),
+            'hot': 1 if (getattr(lot, 'priority', 0) or 0) >= 20
+            or lot.name.startswith('HotLot') else 0,
+            # Stored so --snapshot-only can republish it: the cohort is
+            # defined from the release time, which the record does not carry.
+            'cohort': cohort(lid) if cohort else None,
         })
 
     # The sim has no broken flag either; a tool being down is expressed by its
@@ -231,7 +369,145 @@ def snapshot_of(instance, lot_id, machine_name, history=None):
         'warm_t': round(instance.current_time, 1),
         'lots': lots,
         'tools': tools,
+        # Fab-level KPI samples taken during warm-up, so the dashboard's KPI
+        # charts start at day 0 rather than at the moment the feed went live.
+        'kpi': list(kpi or []),
     }
+
+
+class RunStore:
+    """The Postgres run store (ADR 0004): one row per run, its KPI samples,
+    and a summary when it ends.
+
+    Best effort by design. The stream is the product; a run store that is
+    down must cost a warning, never the feed. Every method swallows its own
+    errors after the first and reports once.
+    """
+
+    METRICS = (('throughput_day', 'thr'), ('starts_day', 'starts'),
+               ('cycle_time_days', 'ct'),
+               ('on_time_pct', 'otd'), ('tardiness_days', 'tard'),
+               ('wip_lots', 'wip'), ('util_pct', 'util'))
+
+    def __init__(self):
+        self.conn = None
+        self.run_id = None
+        self.failed = False
+        self.live = []                    # post-warm-up samples, for the summary
+
+    @staticmethod
+    def dsn():
+        return (f"host={os.getenv('PGHOST', 'localhost')} "
+                f"port={os.getenv('PGPORT', '25432')} "
+                f"dbname={os.getenv('PGDATABASE', 'fab')} "
+                f"user={os.getenv('PGUSER', 'fab')} "
+                f"password={os.getenv('PGPASSWORD', 'fab')} "
+                f"connect_timeout=3")
+
+    def _fail(self, what, e):
+        if not self.failed:
+            print(f'  run store: {what} failed ({e}); continuing without it',
+                  file=sys.stderr)
+        self.failed = True
+
+    def begin(self, run_key, a, notes=None):
+        try:
+            import psycopg
+            self.conn = psycopg.connect(self.dsn(), autocommit=True)
+            try:
+                sha = subprocess.check_output(
+                    ['git', 'rev-parse', '--short', 'HEAD'], cwd=REPO,
+                    stderr=subprocess.DEVNULL, text=True).strip()
+            except Exception:
+                sha = None
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    'INSERT INTO runs (dataset, seed, dispatcher, batch_strat, '
+                    ' days, warmup_days, git_sha, run_key, status, notes) '
+                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
+                    (a.dataset, a.seed, a.dispatcher, a.batch_strat, a.days,
+                     a.warmup_days, sha, run_key, 'running', notes))
+                self.run_id = cur.fetchone()[0]
+            print(f'  run store: run #{self.run_id} ({run_key}) registered',
+                  file=sys.stderr)
+        except Exception as e:
+            self._fail('connect', e)
+            self.conn = None
+
+    def samples(self, rows, warmup):
+        if not self.conn or not rows:
+            return
+        if not warmup:
+            self.live.extend(rows)
+        try:
+            with self.conn.cursor() as cur:
+                cur.executemany(
+                    'INSERT INTO run_kpi_samples (run_id, t, warmup, wip, running,'
+                    ' util, thr, ct, otd, tard, dec, opt, wq, wb, wp, starts, wd) '
+                    'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) '
+                    'ON CONFLICT (run_id, t) DO NOTHING',
+                    [(self.run_id, r['t'], warmup, r['wip'], r['running'],
+                      r['util'], r['thr'], r['ct'], r['otd'], r['tard'],
+                      r['dec'], r['opt'], r.get('wq', 0), r.get('wb', 0),
+                      r.get('wp', 0), r.get('starts', 0), r.get('wd', 0))
+                     for r in rows])
+        except Exception as e:
+            self._fail('sample insert', e)
+
+    def tools(self, rows):
+        """Upsert the per-tool outcome for this run (busy %, dispatches, queue)."""
+        if not self.conn or not rows:
+            return
+        try:
+            with self.conn.cursor() as cur:
+                cur.executemany(
+                    'INSERT INTO run_tools (run_id, tool, family, busy_pct, '
+                    ' dispatches, queue_avg, queue_max) '
+                    'VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (run_id, tool) '
+                    'DO UPDATE SET busy_pct=EXCLUDED.busy_pct, '
+                    ' dispatches=EXCLUDED.dispatches, queue_avg=EXCLUDED.queue_avg, '
+                    ' queue_max=EXCLUDED.queue_max',
+                    [(self.run_id, *r) for r in rows])
+        except Exception as e:
+            self._fail('tool upsert', e)
+
+    def finish(self, status):
+        """Close the run: status, finished_at, and the summary KPIs, each the
+        mean of the post-warm-up samples (so a run compares on the part that
+        was actually run, not on the shared warm-up)."""
+        if not self.conn:
+            return
+        try:
+            rows = self.live
+            n = len(rows)
+            summary = []
+            for metric, key in self.METRICS:
+                if n:
+                    summary.append((metric, sum(r[key] for r in rows) / n))
+            tot = sum(r.get('wq', 0) + r.get('wb', 0) + r.get('wp', 0) + r.get('wd', 0)
+                      for r in rows)
+            if tot:
+                for metric, key in (('queue_share_pct', 'wq'),
+                                    ('batch_wait_share_pct', 'wb'),
+                                    ('processing_share_pct', 'wp'),
+                                    ('delay_share_pct', 'wd')):
+                    summary.append((metric, 100.0 * sum(r.get(key, 0) for r in rows) / tot))
+            dec = sum(r['dec'] for r in rows)
+            summary.append(('optimized_pct',
+                            100.0 * sum(r['opt'] for r in rows) / dec if dec else 0.0))
+            with self.conn.cursor() as cur:
+                cur.execute('UPDATE runs SET status=%s, finished_at=now() '
+                            'WHERE id=%s', (status, self.run_id))
+                cur.executemany(
+                    'INSERT INTO run_kpis (run_id, metric, product, value) '
+                    "VALUES (%s,%s,'',%s) ON CONFLICT (run_id, metric, product) "
+                    'DO UPDATE SET value=EXCLUDED.value',
+                    [(self.run_id, m, v) for m, v in summary])
+            print(f'  run store: run #{self.run_id} {status}, '
+                  f'{n} live samples summarised', file=sys.stderr)
+            self.conn.close()
+        except Exception as e:
+            self._fail('finish', e)
 
 
 class FileSink:
@@ -429,6 +705,33 @@ class FeedPlugin(IPlugin):
         # recomputed at snapshot time.
         self._cohort_by_lot = {}
         self._warm_t = None
+        # Fab KPIs, sampled every KPI_SAMPLE_S of simulated time from the
+        # books below. Sampled here rather than derived in the mirror so the
+        # warm-up and the live run are measured by one definition, which is
+        # what makes a later A/B against a different dispatcher honest.
+        self._kpi = []              # warm-up samples (published with the snapshot)
+        self._done_log = []         # (t, cycle_s, tardy_s) for completions
+        self._on_tool = {}          # lot_id -> tool while processing
+        self._busy = {}             # tool -> lots on it now
+        self._next_kpi_t = None
+        self._decisions = []        # (t, optimized) per dispatch decision
+        # Where lot time goes: (t, queue_s, batch_wait_s, proc_s) per burndown
+        # point, i.e. the segment that just ended. Summed over the trailing
+        # day it says what share of cycle time is queueing vs holding for
+        # batch partners vs actually processing.
+        self._split_log = []
+        # Lot releases (starts) by time, for starts/day. Today they are the
+        # dataset's schedule verbatim (order.txt via file_instance.py); a
+        # release policy would make this the KPI it is judged on.
+        self._release_log = []
+        # Per-tool books for the run store: dispatches, busy seconds, queue
+        # seen at dispatch. busy_since is when the tool's current lot(s)
+        # started, so busy time is credited when the tool frees up.
+        self._tool_books = {}       # tool -> dict(family, dispatches, busy_s, q_sum, q_max)
+        self._busy_since = {}       # tool -> sim time it became busy
+        self._next_tools_t = None
+        self.rule = 'fifo'          # default dispatching rule name, for src=
+        self.store = None           # RunStore, attached by main()
 
     def _in_window(self):
         t = getattr(self, '_now', None)
@@ -478,6 +781,14 @@ class FeedPlugin(IPlugin):
         self.paused = bool(ctl.get('paused'))
 
     def _pace(self, sim_t):
+        # Warm-up (and anything else before --from-day) is unpaced by
+        # definition: nothing is emitted, so there is nothing to pace. The
+        # control file is not consulted either -- it carries the *playback*
+        # speed the dashboard asked for, and honouring it here paced a 5-day
+        # warm-up at 20x, i.e. six wall-clock hours of silence.
+        if not self._in_window():
+            self.last_sim_t = sim_t
+            return
         self._read_control()
         # Pause is not speed 0: speed 0 means unpaced (as fast as possible),
         # so a paused feed has to block here instead of falling through.
@@ -488,13 +799,30 @@ class FeedPlugin(IPlugin):
             # Resuming should not replay the wall time spent paused as sim
             # backlog; the next delta is measured from wherever we resume.
             self.last_sim_t = sim_t
+            self._anchor = None
         if self.speed <= 0:
             self.last_sim_t = sim_t
+            self._anchor = None
             return
-        if self.last_sim_t is not None:
-            delta = (sim_t - self.last_sim_t) / self.speed
-            if delta > 0:
-                time.sleep(min(delta, 2.0))
+        # Pace against an anchor (wall, sim, speed) rather than sleeping per
+        # event. A sleep per dispatch overshoots by ~0.1 ms each, and at
+        # 1000x events are ~1 ms apart, so that version lost 20-30% of the
+        # requested speed while using a fifth of a core. Sleeping only once
+        # the lag exceeds a few milliseconds keeps the clock honest at any
+        # speed the simulator itself can sustain (~10,000x).
+        now = time.monotonic()
+        a = getattr(self, '_anchor', None)
+        if a is None or a[2] != self.speed or self.last_sim_t is None \
+                or sim_t < self.last_sim_t:
+            self._anchor = a = (now, sim_t, self.speed)
+        target = a[0] + (sim_t - a[1]) / self.speed
+        lag = target - now
+        if lag > 0.004:
+            time.sleep(min(lag, 2.0))
+        elif lag < -2.0:
+            # Fell more than two seconds behind (a stall, a pause, a debugger):
+            # do not try to catch up by racing; re-anchor from here.
+            self._anchor = (now, sim_t, self.speed)
         self.last_sim_t = sim_t
 
     def _recover_due(self, now):
@@ -586,6 +914,13 @@ class FeedPlugin(IPlugin):
         lq, lb, lp = self._last_split.get(lot.idx, (0.0, 0.0, 0.0))
         dq, db, dp = q - lq, b - lb, pr - lp
         self._last_split[lot.idx] = (q, b, pr)
+        if dq or db or dp:
+            # Time on a Delay_* step is a wait the route prescribes (cure,
+            # cool-down), not tool processing; booked to its own bucket.
+            if state == 'active' and getattr(self, '_last_step_delay', False):
+                self._split_log.append((instance.current_time, dq, db, 0.0, dp))
+            else:
+                self._split_log.append((instance.current_time, dq, db, dp, 0.0))
         if reason is None:
             # waiting_time_batching is the share of the wait spent holding for
             # batch partners, so it is the one reason we can name from data
@@ -633,9 +968,137 @@ class FeedPlugin(IPlugin):
             rel=round(lot.release_at, 1),
             prio=lot.priority))
 
+    # ------------------------------------------------------------------
+    # Fab KPIs
+    # ------------------------------------------------------------------
+    def _kpi_sample(self, instance, t):
+        """One row of fab KPIs at simulated time t, over a trailing day."""
+        lo = t - KPI_WINDOW_S
+        self._done_log = [d for d in self._done_log if d[0] > lo]
+        self._decisions = [d for d in self._decisions if d[0] > lo]
+        self._split_log = [d for d in self._split_log if d[0] > lo]
+        self._release_log = [r for r in self._release_log if r > lo]
+        n = len(self._done_log)
+        cyc = [d[1] for d in self._done_log]
+        late = [d[2] for d in self._done_log if d[2] > 0]
+        # Delay_* is a 400-station pseudo-toolset for fixed waits (ADR 0008):
+        # not capacity, so neither in the utilization denominator nor the
+        # numerator, and not in the tool books.
+        real = getattr(self, '_real_tools', None)
+        if real is None:
+            real = self._real_tools = sum(
+                1 for m in instance.machines
+                if not self._name(m).startswith('Delay_'))
+        ntools = real or 1
+        busy = sum(1 for t in self._busy if not t.startswith('Delay_'))
+        return {
+            't': round(t, 1),
+            'wip': len(instance.active_lots),
+            'running': len(self._on_tool),
+            'util': round(100.0 * busy / ntools, 1),
+            'thr': n,                                   # lots completed / day
+            'ct': round(sum(cyc) / n / 86400, 3) if n else 0,      # days
+            'otd': round(100.0 * (n - len(late)) / n, 1) if n else 0,
+            'tard': round(sum(late) / len(late) / 86400, 3) if late else 0,
+            'dec': len(self._decisions),
+            'opt': sum(1 for d in self._decisions if d[1]),
+            # lot-hours in the trailing day, by what the lot was doing
+            'wq': round(sum(d[1] for d in self._split_log) / 3600, 1),
+            'wb': round(sum(d[2] for d in self._split_log) / 3600, 1),
+            'wp': round(sum(d[3] for d in self._split_log) / 3600, 1),
+            'starts': len(self._release_log),           # lots released / day
+            # d[4] is absent on tuples restored from a checkpoint that
+            # predates the delay bucket.
+            'wd': round(sum(d[4] for d in self._split_log if len(d) > 4) / 3600, 1),
+        }
+
+    def _tick_kpi(self, instance):
+        """Take every hourly sample the clock has passed since the last one."""
+        now = instance.current_time
+        if self._next_kpi_t is None:
+            self._next_kpi_t = (now // KPI_SAMPLE_S) * KPI_SAMPLE_S + KPI_SAMPLE_S
+        while now >= self._next_kpi_t:
+            row = self._kpi_sample(instance, self._next_kpi_t)
+            self._next_kpi_t += KPI_SAMPLE_S
+            if not self._in_window():
+                self._kpi.append(row)         # warm-up: kept for the snapshot
+                continue
+            self._write(KPI_STATE_TOPIC,
+                        envelope(type='KPI', run=self.run_id, **row),
+                        key=f'{self.run_id}:{int(row["t"])}')
+            if self.store is not None:
+                self.store.samples([row], warmup=False)
+
+    def emit_kpi_history(self, samples):
+        """Publish the warm-up KPI series as one keyed record."""
+        enc = ','.join(':'.join(str(r.get(k, 0)) for k in KPI_FIELDS)
+                       for r in samples)
+        self.sink.write(KPI_STATE_TOPIC, envelope(
+            type='KPI_HIST', run=self.run_id, warm_t=self._warm_t,
+            fields=':'.join(KPI_FIELDS), n=len(samples), samples=enc or None),
+            key=f'{self.run_id}:hist')
+        return 1
+
+    def _lot_off_tool(self, instance, lot):
+        tool = self._on_tool.pop(self._lot_id(lot), None)
+        if tool is None:
+            return
+        left = self._busy.get(tool, 0) - 1
+        if left > 0:
+            self._busy[tool] = left
+            return
+        self._busy.pop(tool, None)
+        since = self._busy_since.pop(tool, None)
+        tb = self._tool_books.get(tool)
+        start = getattr(self, '_tools_from', None)
+        # Credit only the streamed span: a tool already busy at the warm-up
+        # line has a `since` before it, and counting from there read 200%.
+        if tb is not None and since is not None and start is not None:
+            tb['busy_s'] += max(0.0, instance.current_time - max(since, start))
+
+    def _tick_tools(self, instance):
+        """Write the per-tool books to the run store every six simulated
+        hours, so a run still streaming has a busiest-tools view too."""
+        if self.store is None or not self._in_window():
+            return
+        now = instance.current_time
+        if self._next_tools_t is None:
+            self._next_tools_t = now + TOOLS_FLUSH_S
+            self._tools_from = now
+            for tb in self._tool_books.values():   # nothing before the span counts
+                tb['busy_s'] = 0.0
+            return
+        if now < self._next_tools_t:
+            return
+        self._next_tools_t = now + TOOLS_FLUSH_S
+        self.flush_tools(now)
+
+    def flush_tools(self, now):
+        if self.store is None:
+            return
+        start = getattr(self, '_tools_from', None)
+        if start is None:
+            return
+        span = max(1.0, now - start)
+        rows = []
+        for tool, tb in self._tool_books.items():
+            if tool.startswith('Delay_'):     # books restored from an older checkpoint
+                continue
+            busy = tb['busy_s']
+            since = self._busy_since.get(tool)
+            if since is not None:            # still busy: credit up to now
+                busy += max(0.0, now - max(since, start))
+            rows.append((tool, tb['family'], 100.0 * busy / span, tb['dispatches'],
+                         (tb['q_sum'] / tb['dispatches']) if tb['dispatches'] else 0.0,
+                         tb['q_max']))
+        self.store.tools(rows)
+
     def on_step_done(self, instance, lot, step):
         self._now = instance.current_time
         self._recover_due(instance.current_time)
+        self._last_step_delay = str(getattr(step, 'family', '')).startswith('Delay')
+        self._lot_off_tool(instance, lot)
+        self._tick_kpi(instance)
         self._burn(instance, lot, 'active')
 
     def on_sim_init(self, instance):
@@ -655,10 +1118,36 @@ class FeedPlugin(IPlugin):
             return
         self._pace(instance.current_time)
         tool = self._name(machine)
+        # Who made this decision. The baseline rule is the default; a
+        # dispatcher running inside the simulator (ADR 0002) stamps
+        # instance.dispatch_source before calling instance.dispatch, and
+        # anything other than the default counts as an optimised decision.
+        src = getattr(instance, 'dispatch_source', None) or f'rule:{self.rule}'
+        optimized = not src.startswith('rule:')
+        # Delay_* is a 400-station pseudo-toolset standing in for a fixed wait
+        # (docs/adr/0008); nothing is chosen there, so it is not a decision.
+        if not tool.startswith('Delay_'):
+            self._decisions.append((instance.current_time, optimized))
         for lot in lots:
+            self._on_tool[self._lot_id(lot)] = tool
             self._write(LOT_TOPIC, envelope(
                 type='LOT_STARTED', lot=self._lot_id(lot), tool=tool,
                 recipe=lot.actual_step.step_name, prio=1))
+        if tool not in self._busy:
+            self._busy_since[tool] = instance.current_time
+        self._busy[tool] = self._busy.get(tool, 0) + len(lots)
+        tb = self._tool_books.get(tool)
+        if tb is None and not tool.startswith('Delay_'):
+            tb = self._tool_books[tool] = {
+                'family': getattr(machine, 'family', None), 'dispatches': 0,
+                'busy_s': 0.0, 'q_sum': 0, 'q_max': 0, 'since': instance.current_time}
+        if tb is not None and self._in_window():
+            q = len(machine.waiting_lots)
+            tb['dispatches'] += 1
+            tb['q_sum'] += q
+            tb['q_max'] = max(tb['q_max'], q)
+        self._tick_kpi(instance)
+        self._tick_tools(instance)
         # run stamps every stream, not just burndown. A consumer that cannot
         # tell which run an event came from cannot notice that it is stitching
         # two timelines together -- which is exactly what happened: state from
@@ -666,12 +1155,17 @@ class FeedPlugin(IPlugin):
         self._write(DECISION_TOPIC, envelope(
             tool=tool, lots=len(lots), queue=len(machine.waiting_lots),
             day=round(instance.current_time / 86400, 4),
-            run=self.run_id,
+            run=self.run_id, src=src,
             setup=machine.current_setup or '-'))
 
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
         self._recover_due(instance.current_time)
+        now = instance.current_time
+        self._done_log.append((now, now - float(lot.release_at or 0),
+                               now - float(lot.deadline_at or now)))
+        self._lot_off_tool(instance, lot)
+        self._tick_kpi(instance)
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
         self._burn(instance, lot, 'done')
         self._last_split.pop(lot.idx, None)
@@ -681,6 +1175,12 @@ class FeedPlugin(IPlugin):
     def on_lots_release(self, instance, lots):
         self._now = instance.current_time
         self._recover_due(instance.current_time)
+        # The WIP.txt lots arrive through this hook at t=0: that is the
+        # fab's initial state, not a start, and counting it put a 2,400-lot
+        # spike at day 0 of the starts series.
+        if instance.current_time > 0:
+            self._release_log.extend([instance.current_time] * len(lots))
+        self._tick_kpi(instance)
         for lot in lots:
             self._write(LOT_TOPIC, envelope(
                 type='LOT_READY', lot=self._lot_id(lot),
@@ -726,7 +1226,9 @@ class FeedPlugin(IPlugin):
                 part=L.get('part') or L['product'],
                 step=L['step'], tool=L['tool'], done_steps=L['done_steps'],
                 run=self.run_id, warm_t=self._warm_t, day=snap['day'],
-                cohort=self._cohort_of(L['lot']), hist=hist or None),
+                cohort=L.get('cohort') or self._cohort_of(L['lot']),
+                due=L.get('due'), rel=L.get('rel'), prio=L.get('prio'),
+                hot=L.get('hot'), hist=hist or None),
                 key=L['lot'])
             n += 1
         for T in snap['tools']:
@@ -737,6 +1239,10 @@ class FeedPlugin(IPlugin):
                 run=self.run_id, day=snap['day']),
                 key=T['tool'])
             n += 1
+        kpi = snap.get('kpi') or self._kpi
+        n += self.emit_kpi_history(kpi)
+        if self.store is not None:
+            self.store.samples(kpi, warmup=True)
         self.emitted += n
         return n
 
@@ -818,6 +1324,13 @@ def main():
     p.add_argument('--snapshot-only', action='store_true',
                    help='publish the cached snapshot for --warmup-days and '
                         'exit; no simulation, instant')
+    p.add_argument('--no-store', action='store_true',
+                   help='do not record this run in the Postgres run store')
+    p.add_argument('--notes', default=None,
+                   help='free text stored with the run (what this run is for)')
+    p.add_argument('--rebuild', action='store_true',
+                   help='ignore a cached simulator checkpoint for --warmup-days '
+                        'and re-simulate the warm-up from day 0')
     p.add_argument('--from-day', type=float, default=None,
                    help='only emit from this simulated day onward')
     p.add_argument('--to-day', type=float, default=None,
@@ -894,10 +1407,15 @@ def main():
     # do not publish the first N days.
     from_day = a.warmup_days if warm_s is not None else a.from_day
     speed = 0.0 if warm_s is not None else a.speed
+    # Resume from a checkpoint if one covers this run: the warm-up is then
+    # paid once per (dataset, seed, dispatcher, batching, day) rather than on
+    # every start. --rebuild forces the slow path.
+    ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
+        a.dataset, a.seed, a.dispatcher, a.warmup_days, a.batch_strat, a.days)
     if warm_s == 0:
         print('  no warm-up: snapshotting the WIP the dataset ships with, '
               'then streaming', file=sys.stderr)
-    elif warm_s is not None:
+    elif warm_s is not None and ckpt is None:
         print(f'  warming up to day {a.warmup_days:g} (unpaced, silent) — '
               f'about {a.warmup_days * 3 / 30:.0f} min of CPU',
               file=sys.stderr)
@@ -907,9 +1425,41 @@ def main():
     # base_speed is the post-warm-up rate the dashboard should show and revert
     # to, not the 0 the warm-up runs at.
     feed.base_speed = a.speed
+    feed.rule = a.dispatcher
     write_control(a.speed)
-    instance, run_to = sim_runner.build(
-        a.dataset, a.days, a.seed, [feed], a.batch_strat)
+    if not a.no_store:
+        feed.store = RunStore()
+        feed.store.begin(feed.run_id, a, notes=a.notes)
+    # A feed is normally ended with SIGTERM (dev-up.sh --stop, or a kill).
+    # Turn that into the Ctrl-C path so the run store still gets a status
+    # instead of a row that says "running" forever.
+    def _term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _term)
+
+    instance = None
+    if ckpt is not None:
+        t0 = time.time()
+        instance = load_checkpoint(ckpt, feed)
+        if instance is not None:
+            run_to = sim_runner.SECONDS_PER_DAY * a.days
+            warmed = True
+            feed.from_s = None
+            feed.speed = a.speed
+            feed._control_checked = 0.0
+            feed.last_sim_t = instance.current_time
+            snap = snapshot_of(instance, feed._lot_id, feed._name,
+                               history=feed._hist, cohort=feed._cohort_of,
+                               kpi=feed._kpi)
+            save_snapshot(cpath, snap)
+            n = feed.emit_snapshot(snap)
+            print(f'  resumed from checkpoint at day {snap["day"]} in '
+                  f'{time.time() - t0:.1f}s ({os.path.relpath(ckpt, REPO)}): '
+                  f'{len(snap["lots"])} lots in WIP, {n} snapshot records '
+                  f'published', file=sys.stderr)
+    if instance is None:
+        instance, run_to = sim_runner.build(
+            a.dataset, a.days, a.seed, [feed], a.batch_strat)
 
     def before_dispatch(instance):
         nonlocal warmed, next_report
@@ -946,8 +1496,19 @@ def main():
                 and instance.current_time >= warm_s:
             warmed = True
             snap = snapshot_of(instance, feed._lot_id, feed._name,
-                               history=feed._hist)
+                               history=feed._hist, cohort=feed._cohort_of,
+                               kpi=feed._kpi)
             save_snapshot(cpath, snap)
+            kpath = ckpt_path(a.dataset, a.seed, a.dispatcher, a.warmup_days,
+                              a.batch_strat, a.days)
+            try:
+                t0 = time.time()
+                save_checkpoint(kpath, instance, feed, a.days)
+                print(f'  simulator checkpointed to '
+                      f'{os.path.relpath(kpath, REPO)} in {time.time() - t0:.1f}s '
+                      f'-- later starts resume from here', file=sys.stderr)
+            except Exception as e:      # a cache miss next time, not a failure now
+                print(f'  checkpoint not saved ({e})', file=sys.stderr)
             feed.from_s = None            # stop suppressing
             feed.speed = a.speed          # start pacing
             feed._control_checked = 0.0   # honour any dashboard change
@@ -958,10 +1519,13 @@ def main():
                   f'published (cached to {os.path.relpath(cpath, REPO)})',
                   file=sys.stderr)
 
-    sim_runner.run(instance, run_to, a.dispatcher,
-                   before_dispatch=before_dispatch)
+    stopped = sim_runner.run(instance, run_to, a.dispatcher,
+                             before_dispatch=before_dispatch)
 
     out.close()
+    if feed.store is not None:
+        feed.flush_tools(instance.current_time)
+        feed.store.finish('stopped' if stopped else 'finished')
     msg = (f'  emitted {feed.emitted} events through '
            f'day {instance.current_time/86400:.2f}')
     if feed.skipped:
