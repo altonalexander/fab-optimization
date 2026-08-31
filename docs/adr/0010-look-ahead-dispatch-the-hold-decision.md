@@ -1,4 +1,4 @@
-# 0009 — Look-ahead dispatch: the hold decision
+# 0010 — Look-ahead dispatch: the hold decision
 
 **Status:** Proposed, 2026-08-30. Design only; nothing in this record is
 built. It exists so the idea is not lost and so the first experiment is

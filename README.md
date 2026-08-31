@@ -400,7 +400,7 @@ the reasoning survives the backlog.
   Run the simulation and dispatcher unpaced; the mirror advances a
   sim-time watermark at the viewer's speed. The solver's latency is charged
   in fab time, so its budget is exact at any playback speed.
-- **Look-ahead dispatch — the hold decision** ([0009](docs/adr/0009-look-ahead-dispatch-the-hold-decision.md)).
+- **Look-ahead dispatch — the hold decision** ([0010](docs/adr/0010-look-ahead-dispatch-the-hold-decision.md)).
   Let a tool wait for a lot it can see coming — out of a delay step, off a
   known process end — when that buys a setup match, a full batch, or a hot
   lot, and only on tools with slack. Needs a "hold until *t*" return from
