@@ -53,7 +53,8 @@ def run_key(payload, row):
     h.update(json.dumps([
         payload["dataset"], payload["seed"], payload["days"],
         payload["batch_strat"], payload.get("cycle_s"),
-        payload.get("budget_s"), row["rule"],
+        payload.get("budget_s"), payload.get("warmup_days") or 0,
+        row["rule"],
     ], sort_keys=True).encode())
     return h.hexdigest()
 
@@ -72,10 +73,11 @@ def publish(payload, path, dry_run=False):
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     sha = git_sha(repo)
     days = payload["days"]
-    # compare.py only applies the warm-up reset past 365 days; below that the
-    # numbers include the fill-up transient and the page must not imply
-    # otherwise.
-    warmup_days = 365 if days > 365 else 0
+    # The page compares rows by these two numbers, so they must be truthful.
+    # compare.py applies greedy.py's one-year reset past 365 days; below that
+    # the warm-up is whatever --warmup-days asked for, and 0 means the row
+    # still contains the fill-up transient.
+    warmup_days = 365 if days > 365 else payload.get("warmup_days") or 0
 
     published = []
     with psycopg.connect(DSN) as conn, conn.cursor() as cur:

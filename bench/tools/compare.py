@@ -183,12 +183,23 @@ def run_one(spec, args):
     instance, run_to = sim_runner.build(
         args.dataset, args.days, args.seed, [], args.batch_strat)
 
-    # Match greedy.py: after one simulated year the counters are zeroed so the
-    # numbers describe steady state. Only meaningful past 365 days.
+    # Warm-up. Two schemes exist in this repo and they are not the same thing:
+    #
+    #   greedy.py's ResetEvent at one year zeroes the MACHINE counters, so
+    #   utilisation describes steady state. Applied past 365 days to stay
+    #   comparable with the baseline's published figures.
+    #
+    #   sim_feed's --warmup-days N instead discards the first N days from the
+    #   REPORTED window, which is what makes a 120-day run describe the fab
+    #   rather than the fill-up transient.
+    #
+    # Both are supported, because a row produced here has to be comparable with
+    # a row produced by the feed -- and comparing a warmed run against an
+    # unwarmed one is exactly the class of error this harness exists to stop.
     use_reset = args.days > 365
     if use_reset:
         instance.add_event(ResetEvent(RESET_AT))
-    warm_from = RESET_AT if use_reset else 0
+    warm_from = RESET_AT if use_reset else args.warmup_days * SECONDS_PER_DAY
 
     rule = make_rule(spec, instance, args)
     banner = rule.banner() if hasattr(rule, 'banner') else f'  rule: {spec}'
@@ -295,16 +306,21 @@ def main():
     p.add_argument('--threads', type=int, default=1)
     p.add_argument('--no-lazy', action='store_true',
                    help='re-solve every family every cycle')
+    p.add_argument('--warmup-days', type=float, default=0.0,
+                   help='discard lots released before this day from the KPIs. '
+                        'Match the feed (--warmup-days 90 on a 120-day run) or '
+                        'the rows are not comparable.')
     p.add_argument('--out', default=None, help='write JSON here')
     a = p.parse_args()
     a.dataset = sim_runner.normalize_dataset(a.dataset)
     a.dispatcher = None   # unused; --rules drives this tool
 
-    print(f'  {a.dataset}  {a.days} days  seed={a.seed}  batch={a.batch_strat}')
-    if a.days <= 365:
-        print('  NOTE: <=365 days, so no warm-up reset. Numbers include the '
-              'fill-up transient\n        and are not comparable to published '
-              '730-day results.')
+    print(f'  {a.dataset}  {a.days} days  seed={a.seed}  batch={a.batch_strat}'
+          + (f'  warmup={a.warmup_days:g}d' if a.warmup_days else ''))
+    if a.days <= 365 and not a.warmup_days:
+        print('  NOTE: <=365 days and no --warmup-days, so the numbers include '
+              'the fill-up\n        transient and are not comparable to warmed '
+              'runs or to published\n        730-day results.')
 
     rows = [run_one(spec.strip(), a) for spec in a.rules.split(',') if spec.strip()]
 
@@ -316,6 +332,7 @@ def main():
     payload = {
         'dataset': a.dataset, 'days': a.days, 'seed': a.seed,
         'batch_strat': a.batch_strat, 'solver': a.solver,
+        'warmup_days': a.warmup_days,
         'cycle_s': a.cycle, 'budget_s': a.budget,
         'rows': rows,
     }
