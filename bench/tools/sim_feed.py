@@ -1341,6 +1341,15 @@ def main():
     # reached for by accident.
     sink.add_argument('--out', help=argparse.SUPPRESS)
     sim_runner.add_common_args(p, days_default=5)
+    # --dispatcher slate (or slate:none|due|full) runs the CP-SAT planner in
+    # place of a sort key. Defaults match bench/tools/compare.py so a live run
+    # and a benchmark run are the same rule; 5ms is the measured sweet spot per
+    # bench/README, and it is per FAMILY, not per fab.
+    p.add_argument('--slate-solver', default='cpsat', choices=['cpsat', 'greedy'])
+    p.add_argument('--slate-cycle', type=float, default=60.0,
+                   help='slate rebuild cadence, SIMULATED seconds')
+    p.add_argument('--slate-budget', type=float, default=0.005,
+                   help='per-family solve budget, seconds')
     p.add_argument('--speed', type=float, default=600.0,
                    help='sim-seconds per wall-second; 0 = unpaced')
     p.add_argument('--tool-prefix', default=None,
@@ -1548,8 +1557,38 @@ def main():
                   f'published (cached to {os.path.relpath(cpath, REPO)})',
                   file=sys.stderr)
 
-    stopped = sim_runner.run(instance, run_to, a.dispatcher,
+    # `slate` is not a sort key in dispatcher_map -- it is the CP-SAT planner
+    # (docs/adr/0009), so it has to be constructed against this instance and
+    # rebuilt on its own cadence. sim_runner.run accepts the rule object
+    # directly, and the slate's rebuild is chained ahead of the feed's own
+    # before_dispatch rather than replacing it.
+    #
+    # This is also what makes `optimized` mean anything on the dashboard:
+    # SlateRule stamps instance.dispatch_source per decision, so a decision the
+    # solver drove is distinguishable from one its fallback served.
+    rule = a.dispatcher
+    slate = None
+    if isinstance(rule, str) and rule.startswith('slate'):
+        import slate_rule
+        pressure = rule.split(':', 1)[1] if ':' in rule else 'full'
+        slate = slate_rule.SlateRule(
+            instance, solver=a.slate_solver, cycle_s=a.slate_cycle,
+            budget_s=a.slate_budget, pressure=pressure)
+        print(f'  {slate.banner()}', file=sys.stderr)
+        if not slate.planner.solver_available:
+            print('  WARNING: OR-Tools is not linked, so these are greedy '
+                  'decisions wearing cpsat\'s name', file=sys.stderr)
+        rule = slate
+        feed_before = before_dispatch
+
+        def before_dispatch(inst):          # noqa: F811
+            slate.maybe_rebuild(inst)
+            feed_before(inst)
+
+    stopped = sim_runner.run(instance, run_to, rule,
                              before_dispatch=before_dispatch)
+    if slate is not None:
+        print(f'  slate: {slate.stats()}', file=sys.stderr)
 
     out.close()
     if feed.store is not None:
