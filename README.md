@@ -391,6 +391,33 @@ re-simulate to redraw. Recording a bespoke stream instead would be ~2.5 GB per
 730-day scenario at 22.5k dispatch events per simulated day, which is the
 argument for letting the log be the recording.
 
+## Considerations and enhancements
+
+Things worth doing that are specified but not built. Each has an ADR so
+the reasoning survives the backlog.
+
+- **Playback as a cursor** ([0007](docs/adr/0007-playback-is-a-cursor-not-a-throttle.md)).
+  Run the simulation and dispatcher unpaced; the mirror advances a
+  sim-time watermark at the viewer's speed. The solver's latency is charged
+  in fab time, so its budget is exact at any playback speed.
+- **Look-ahead dispatch — the hold decision** ([0009](docs/adr/0009-look-ahead-dispatch-the-hold-decision.md)).
+  Let a tool wait for a lot it can see coming — out of a delay step, off a
+  known process end — when that buys a setup match, a full batch, or a hot
+  lot, and only on tools with slack. Needs a "hold until *t*" return from
+  the rule, a wake event, and a *held for arrival* bucket in the cycle-time
+  split so the cost is visible beside the gain.
+- **Release control** (no ADR yet). Starts are the dataset's schedule
+  verbatim; CONWIP or workload regulation would be a second lever beside
+  dispatch, judged on the *starts* KPI. Depends on demand information the
+  simulator only sees as `order.txt`.
+- **Queue-time constraints** (0008 §2). Parsed, never enforced. The
+  cheapest fidelity gain available; a dispatcher that protects CQT windows
+  gets no credit until it lands.
+- **A self-built simulator** (0008 §6). Three separate cases — speed,
+  fidelity where the dispatcher's claims live, one data model — and one
+  acceptance test: reproduce PySCFabSim's published baselines on the same
+  data first.
+
 ## Status
 
 Honest accounting, because the numbers here have been wrong before:

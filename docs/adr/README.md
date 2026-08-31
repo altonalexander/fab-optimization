@@ -14,6 +14,7 @@ overturn it. Not how anything works — that lives beside the code.
 | [0006](0006-zeromq-inbound-kafka-outbound.md) | ZeroMQ inbound, Kafka outbound: the transport split |
 | [0007](0007-playback-is-a-cursor-not-a-throttle.md) | Playback is a cursor, not a throttle: run unpaced, replay at will |
 | [0008](0008-what-pyscfabsim-simplifies.md) | What PySCFabSim simplifies (transport, delay, storage, CQT), and what that hides |
+| [0009](0009-look-ahead-dispatch-the-hold-decision.md) | Look-ahead dispatch: let a tool hold for a predictable arrival (proposed) |
 
 ## Why these are central and not filed under bench/ or dispatch/
 
