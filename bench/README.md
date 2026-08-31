@@ -101,6 +101,24 @@ machines; CP-SAT closes it well inside 5 ms and the rest of the budget goes on
 proving optimality nobody collects. This is the decomposition thesis of
 adr/0009 confirmed by measurement.
 
+**But note how this sweep was nearly a trap.** It covers three SIMULATED HOURS.
+Adopting 5 ms and running 30 simulated days, OR-Tools aborted the process
+twenty minutes in:
+
+```
+F0000 integer_search.cc:1217] Check failed: heuristics.fixed_search != nullptr
+```
+
+A failed CHECK cannot be caught, so the run died and wrote nothing. The cause
+was not the budget: `SolveParams::deterministic` set `interleave_search(true)`,
+which asks for a `fixed` subsolver that needs a decision strategy this model
+never defines. With one worker and a short deadline it trips the check. It is
+now gated on `threads > 1`; a single worker is deterministic anyway.
+
+The sweep's numbers were right. The default derived from them shipped a
+process-killing bug, because a benchmark short enough to iterate on was short
+enough to miss it.
+
 **Planning only for currently-free tools does not work.** `usable_machines` is
 the handful awaiting a decision at that instant, so a slate built from it holds
 a few tokens and ~94% of decisions fall through. Planning across the whole fab

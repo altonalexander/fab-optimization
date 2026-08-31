@@ -364,8 +364,28 @@ class SlateRule:
         if machine.idx != self._cur_machine:
             self._cur_machine = machine.idx
             self.decisions += 1
-            if str(machine.idx) in self.by_tool:
+            covered = str(machine.idx) in self.by_tool
+            if covered:
                 self.decisions_covered += 1
+
+            # Stamp WHO decided, using the protocol sim_feed already defines:
+            #
+            #   src = instance.dispatch_source or f'rule:{rule}'
+            #   optimized = not src.startswith('rule:')
+            #
+            # so a source outside the 'rule:' namespace counts as an optimised
+            # decision and feeds optimized_pct on the dashboard. Without this
+            # the feed falls back to 'rule:slate' and scores every slate
+            # decision as unoptimised -- the metric would read 0% for the one
+            # rule it exists to measure.
+            #
+            # The distinction is per DECISION POINT, not per lot: at this
+            # moment we know whether the slate holds a pick for this machine,
+            # which is exactly what coverage counts. A decision with no pick
+            # is served by the fallback score, so it is stamped back into the
+            # 'rule:' namespace and is honestly NOT optimised.
+            self.instance.dispatch_source = (
+                'slate' if covered else 'rule:slate-fallback')
 
         # Slots 0 and 1: verbatim from the upstream rules. See the tuple
         # contract at the top of this module.
@@ -400,6 +420,25 @@ class SlateRule:
         proc = step.processing_time.avg()
         time_cost = (setup or 0.0) + proc
         return time_cost / max(self._urgency(lot, time), 0.01)
+
+    # -- who decided --------------------------------------------------------
+    # Slot 3 of the ptuple already carries the tier, so the reason for a
+    # dispatch can be read back off the lot that won without any extra
+    # bookkeeping during scoring -- which matters, because scoring runs ~16M
+    # times per 730-day run and the winner is not known until after the sort.
+    REASONS = {
+        0: 'slate',            # the slate picked this lot for this tool
+        1: 'slate-alt',        # this tool was the failover target
+        2: 'slate-elsewhere',  # planned for another tool, run here anyway
+        3: 'fallback',         # no token: solver-consistent score decided
+    }
+
+    def reason_for(self, lot):
+        """Why this lot was the one dispatched. '' if it was never scored."""
+        t = getattr(lot, 'ptuple', None)
+        if not t or len(t) < 4:
+            return ''
+        return self.REASONS.get(t[3], '')
 
     # -- reporting ----------------------------------------------------------
     def stats(self):
