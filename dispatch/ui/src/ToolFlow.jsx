@@ -10,7 +10,10 @@ import {
 // The queue is the station family's: a lot waits for a family, not a machine,
 // and any tool in the family may take it, so every tool in Dielectric_BE_60
 // draws the same nine circles. The box is this tool's alone.
-export default function ToolFlow({ t }) {
+// Every lot links to its cohort's burndown page (`cohortHref(cohort)`), the
+// lot's own context in the app; a lot whose cohort is not known yet stays a
+// plain label rather than a dead link.
+export default function ToolFlow({ t, cohortHref }) {
   // A one-second tick for the countdown. The page polls every two seconds;
   // between polls the fab clock is extrapolated at playback speed, so the
   // timer runs smoothly instead of stepping.
@@ -28,13 +31,16 @@ export default function ToolFlow({ t }) {
   const ring = ringLayout(running.length)
   const out = recentOut(t.recent_out)
   const setup = setupLabel(t.setup)
+  const cohorts = t.cohorts || {}
+  const hrefOf = lot => (cohortHref && cohorts[lot]) ? cohortHref(cohorts[lot]) : null
 
   return (
     <div className="toolflow">
       <div className="tf-col">
         <div className="tf-label">waiting <b>{t.waiting_count ?? '—'}</b></div>
         <div className="tf-grid" title="lots queued for this tool's station family, oldest first">
-          {cells.map((c, i) => <QueueCell key={i} cell={c} />)}
+          {cells.map((c, i) => <QueueCell key={i} cell={c} href={c.id ? hrefOf(c.id) : null}
+                                          cohort={c.id ? cohorts[c.id] : null} />)}
         </div>
       </div>
 
@@ -47,7 +53,8 @@ export default function ToolFlow({ t }) {
           {running.length === 0 && <span className="tf-idle">idle</span>}
           {ring.points.map((p, i) => (
             <RunningLot key={running[i].lot} meta={running[i]} clock={clock}
-                        wall={wall} x={p.x} y={p.y} />
+                        wall={wall} x={p.x} y={p.y} href={hrefOf(running[i].lot)}
+                        cohort={cohorts[running[i].lot]} />
           ))}
           {ring.extra > 0 && <span className="tf-more">+{ring.extra}</span>}
         </div>
@@ -63,7 +70,10 @@ export default function ToolFlow({ t }) {
           <ul className="tf-out">
             {out.shown.map(r => (
               <li key={r.lot}>
-                <code>{r.lot}</code>
+                {hrefOf(r.lot)
+                  ? <a className="link" href={hrefOf(r.lot)}
+                       title={`cohort ${cohorts[r.lot]}`}><code>{r.lot}</code></a>
+                  : <code>{r.lot}</code>}
                 {r.day != null && <span className="muted"> · day {r.day.toFixed(2)}</span>}
               </li>
             ))}
@@ -77,18 +87,20 @@ export default function ToolFlow({ t }) {
   )
 }
 
-function QueueCell({ cell }) {
+function QueueCell({ cell, href, cohort }) {
   if (cell.kind === 'empty') return <span className="tf-cell tf-cell-empty" />
   if (cell.kind === 'more') {
     return <span className="tf-cell tf-cell-more" title={`${cell.n} more waiting`}>+{cell.n}</span>
   }
   const { short, hot } = shortId(cell.id)
-  return (
-    <span className={hot ? 'tf-cell tf-cell-hot' : 'tf-cell'} title={cell.id}>{short}</span>
-  )
+  const cls = hot ? 'tf-cell tf-cell-hot' : 'tf-cell'
+  const title = cohort ? `${cell.id} · cohort ${cohort}` : cell.id
+  return href
+    ? <a className={cls} href={href} title={title}>{short}</a>
+    : <span className={cls} title={title}>{short}</span>
 }
 
-function RunningLot({ meta, clock, wall, x, y }) {
+function RunningLot({ meta, clock, wall, x, y, href, cohort }) {
   const { short, hot } = shortId(meta.lot)
   const left = remaining(meta, clock, wall)
   const frac = progress(meta, clock, wall)
@@ -97,14 +109,16 @@ function RunningLot({ meta, clock, wall, x, y }) {
   const ringStyle = frac == null ? undefined : {
     background: `conic-gradient(#15803d ${Math.round(frac * 360)}deg, #dcfce7 0)`,
   }
+  const Tag = href ? 'a' : 'div'
   return (
-    <div className={hot ? 'tf-run tf-run-hot' : 'tf-run'}
+    <Tag className={hot ? 'tf-run tf-run-hot' : 'tf-run'} href={href || undefined}
          style={{ left: `${x * 100}%`, top: `${y * 100}%`, ...ringStyle }}
-         title={`${meta.lot}${left != null ? ` · ${fmtCountdown(left)} left` : ''}`}>
+         title={`${meta.lot}${cohort ? ` · cohort ${cohort}` : ''}`
+                + `${left != null ? ` · ${fmtCountdown(left)} left` : ''}`}>
       <div className="tf-run-in">
         <div className="tf-run-id">{short}</div>
         <div className="tf-run-left">{left == null ? '' : fmtCountdown(left)}</div>
       </div>
-    </div>
+    </Tag>
   )
 }

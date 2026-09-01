@@ -1455,6 +1455,15 @@ def _tool_row(tool_id):
         running_lots = [{"lot": l, **mirror.in_flight_meta.get(l, {})}
                         for l in running[:25]]
         sim_t, sim_t_at = mirror.sim_t, mirror.sim_t_at
+        # Which cohort each lot on this page belongs to, so every lot can link
+        # to its cohort's burndown. From the burndown metadata first (it knows
+        # every lot that has moved), else the ready record.
+        cohorts = {}
+        for l in (waiting[:WAITING_SHOWN] + running[:25] + [o["lot"] for o in out]):
+            c = (mirror.lot_meta.get(l) or {}).get("cohort") \
+                or (mirror.lots_ready.get(l) or {}).get("cohort")
+            if c and c != "?":
+                cohorts[l] = c
     return {
         "id": tool_id,
         "group": tool_group(tool_id),
@@ -1490,6 +1499,7 @@ def _tool_row(tool_id):
         "waiting_count": len(waiting),
         # Newest first, so the page can show the last few and count the rest.
         "recent_out": out[::-1],
+        "cohorts": cohorts,
     }
 
 

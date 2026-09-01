@@ -515,7 +515,7 @@ function ToolDetail({ id, backHref }) {
           waits for a family, not a machine); the box and its countdown are
           this tool's own. */}
       <h4>Flow</h4>
-      <ToolFlow t={t} />
+      <ToolFlow t={t} cohortHref={c => linkTo('/lots', { cohort: c })} />
 
       <h4>Recent decisions</h4>
       {t.recent_decisions.length === 0 ? (
