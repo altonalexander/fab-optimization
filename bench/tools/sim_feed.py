@@ -343,6 +343,8 @@ def snapshot_of(instance, lot_id, machine_name, history=None, cohort=None,
             'step': getattr(step, 'step_name', '') if step else '',
             'fam': getattr(step, 'family', '') if step else '',
             'setup': getattr(step, 'setup_needed', '') if step else '',
+            'bmin': (getattr(step, 'batch_min', 1) or 1) if step else 1,
+            'bmax': (getattr(step, 'batch_max', 1) or 1) if step else 1,
             'tool': running.get(lid),          # None => waiting, not running
             'done_steps': len(getattr(lot, 'processed_steps', []) or []),
             # The burndown this lot walked during warm-up. Without it an active
@@ -963,6 +965,11 @@ class FeedPlugin(IPlugin):
             # and any machine of the family may take it, so this is what the
             # tool page keys "waiting at this tool" on.
             fam=getattr(getattr(lot, 'actual_step', None), 'family', '') or '',
+            # Batch window and setup of that step, so an index can tag a lot
+            # that is waiting to batch or waiting on a changeover.
+            bmin=getattr(getattr(lot, 'actual_step', None), 'batch_min', 1) or 1,
+            bmax=getattr(getattr(lot, 'actual_step', None), 'batch_max', 1) or 1,
+            setup=getattr(getattr(lot, 'actual_step', None), 'setup_needed', '') or '',
             t=round(instance.current_time, 1),
             left=remaining,
             idx=done,
@@ -1283,7 +1290,8 @@ class FeedPlugin(IPlugin):
                 type='LOT_STATE', lot=L['lot'], product=L['product'],
                 part=L.get('part') or L['product'],
                 step=L['step'], fam=L.get('fam') or '', tool=L['tool'],
-                done_steps=L['done_steps'],
+                setup=L.get('setup') or '', bmin=L.get('bmin', 1),
+                bmax=L.get('bmax', 1), done_steps=L['done_steps'],
                 run=self.run_id, warm_t=self._warm_t, day=snap['day'],
                 cohort=L.get('cohort') or self._cohort_of(L['lot']),
                 due=L.get('due'), rel=L.get('rel'), prio=L.get('prio'),

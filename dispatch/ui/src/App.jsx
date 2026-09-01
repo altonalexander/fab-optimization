@@ -633,6 +633,15 @@ function ToolIndex({ query, setQuery, toolHref }) {
             <button className="tgroup-head" onClick={() => setOpen(o => ({ ...o, [g.group]: !o[g.group] }))}>
               <span className="tgroup-caret">{isOpen ? '▾' : '▸'}</span>
               <strong>{g.group}</strong>
+              {/* What this type asks of a dispatcher: whether its tools load
+                  several lots at once, and whether they switch setups. */}
+              {g.batches && <span className="chip chip-batch" title="tools of this type load several lots at once">batches</span>}
+              {g.setups && (
+                <span className="chip chip-setup"
+                      title={g.changeovers ? `${g.changeovers.toLocaleString()} changeovers seen` : 'runs with a setup; no changeover seen yet'}>
+                  changeovers{g.changeovers ? ` ${g.changeovers.toLocaleString()}` : ''}
+                </span>
+              )}
               <span className="muted">{g.count} tools</span>
               <span className="tgroup-metrics">
                 <span>{g.dispatches.toLocaleString()} dispatches</span>

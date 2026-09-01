@@ -14,6 +14,20 @@ test('the axis windows to WINDOW below the roster, not to zero', () => {
   assert.ok(gap > 0.1, `13 down rendered as ${(100 * gap).toFixed(1)}% of height`)
 })
 
+test('x follows the clock, so a pause has no width and fast playback does', () => {
+  // Five samples a wall-second apart, but the fab clock stood still between
+  // the 2nd and 4th and then leapt: the flat stretch must collapse.
+  const simT = [0, 100, 100, 100, 500]
+  const v = view(simT, seq(5, () => 10), seq(5, () => 10), 10)
+  assert.equal(v.x(1), v.x(2))
+  assert.equal(v.x(2), v.x(3))
+  assert.ok(v.x(4) - v.x(3) > v.x(1) - v.x(0))
+  assert.ok(Math.abs(v.x(4) - v.nowX) < 1e-9)
+  // Identical stamps fall back to even spacing rather than dividing by zero.
+  const flat = view([7, 7, 7], seq(3, () => 10), seq(3, () => 10), 10)
+  assert.ok(flat.x(1) > flat.x(0) && flat.x(2) > flat.x(1))
+})
+
 test('a full roster sits on the reference line at the top', () => {
   const v = view(seq(3, i => i), seq(3, () => 1313), seq(3, () => 1313), 1313)
   assert.equal(v.y(1313), M.t)

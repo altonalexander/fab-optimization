@@ -528,3 +528,8 @@ table.runs tr.row-base td{background:#f9fafb}
 .tf-run-left{font-size:9px;color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
 .tf-out{list-style:none;margin:0;padding:0;font-size:12px;display:flex;flex-direction:column;gap:4px}
 .tf-none{font-size:12px}
+
+/* tool-type tags on the tools index */
+.chip-batch{background:#ede9fe;color:#5b21b6}
+.chip-setup{background:#fef3c7;color:#92400e}
+.tgroup-head .chip{margin-left:6px}

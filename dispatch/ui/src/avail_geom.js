@@ -56,8 +56,12 @@ export function view(ts, online, total, now) {
   const dataW = iw * (1 - FUTURE)
   const nowX = M.l + dataW
   // A single sample has no span to interpolate across; pin it to the rule,
-  // where the newest point always lives.
-  const x = i => n < 2 ? nowX : M.l + (i / (n - 1)) * dataW
+  // where the newest point always lives. Otherwise x follows the timestamp,
+  // not the sample index: samples are taken on the wall clock, so on the fab
+  // clock a pause must collapse to nothing and fast playback must stretch.
+  const t0 = ts[0], tSpan = ts[n - 1] - t0
+  const x = i => n < 2 ? nowX
+    : M.l + (tSpan > 0 ? (ts[i] - t0) / tSpan : i / (n - 1)) * dataW
   return { n, yMax, yMin, span, x, y, iw, ih, nowX }
 }
 

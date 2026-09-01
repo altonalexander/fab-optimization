@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { W, H, M, view, points, areaPath, fmtClock } from './avail_geom.js'
+import { fmtSimTime } from './stream_geom.js'
 
 // Availability strip for the top of the tool index.
 //
@@ -28,9 +29,20 @@ export default function ToolAvailability() {
 
   const { online: nOnline, total, down } = d.now
   const pct = 100 * nOnline / total
-  const v = view(d.ts, d.online, d.total, total)
+  // Fab time on the axis, like every other chart of fab data in the app: the
+  // feed replays at 1x to 1600x and pauses, so wall spacing says nothing about
+  // how much fab the strip covers. Samples taken before the clock was known
+  // have no fab stamp and are dropped; the wall clock is the fallback only
+  // when nothing is stamped at all.
+  const stamped = (d.sim_t || []).map((t, i) => t != null ? i : -1).filter(i => i >= 0)
+  const simAxis = stamped.length >= 2
+  const pick = arr => simAxis ? stamped.map(i => arr[i]) : arr
+  const ts = simAxis ? pick(d.sim_t) : d.ts
+  const online = pick(d.online), totals = pick(d.total)
+  const fmtT = simAxis ? fmtSimTime : fmtClock
+  const v = view(ts, online, totals, total)
   const n = v ? v.n : 0
-  const last = n ? d.online[n - 1] : 0
+  const last = n ? online[n - 1] : 0
 
   const inferred = Object.entries(d.recovered || {})
   const state = down === 0 ? 'ok' : (down / total > 0.1 ? 'bad' : 'warn')
@@ -54,7 +66,11 @@ export default function ToolAvailability() {
               {k} restored by {how}
             </span>
           ))}
-          {n > 1 && <span>{fmtClock(d.ts[0])}–{fmtClock(d.ts[n - 1])}</span>}
+          {n > 1 && (
+            <span title={simAxis ? 'simulated fab days' : 'wall clock (fab clock not yet seen)'}>
+              {fmtT(ts[0])}–{fmtT(ts[n - 1])}{simAxis ? ' fab time' : ' wall clock'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -68,12 +84,12 @@ export default function ToolAvailability() {
              aria-label={`${nOnline} of ${total} tools online`}>
           <line x1={M.l} x2={W - M.r} y1={v.y(v.yMin)} y2={v.y(v.yMin)}
                 stroke="#e5e7eb" />
-          <path d={areaPath(v, d.online)} fill="#2563eb" fillOpacity="0.10" />
+          <path d={areaPath(v, online)} fill="#2563eb" fillOpacity="0.10" />
           {/* The roster itself moves as tools announce themselves, so the
               reference is a series too, not one flat line at today's total. */}
-          <polyline points={points(v, d.total)} fill="none" stroke="#6b7280"
+          <polyline points={points(v, totals)} fill="none" stroke="#6b7280"
                     strokeWidth="1.5" strokeDasharray="5 4" />
-          <polyline points={points(v, d.online)} fill="none" stroke={stroke}
+          <polyline points={points(v, online)} fill="none" stroke={stroke}
                     strokeWidth="2" strokeLinejoin="round" />
           {/* now: where measurement stops. Everything right of it is empty
               because it has not happened -- the same rule the burndown and the

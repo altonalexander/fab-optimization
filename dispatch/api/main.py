@@ -146,6 +146,7 @@ class FabMirror:
             "last_day": None,    # simulated day of the last decision
             "last_ts": None,     # wall clock, so staleness is visible
             "changeovers": 0,
+            "batch_max": 0,      # most lots loaded by one decision
         })
         # Per-tool decision ring. The shared `decisions` deque is global and
         # 500 deep; with a few hundred tools a given tool's last decision is
@@ -313,7 +314,10 @@ class FabMirror:
             online = sum(1 for t in ids
                          if self.tools.get(t, {}).get("online", True))
             if total:
-                self.availability.append((now, online, total))
+                # Stamped with the fab clock as well as the wall clock: the
+                # strip is fab data, and against wall time a pause reads as a
+                # long steady stretch and 400x as a hectic one.
+                self.availability.append((now, online, total, self.sim_t))
             return online, total
 
     def apply_kpi(self, ev):
@@ -419,6 +423,7 @@ class FabMirror:
         m.setdefault("due", due if due is not None else 0.0)
         m.setdefault("prio", _as_float(ev.get("prio"), 0.0))
         m.setdefault("hot", ev.get("hot") == "1")
+        _note_step(m, ev)
         if history:
             m["history"] = history
             # Seed position from the snapshot so a lot that has not moved since
@@ -506,6 +511,7 @@ class FabMirror:
         meta["state"] = state
         meta["last_t"] = t
         meta["rem_s"] = f("rem_s")
+        _note_step(meta, ev)
 
         self._advance_sim(t)
 
@@ -610,6 +616,7 @@ class FabMirror:
                 s = self.tool_stats[tool]
                 s["dispatches"] += 1
                 s["lots"] += int(d.get("lots") or 0)
+                s["batch_max"] = max(s.get("batch_max", 0), int(d.get("lots") or 0))
                 s["queue"] = _as_int(d.get("queue"))
                 setup = d.get("setup")
                 if setup and s["setup"] is not None and setup != s["setup"]:
@@ -1467,6 +1474,7 @@ def _tool_row(tool_id):
         "queue": s.get("queue"),
         "setup": s.get("setup"),
         "changeovers": s.get("changeovers", 0),
+        "batch_max": s.get("batch_max", 0),
         "last_day": s.get("last_day"),
         "last_ts": s.get("last_ts"),
         "running": running[:25],
@@ -1614,6 +1622,9 @@ def tools_availability():
                      if mirror.tools.get(t, {}).get("online", True))
     return jsonify({
         "ts":      [round(p[0], 1) for p in pts],
+        # Simulated seconds at each sample (null before the clock was known).
+        "sim_t":   [(round(p[3], 1) if len(p) > 3 and p[3] is not None else None)
+                    for p in pts],
         "online":  [p[1] for p in pts],
         # Historical, not just current: the roster grows as tools announce
         # themselves, so a flat line drawn at today's total would misread the
@@ -1637,6 +1648,10 @@ def tools_index():
     """
     with mirror.lock:
         ids = set(mirror.tools) | set(mirror.tool_stats)
+        # Families whose waiting lots sit at a batch step, from the ready
+        # pool: tags a batch family before any of its tools has loaded one.
+        fam_batch = {ev.get("fam") for ev in mirror.lots_ready.values()
+                     if (_as_int(ev.get("bmax")) or 1) > 1}
     rows = [_tool_row(t) for t in sorted(ids)]
 
     groups = {}
@@ -1645,6 +1660,10 @@ def tools_index():
             "group": r["group"], "tools": [],
             "count": 0, "offline": 0, "dispatches": 0, "lots": 0,
             "queue_max": None,
+            # Type tags. `batches`: a tool of this type loads several lots at
+            # once (seen in a decision, or waiting lots say so). `setups`:
+            # decisions name a setup; `changeovers` counts the switches.
+            "batches": r["group"] in fam_batch, "setups": False, "changeovers": 0,
         })
         g["tools"].append(r)
         g["count"] += 1
@@ -1653,6 +1672,11 @@ def tools_index():
         g["lots"] += r["lots"]
         if r["queue"] is not None:
             g["queue_max"] = max(g["queue_max"] or 0, r["queue"])
+        if r.get("batch_max", 0) > 1:
+            g["batches"] = True
+        if r.get("setup") and r["setup"] != "-":
+            g["setups"] = True
+        g["changeovers"] += r.get("changeovers", 0)
 
     # Busiest group first: the index should answer "where is the constraint"
     # before it answers "what exists".
@@ -1827,6 +1851,23 @@ def lot_stats(m, pts, now):
     }
 
 
+def _note_step(meta, ev):
+    """Record what the lot's current step asks of a tool, from a record
+    that names it. Older feeds carry none of these; leave what was known."""
+    if ev.get("fam") is not None:
+        meta["fam"] = ev.get("fam") or ""
+    if ev.get("step") is not None:
+        meta["step"] = ev.get("step") or ""
+    bmax = _as_int(ev.get("bmax"))
+    if bmax is not None:
+        # A batch step is one a tool may load more than one lot into.
+        meta["batch"] = bmax > 1
+        meta["bmax"] = bmax
+    if ev.get("setup") is not None:
+        s = (ev.get("setup") or "").strip()
+        meta["setup"] = "" if s == "-" else s
+
+
 def _cohort_rows(meta):
     """One row per cohort, ranked by how recently it moved."""
     by = {}
@@ -1834,10 +1875,22 @@ def _cohort_rows(meta):
         c = by.setdefault(m["cohort"], {
             "cohort": m["cohort"], "part": m["part"], "lots": 0, "done": 0,
             "left": [], "last_t": 0.0, "release": m["release"], "due": m["due"],
+            # Current-step tags over the cohort's active lots: how many wait at
+            # a batch step, how many at a step that needs a setup, which setups,
+            # and the family most of them are waiting for.
+            "batch": 0, "setup": 0, "setups": set(), "fams": {},
         })
         c["lots"] += 1
         c["hot"] = c.get("hot", 0) + (1 if m.get("hot") else 0)
         c["done"] += 1 if m.get("state") == "done" else 0
+        if m.get("state") not in ("done", "scrapped"):
+            if m.get("batch"):
+                c["batch"] += 1
+            if m.get("setup"):
+                c["setup"] += 1
+                c["setups"].add(m["setup"])
+            if m.get("fam"):
+                c["fams"][m["fam"]] = c["fams"].get(m["fam"], 0) + 1
         c["left"].append(m.get("left", 0))
         c["last_t"] = max(c["last_t"], m.get("last_t", 0.0))
         c["release"] = min(c["release"], m["release"])
@@ -1853,6 +1906,9 @@ def _cohort_rows(meta):
         c["max_left"] = left[-1]
         c["med_left"] = left[n // 2]
         c["spread"] = left[-1] - left[0]
+        c["setups"] = sorted(c["setups"])
+        fams = c.pop("fams")
+        c["fam"] = max(fams, key=fams.get) if fams else None
         rows.append(c)
     rows.sort(key=lambda r: (-r["last_t"], r["cohort"]))
     return rows
