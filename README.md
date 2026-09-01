@@ -97,8 +97,12 @@ dispatches and the choice set it was offered.
 
 A synthetic bay/chase layout of the same 913 process tools, coloured by
 area, with WIP per bay and a heatmap toggle. Hatching marks bays with a
-tool down. It answers the spatial question the tables cannot: where in the
-fab the queue is building, and whether it is one bay or a whole area.
+tool down. Clicking a bay opens its panel — here bay 8 · seg 2,
+photolithography: 14 tools, 77 lots of WIP, 11 running, 1 down, and the
+tool list, each a link into the tools tab. It answers the spatial question
+the tables cannot: where in the fab the queue is building, and whether it
+is one bay or a whole area. The selection lives in the URL
+(`#/floor?bay=8,2`), so a view is pasteable.
 
 ### Routes — what a product's journey looks like
 ![routes](docs/screenshots/routes.png)
