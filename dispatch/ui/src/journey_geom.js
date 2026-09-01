@@ -32,10 +32,15 @@ export function fmtProc(s) {
   return `${v}s`
 }
 
-// What to say about the lot's position: on a tool, waiting for one, or done.
+// Delay_* is the simulator's pseudo-toolset for a route-prescribed wait (ADR
+// 0008): the lot is holding, not being processed, and there is no tool to see.
+export const isDelay = fam => /^Delay(_|$)/i.test(String(fam || ''))
+
+// What to say about the lot's position: on a tool, holding, waiting, or done.
 export function statusOf(j) {
   if (!j) return 'unknown'
   if (j.idx >= j.n) return 'done'
+  if (j.tool && isDelay(j.tool)) return 'holding (route delay)'
   if (j.tool) return 'on tool'
   if (j.waiting) return 'waiting'
   return 'in transit'

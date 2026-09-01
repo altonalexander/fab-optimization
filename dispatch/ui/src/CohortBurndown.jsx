@@ -59,9 +59,11 @@ const fmtSigned = sec =>
  * the URL (#/lots?cohort=part_3-d0), which is what lets a route page link to
  * one cohort; unpassed, the component keeps its own selection and behaves as
  * it did before. `routeHref` builds the link back to a product's route page.
+ * `header` is the chart section's heading, rendered here so the lot journeys
+ * (which share this component's fetch) can sit in their own section above it.
  */
 export default function CohortBurndown({ cohort: cohortProp, onCohort,
-                                         routeHref } = {}) {
+                                         routeHref, header = null } = {}) {
   const [index, setIndex] = useState(null)
   const [ownCohort, setOwnCohort] = useState(null)
   const controlled = typeof onCohort === 'function'
@@ -300,23 +302,41 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
     return e.length ? e : null
   }, [view, mode, metric])
 
-  if (err) return <p className="muted">{err}</p>
-  if (!index) return <p className="muted">loading cohorts…</p>
+  if (err) return <section>{header}<p className="muted">{err}</p></section>
+  if (!index) return <section>{header}<p className="muted">loading cohorts…</p></section>
   if (!index.cohorts || !index.cohorts.length) {
     return (
-      <div>
+      <section>
+        {header}
         <p className="muted">
           No burndown points yet. The lots view is fed by <code>LOT_PROGRESS</code>{' '}
           events from <code>bench/tools/sim_feed.py</code>; start the feed, or check
           it was not run with <code>--no-burndown</code>.
         </p>
-      </div>
+      </section>
     )
   }
 
   const row = index.cohorts.find(c => c.cohort === cohort)
 
   return (
+    <>
+    <section>
+      <h3>Lot journeys</h3>
+      <p className="muted" style={{ marginTop: -4 }}>
+        Where each lot of <b>{cohort}</b> stands on its route: the two steps it
+        has left, the step it is at, and the two ahead. Box width is the step's
+        nominal process time; a lot on a tool counts down the time left.
+      </p>
+      {view
+        ? <LotJourneys lots={view.lots} routeHref={routeHref}
+                       clock={data ? { t: data.now_t, t_at: data.now_t_at,
+                                       speed: data.speed, paused: data.paused } : null} />
+        : <p className="muted">loading {cohort}…</p>}
+    </section>
+
+    <section>
+    {header}
     <div className="burndown" ref={wrapRef}>
       <div className="burndown-controls">
         {/* A <select> cannot hold a link per option, so the route link for
@@ -593,12 +613,6 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
 
       <LotStats lots={view ? view.lots : []} focus={focus} now={view && view.now} />
 
-      {/* Where each lot stands on its route, as a short supply chain. Only
-          the selected cohort's lots: context lots are drawn, not narrated. */}
-      <LotJourneys lots={view ? view.lots : []} routeHref={routeHref}
-                   clock={data ? { t: data.now_t, t_at: data.now_t_at,
-                                   speed: data.speed, paused: data.paused } : null} />
-
       <div className="burndown-legend">
         {Object.entries(REASON).map(([k, v]) => (
           <span key={k}><i style={{ background: v.color }} />{v.label}</span>
@@ -646,6 +660,8 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
         ink.
       </p>
     </div>
+    </section>
+    </>
   )
 }
 

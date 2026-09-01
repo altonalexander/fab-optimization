@@ -1055,19 +1055,21 @@ export default function App() {
 
       {tab === 'lots' && (
         <div className="grid-wide">
-          <section>
-            <h3>Cohort burndown</h3>
-            <p className="muted" style={{ marginTop: -4 }}>
-              Remaining route steps per lot against simulated time. A cohort is
-              one product's releases within one day &mdash; the lots that can
-              actually batch together, since an SMT2020 furnace batch needs the
-              same product <i>and</i> the same step. Band thickness is cohort
-              spread; a widening band means the cohort is desynchronising.
-            </p>
-            <CohortBurndown cohort={query.cohort || null}
-                            onCohort={c => setQuery({ cohort: c || undefined })}
-                            routeHref={p => linkTo(['routes', p])} />
-          </section>
+          {/* Two sections, both owned by CohortBurndown since they share one
+              fetch: the lot journeys first, then the chart under this header. */}
+          <CohortBurndown cohort={query.cohort || null}
+                          onCohort={c => setQuery({ cohort: c || undefined })}
+                          routeHref={p => linkTo(['routes', p])}
+                          header={<>
+                            <h3>Cohort burndown</h3>
+                            <p className="muted" style={{ marginTop: -4 }}>
+                              Remaining route steps per lot against simulated time. A cohort is
+                              one product's releases within one day &mdash; the lots that can
+                              actually batch together, since an SMT2020 furnace batch needs the
+                              same product <i>and</i> the same step. Band thickness is cohort
+                              spread; a widening band means the cohort is desynchronising.
+                            </p>
+                          </>} />
         </div>
       )}
 

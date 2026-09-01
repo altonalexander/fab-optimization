@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { widths, MIN_SHARE, famLabel, fmtProc, statusOf } from './journey_geom.js'
+import { widths, MIN_SHARE, famLabel, fmtProc, statusOf, isDelay } from './journey_geom.js'
 
 const near = (a, b) => Math.abs(a - b) < 1e-9
 
@@ -28,6 +28,13 @@ test('labels and durations read cleanly', () => {
   assert.equal(fmtProc(7500), '2h 05m')
   assert.equal(fmtProc(90), '1m')
   assert.equal(fmtProc(30), '30s')
+})
+
+test('a route delay is a hold, not a tool', () => {
+  assert.ok(isDelay('Delay_32'))
+  assert.ok(isDelay('Delay_32_217'))
+  assert.ok(!isDelay('DE_FE_86'))       // "Delay" and "DE" share a prefix
+  assert.equal(statusOf({ idx: 5, n: 10, tool: 'Delay_32_217' }), 'holding (route delay)')
 })
 
 test('status names the lot position', () => {

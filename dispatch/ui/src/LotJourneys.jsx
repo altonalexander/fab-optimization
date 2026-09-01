@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { linkTo } from './router.js'
-import { widths, famLabel, fmtProc, statusOf } from './journey_geom.js'
+import { widths, famLabel, fmtProc, statusOf, isDelay } from './journey_geom.js'
 import { remaining, progress, fmtCountdown } from './toolflow_geom.js'
 
 // Each lot of the cohort as a short supply chain: the two steps it has just
@@ -26,9 +26,8 @@ export default function LotJourneys({ lots, clock, routeHref }) {
   return (
     <div className="journeys">
       <div className="journeys-head">
-        <h4>Lot journeys</h4>
         <span className="muted">
-          last two steps → current → next two; box width is the step's nominal process time
+          {rows.length} lots of <b>{part}</b> · last two steps → current → next two
         </span>
         {routeHref && part && (
           <a className="link" href={routeHref(part)}>full recipe for {part} →</a>
@@ -56,25 +55,33 @@ function Journey({ lot, clock, wall }) {
         {j.steps.map((s, i) => {
           const cur = s.pos === 0
           const past = s.pos < 0
-          const href = cur && j.tool
-            ? linkTo(['tools', j.tool])
+          // A prescribed wait is not a tool: nothing to see on a tool page,
+          // so the box is a plain label that says it is a wait.
+          const delay = isDelay(s.fam)
+          const href = delay ? null
+            : cur && j.tool ? linkTo(['tools', j.tool])
             : linkTo('/tools', { type: s.fam })
           const cls = 'jstep' + (cur ? ' jstep-cur' : past ? ' jstep-past' : ' jstep-next')
-                    + (cur && j.tool ? ' jstep-on' : '')
-          const title = `${s.step} · ${s.fam} · ${fmtProc(s.proc_s)} nominal`
-                      + (s.bmax > 1 ? ` · batch up to ${s.bmax}` : '')
-                      + (s.setup ? ` · setup ${s.setup}` : '')
+                    + (cur && j.tool ? ' jstep-on' : '') + (delay ? ' jstep-delay' : '')
+          const title = delay
+            ? `${s.step} · route-prescribed wait of ${fmtProc(s.proc_s)} (ADR 0008), not a tool`
+            : `${s.step} · ${s.fam} · ${fmtProc(s.proc_s)} nominal`
+              + (s.bmax > 1 ? ` · batch up to ${s.bmax}` : '')
+              + (s.setup ? ` · setup ${s.setup}` : '')
+          const Box = href ? 'a' : 'span'
           return (
             <span key={s.i} className="jseg" style={{ flexGrow: w[i], flexBasis: 0 }}>
               {i > 0 && <span className="jarrow" aria-hidden>→</span>}
-              <a className={cls} href={href} title={title}
+              <Box className={cls} href={href || undefined} title={title}
                  style={cur && frac != null
                    ? { background: `linear-gradient(90deg, #bbf7d0 ${Math.round(frac * 100)}%, #f0fdf4 0)` }
                    : undefined}>
-                <span className="jstep-fam">{famLabel(s.fam)}</span>
+                <span className="jstep-fam">{delay ? '⏳ wait' : famLabel(s.fam)}</span>
                 <span className="jstep-sub">
                   {cur && j.tool
-                    ? <>{j.tool}{left != null && <b> · {fmtCountdown(left)} left</b>}</>
+                    ? delay
+                      ? <>{fmtProc(s.proc_s)} hold{left != null && <b> · {fmtCountdown(left)} left</b>}</>
+                      : <>{j.tool}{left != null && <b> · {fmtCountdown(left)} left</b>}</>
                     : cur && status === 'waiting'
                       ? 'waiting for a tool'
                       : fmtProc(s.proc_s)}
@@ -85,7 +92,7 @@ function Journey({ lot, clock, wall }) {
                     {s.setup && <span className="chip chip-setup">setup</span>}
                   </span>
                 )}
-              </a>
+              </Box>
             </span>
           )
         })}
