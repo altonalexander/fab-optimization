@@ -55,6 +55,21 @@ as a series with the warm-up in black and the run under test in blue, so the
 effect of switching the dispatcher on is visible as a break at the day-90
 rule rather than inferred from a table.
 
+### Live — playback control and the assistant
+![live-controls](docs/screenshots/live-controls.png)
+
+Two interactive features on the same page. **Playback** (the badge next to
+the sim clock) pauses and resumes the simulated fab and sets the replay
+speed from 1x to 1600x. It changes pacing only — the run, its seed and every
+decision are unchanged, so the same fab can be watched slowly or raced
+through; this is working, and the dashboard's choice persists across API
+restarts. The **Assistant** rail is a conceptual mockup of where an
+operator would ask the fab questions in plain language — "what happens if
+LITHO_03 goes down?", "which tool is the bottleneck?" — with answers
+grounded in the live state and the same C++ planner the dispatcher uses,
+read-only by construction. The panel and its tool contract exist; it is not
+wired to a model in this checkout.
+
 ### Lots — cohort burndown
 ![lots](docs/screenshots/lots.png)
 
