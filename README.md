@@ -74,14 +74,16 @@ wired to a model in this checkout.
 ![lots](docs/screenshots/lots.png)
 
 One product's releases from one day, drawn as steps-remaining against
-simulated time — here six `part_10` lots released on day 77, warm-up in
-black, the run under test in blue from the `sim start` rule. A cohort is the
-set of lots that can actually share a furnace batch, so a widening band
-means the cohort is desynchronising and will stall at the next batch step.
-The red dots on the zero line are each lot's due date; a naive projection
-from the product's achieved rate says whether it is in reach (`0 of 6
-projected late`, worst slack +6.6 d). Rework shows as a jog upward. This is
-the lot-level view of what the dispatch rule is doing to a product.
+simulated time — here six `part_3` lots released on day 47 with a 583-step
+route, warm-up in black, the run under test in blue from the `sim start`
+rule. A cohort is the set of lots that can actually share a furnace batch,
+so the band's thickness is the cohort's spread and a widening band means it
+is desynchronising and will stall at the next batch step — this one has
+opened to 78 steps between fastest and slowest. The red dots on the zero
+line are the due dates; a naive projection from the product's achieved rate
+says whether they are in reach (`0 of 6 projected late`, worst slack
++3.5 d). Rework shows as a jog upward. This is the product-level view of
+what the dispatch rule is doing.
 
 ### Lots — one lot at a time
 ![lots-lotview](docs/screenshots/lots-lotview.png)
