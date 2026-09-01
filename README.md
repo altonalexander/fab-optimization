@@ -97,15 +97,16 @@ drills down to its dispatches and the choice set it was offered.
 ### Tool — one machine's decisions
 ![tool](docs/screenshots/tool.png)
 
-`#/tools/WE_FE_84_1297`: one tool's queue, lots in flight, dispatches,
-completions and changeovers, and then every recent dispatch decision made
-at it — the simulated day, how many lots it **chose from**, how many were
-left waiting, and **who decided**: `slate` when the CP-SAT slate held a pick
-for this tool, `slate-fallback` when the solver-consistent fallback score
-did. This is the optimized-decisions KPI at decision resolution. It also
-shows where an optimizer can and cannot matter: a choice set of 1 is not a
-decision, and on a lightly queued tool most rows are exactly that; the
-`slate` rows cluster where five or six lots were waiting.
+`#/tools/Litho_BE_110_890`: one lithography tool's queue, lots in flight,
+dispatches and changeovers, and then every recent dispatch decision made at
+it — the simulated day, how many lots it **chose from**, how many were left
+waiting, and **who decided**: `slate` when the CP-SAT slate held a pick for
+this tool, `slate-fallback` when the solver-consistent fallback score did.
+This is the optimized-decisions KPI at decision resolution, and litho is
+where it counts: at the top of the log the tool is choosing one lot from
+38–51 waiting, and every one of those choices is the slate's. The
+`slate-fallback` rows at the bottom are from the first hours after the
+switch, before the planner had a token for this tool.
 
 ### Floor — the cleanroom as a map
 ![floor](docs/screenshots/floor.png)
