@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import LotJourneys from './LotJourneys.jsx'
 import {
   batchBands as computeBands, envelope as computeEnvelope,
   maxValue, segments as computeSegments, projection as computeProjection,
@@ -591,6 +592,12 @@ export default function CohortBurndown({ cohort: cohortProp, onCohort,
       </svg>
 
       <LotStats lots={view ? view.lots : []} focus={focus} now={view && view.now} />
+
+      {/* Where each lot stands on its route, as a short supply chain. Only
+          the selected cohort's lots: context lots are drawn, not narrated. */}
+      <LotJourneys lots={view ? view.lots : []} routeHref={routeHref}
+                   clock={data ? { t: data.now_t, t_at: data.now_t_at,
+                                   speed: data.speed, paused: data.paused } : null} />
 
       <div className="burndown-legend">
         {Object.entries(REASON).map(([k, v]) => (

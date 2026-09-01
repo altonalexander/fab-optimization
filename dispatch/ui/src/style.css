@@ -537,3 +537,30 @@ table.runs tr.row-base td{background:#f9fafb}
 a.tf-cell,a.tf-run{text-decoration:none;color:inherit}
 a.tf-cell:hover{box-shadow:0 0 0 2px #93c5fd}
 a.tf-run:hover .tf-run-in{box-shadow:inset 0 0 0 2px #93c5fd}
+
+/* lot journeys on the cohort page */
+.journeys{margin-top:14px}
+.journeys-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.journeys-head h4{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+.journeys-head .muted{font-size:12px}
+.journey{display:grid;grid-template-columns:200px 1fr;gap:10px;align-items:center;
+  padding:6px 0;border-top:1px solid var(--line)}
+.journey-lot{display:flex;flex-direction:column;gap:2px;font-size:12px}
+.journey-lot .muted{font-size:11px}
+.journey-lot .chip{align-self:flex-start}
+.journey-strip{display:flex;align-items:stretch;min-width:0}
+.jseg{display:flex;align-items:center;min-width:0}
+.jarrow{flex:none;color:#9ca3af;font-size:16px;padding:0 3px}
+.jstep{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px;
+  padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);
+  text-decoration:none;color:inherit;font-size:11px;line-height:1.2;overflow:hidden}
+.jstep:hover{border-color:#93c5fd}
+.jstep-fam{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jstep-sub{color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jstep-sub b{color:#166534}
+.jstep-past{opacity:.6}
+.jstep-next{border-style:dashed}
+.jstep-cur{border:2px solid #15803d;background:#f0fdf4}
+.jstep-tags{display:flex;gap:3px}
+.jstep-tags .chip{font-size:9px;padding:0 5px}
+.jdone{align-self:center;font-size:11px;margin-left:8px}

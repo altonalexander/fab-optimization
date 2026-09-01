@@ -2111,6 +2111,103 @@ def lots_cohort(cohort):
     return _lots_payload(cohort, series, meta, sim_t, warm_t)
 
 
+# ------------------------------------------------------------- journeys -----
+# A lot's neighbourhood on its route: the two steps behind it, the one it is at,
+# the two ahead. Read from the dataset's route table (the same file the
+# simulator runs), so the families and nominal times are the fab's own, not a
+# guess from the stream.
+
+_route_tables = {}
+_TIME_UNITS = {"sec": 1, "s": 1, "min": 60, "hr": 3600, "day": 86400, "": 1}
+
+
+def _route_table(part):
+    """Steps of `part`'s route as [{i, step, fam, proc_s, setup, bmax}], or []
+    when the dataset is not on disk. Cached per part; the table is static."""
+    if part in _route_tables:
+        return _route_tables[part]
+    rows = []
+    try:
+        with open(PART_TABLE) as f:
+            hdr = f.readline().rstrip("\n").split("\t")
+            pi = {n: i for i, n in enumerate(hdr)}
+            route_file = None
+            for line in f:
+                c = line.rstrip("\n").split("\t")
+                if len(c) > pi["PART"] and c[pi["PART"]] == part:
+                    route_file = c[pi["ROUTEFILE"]]
+                    break
+        if route_file:
+            path = os.path.join(os.path.dirname(PART_TABLE), route_file)
+            with open(path) as f:
+                hdr = f.readline().rstrip("\n").split("\t")
+                ix = {n: i for i, n in enumerate(hdr)}
+                for line in f:
+                    c = line.rstrip("\n").split("\t")
+                    if len(c) < len(hdr):
+                        continue
+                    g = lambda k: c[ix[k]] if k in ix else ""
+                    unit = _TIME_UNITS.get(g("PTUNITS"), 60)
+                    t = _as_float(g("PTIME"), 0.0) * unit
+                    # Per-piece times are quoted per wafer; a lot is 25.
+                    if g("PTPER") == "per_piece":
+                        t *= 25
+                    rows.append({
+                        "i": len(rows),
+                        "step": g("DESC"),
+                        "fam": g("STNFAM"),
+                        "proc_s": round(t, 1),
+                        "setup": g("SETUP") or "",
+                        "bmax": _as_int(g("BATCHMX")) or 1,
+                    })
+    except OSError:
+        rows = []
+    _route_tables[part] = rows
+    return rows
+
+
+def _journey(lot, m):
+    """Where `lot` is on its route, with two steps either side.
+
+    The step index comes from steps left (the simulator's own count), then
+    snaps to the nearest step whose name matches the lot's current step when
+    the stream named one -- rework splices steps back in, so left alone can be
+    off by the size of the splice. Called without the lock; reads are of
+    single dict entries and a stale answer costs one poll.
+    """
+    table = _route_table(m.get("part") or "")
+    n = len(table)
+    if not n:
+        return None
+    left = m.get("left")
+    state = m.get("state", "active")
+    if state == "done" or (left is not None and left <= 0):
+        idx = n
+    else:
+        idx = n - int(left) if left is not None else 0
+        idx = max(0, min(n - 1, idx))
+        name = m.get("step")
+        if name and table[idx]["step"] != name:
+            near = [j for j in range(max(0, idx - 8), min(n, idx + 9))
+                    if table[j]["step"] == name]
+            if near:
+                idx = min(near, key=lambda j: abs(j - idx))
+    steps = []
+    for pos in range(-2, 3):
+        j = idx + pos
+        if 0 <= j < n:
+            steps.append({"pos": pos, **table[j]})
+    with mirror.lock:
+        tool = mirror.in_flight.get(lot)
+        run = dict(mirror.in_flight_meta.get(lot, {}))
+        waiting = lot in mirror.lots_ready
+    return {
+        "idx": idx, "n": n, "steps": steps,
+        "tool": tool, "t": run.get("t"), "end": run.get("end"),
+        "waiting": bool(waiting) and not tool,
+    }
+
+
 def _lots_payload(cohort, series, meta, sim_t, warm_t):
     if not series:
         return jsonify({"cohort": cohort, "now_t": sim_t, "warm_t": warm_t,
@@ -2124,6 +2221,7 @@ def _lots_payload(cohort, series, meta, sim_t, warm_t):
         pts.sort(key=lambda x: x["t"])
         lots.append({
             "lot": lot,
+            "journey": _journey(lot, m),
             "cohort": m.get("cohort"),
             "part": m["part"],
             "route": m.get("route", 0),
@@ -2141,7 +2239,12 @@ def _lots_payload(cohort, series, meta, sim_t, warm_t):
             "stats": lot_stats(m, pts, sim_t),
         })
     lots.sort(key=lambda r: r["lot"])
+    ctl = read_sim_control()
     return jsonify({"cohort": cohort, "now_t": sim_t, "warm_t": warm_t,
+                    # Clock reading and pacing, so a countdown on a lot's
+                    # current tool can run between polls.
+                    "now_t_at": mirror.sim_t_at,
+                    "speed": ctl.get("speed"), "paused": bool(ctl.get("paused")),
                     "lots": lots,
                     "rate_basis_counts": {
                         f"{k[0] or 'fab'}/{'hot' if k[1] else ('reg' if k[1] is False else 'any')}": v["n"]
