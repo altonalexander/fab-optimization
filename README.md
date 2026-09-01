@@ -134,10 +134,13 @@ This is the page the whole project exists to fill honestly — see
 ### Topology — the pipeline itself
 ![topology](docs/screenshots/topology.png)
 
-The four security zones and the stream between them: event throughput,
-simulated clock rate against the requested playback speed, mirror lag from
-zone 2 to zone 3, and which services straddle a boundary. When the fab
-looks wrong, this is where to check whether it is the fab or the pipe.
+The four security zones and the stream between them: event throughput
+(~570 envelopes/s here), the simulated clock rate *measured* against the
+playback speed *requested* — 803x against 1600x, because the CP-SAT slate
+cannot plan faster than that, so the gap is the solver's cost in fab time
+— mirror lag from zone 2 to zone 3, frames seen, and which services
+straddle a boundary. When the fab looks wrong, this is where to check
+whether it is the fab or the pipe.
 
 ## Architecture
 
