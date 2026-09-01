@@ -196,6 +196,9 @@ class FabMirror:
                 # Credit the completion to whichever tool was running it, which
                 # only in_flight knows -- the event itself carries no tool.
                 tool = self.in_flight.pop(ev.get("lot"), None)
+                # A lot the mirror still believed waiting (a stale snapshot
+                # position after a restart) is gone either way.
+                self.lots_ready.pop(ev.get("lot"), None)
                 if tool:
                     self.tool_stats[tool]["completed"] += 1
                 # Stamped with the *simulated* clock: throughput is a fab
@@ -757,6 +760,18 @@ def rescan_kpi_history(run):
         print(f"[kpi] rescan failed: {e!r}", file=sys.stderr, flush=True)
 
 
+def apply_tombstone(topic, key):
+    """A null-valued record on a compacted topic deletes the key: the
+    producer writes one when a lot completes, so a mirror bootstrapping
+    from the topic does not resurrect lots that left the fab."""
+    if topic != "fab.lot.state" or not key:
+        return 0
+    with mirror.lock:
+        mirror.lots_ready.pop(key, None)
+        mirror.in_flight.pop(key, None)
+    return 1
+
+
 def apply_state_record(topic, ev):
     """Apply one compacted state record. Shared by bootstrap and the live loop.
 
@@ -882,8 +897,12 @@ def bootstrap_from_state(Consumer):
                 continue
             idle = 0
             remaining -= 1
-            ev = parse_envelope(msg.value().decode("utf-8", "replace"))
             _kind, ts = msg.timestamp()
+            if msg.value() is None:                       # tombstone
+                key = msg.key().decode("utf-8", "replace") if msg.key() else ""
+                records.append((ts, msg.topic(), {"__tombstone__": key}))
+                continue
+            ev = parse_envelope(msg.value().decode("utf-8", "replace"))
             records.append((ts, msg.topic(), ev))
     except Exception as e:
         print(f"[bootstrap] {e!r}", file=sys.stderr, flush=True)
@@ -898,6 +917,9 @@ def bootstrap_from_state(Consumer):
     for _ts, topic, ev in records:
         if latest_run and ev.get("run") and ev["run"] != latest_run:
             skipped += 1
+            continue
+        if "__tombstone__" in ev:
+            apply_tombstone(topic, ev["__tombstone__"])
             continue
         if topic == "fab.lot.state":
             lots += apply_state_record(topic, ev)
@@ -958,8 +980,12 @@ def kafka_consumer_loop():
         msg = c.poll(1.0)
         if msg is None or msg.error():
             continue
-        payload = msg.value().decode("utf-8", "replace")
         topic = msg.topic()
+        if msg.value() is None:                           # tombstone
+            apply_tombstone(topic, msg.key().decode("utf-8", "replace")
+                            if msg.key() else "")
+            continue
+        payload = msg.value().decode("utf-8", "replace")
         if topic == "fab.dispatch.decisions":
             mirror.add_decision(parse_envelope(payload))
         elif topic in ("fab.lot.state", "fab.tool.state", "fab.kpi.state"):
@@ -1006,6 +1032,9 @@ def feed_file_loop():
                     except json.JSONDecodeError:
                         continue
                     topic = rec.get("topic", "")
+                    if rec.get("payload") is None:        # tombstone
+                        apply_tombstone(topic, rec.get("key") or "")
+                        continue
                     ev = parse_envelope(rec.get("payload", ""))
                     if topic == "fab.dispatch.decisions":
                         mirror.add_decision(ev)
@@ -2016,7 +2045,11 @@ def lots_from_live_pool(limit=200):
             {
                 "lot_id": lid,
                 "product_id": ev.get("prod", ""),
-                "recipe": ev.get("recipe", ""),
+                # A lot bootstrapped from the LOT_STATE snapshot carries its
+                # current step, not a recipe; the tool master keys recipes by
+                # step name, so the step IS the recipe. Without this every
+                # snapshot lot read "no eligible tool" and assigned 0.
+                "recipe": ev.get("recipe") or ev.get("step") or "",
                 "reticle": ev.get("reticle", ""),
                 "wafer_count": int(ev.get("wafers", 25) or 25),
                 "priority": float(ev.get("prio", 1.0) or 1.0),
@@ -2167,7 +2200,11 @@ def scenario_runner(tool_overrides):
             {
                 "lot_id": lid,
                 "product_id": ev.get("prod", ""),
-                "recipe": ev.get("recipe", ""),
+                # A lot bootstrapped from the LOT_STATE snapshot carries its
+                # current step, not a recipe; the tool master keys recipes by
+                # step name, so the step IS the recipe. Without this every
+                # snapshot lot read "no eligible tool" and assigned 0.
+                "recipe": ev.get("recipe") or ev.get("step") or "",
                 "reticle": ev.get("reticle", ""),
                 "wafer_count": int(ev.get("wafers", 25) or 25),
                 "priority": float(ev.get("prio", 1.0) or 1.0),

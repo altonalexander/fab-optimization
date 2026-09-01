@@ -22,9 +22,26 @@ Rules:
                                reproduce `cr` exactly. If it does not, the
                                plumbing is wrong and no other row is meaningful.
 
+Warm-up:
+    --warmup-days N resumes every rule from the SAME simulator checkpoint at
+    day N, built once under --warmup-dispatcher (fifo). The rules then diverge
+    from an identical fab -- same WIP, same tool setups, same pending
+    breakdowns, same RNG -- which is what makes the rows an A/B. It is also
+    the checkpoint bench/tools/sim_feed.py streams the dashboard from, so a
+    row here and a run on the Results tab describe the same experiment.
+    Without it every rule simulates from day 0 and the numbers include the
+    fill-up transient.
+
+    KPIs are over the reporting window: lots that COMPLETED after day N,
+    with cycle time, on-time % and tardiness of those lots. That matches the
+    feed's trailing-day definition and is what a 30-day window can measure;
+    counting only lots released after day N would leave a 30-day window
+    nearly empty against a ~22-day cycle time.
+
 Usage:
-    python3 bench/tools/compare.py --days 30 --rules cr,slate
-    python3 bench/tools/compare.py --days 2 --rules cr,slate-cr   # validate
+    python3 bench/tools/compare.py --days 120 --warmup-days 90 --rules cr,slate
+    python3 bench/tools/compare.py --days 92 --warmup-days 90 --rules cr,slate-cr
+    python3 bench/tools/compare.py --merge a.json b.json --out all.json
 """
 import argparse
 import json
@@ -34,6 +51,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+# sim_runner chdirs into the vendored simulator on import, so a relative
+# --out or --merge path has to be resolved against where the user ran from.
+ORIG_CWD = os.getcwd()
 
 import sim_runner  # noqa: E402  (bootstraps sys.path and cwd for the baseline)
 from sim_runner import REPO, RESET_AT, SECONDS_PER_DAY  # noqa: E402
@@ -52,9 +72,7 @@ def kpis(instance, warm_from):
     """
     ct, on_time, tard, n = [], 0, 0.0, 0
     for lot in instance.done_lots:
-        if lot.release_at < warm_from:
-            continue
-        if lot.done_at is None:
+        if lot.done_at is None or lot.done_at < warm_from:
             continue
         n += 1
         ct.append((lot.done_at - lot.release_at) / SECONDS_PER_DAY)
@@ -71,74 +89,39 @@ def kpis(instance, warm_from):
     }
 
 
-class _Sampler:
-    """Hourly KPI series, shaped for the `run_kpi_samples` table.
+def make_sampler(rule_name, warm_from):
+    """Hourly KPI series, taken by the FEED'S OWN plugin.
 
-    The dashboard's Results page plays a run back as a time series, not as a
-    single end-of-run row, so a comparison that only reports final numbers
-    cannot be shown there. This records the series as the run happens.
-
-    Only the columns this harness can compute HONESTLY are filled. util,
-    running and the wq/wb/wp/wd lot-hour split come from the feed's own
-    accounting and are left NULL rather than approximated -- a plausible-looking
-    number for a quantity we did not measure is worse than a gap.
-
-    `opt` is the count of decisions made by the optimizer, which for `slate` is
-    the coverage numerator and for the sort-key rules is zero. That is what
-    makes `optimized_pct` meaningful on the results page: it separates a row
-    that the solver actually drove from one that mostly fell back.
+    The dashboard's Results page lays a benchmark row over the live run, and
+    the run store summarises both. That is only honest if one piece of code
+    measures both: the first version of this harness kept its own sampler,
+    which counted completions cumulatively where the feed counts a trailing
+    day, and WIP as waiting lots where the feed counts waiting + running --
+    so the Results tab showed `slate` at "14 lots/day" beside a live run at
+    56, from the same simulator. Now sim_feed.FeedPlugin rides this run with a
+    null sink and no store, and its `_kpi_sample` is the definition, full
+    stop: WIP, running, util, trailing-day throughput / cycle time / on-time /
+    tardiness, decisions and how many the optimizer made, starts, and the
+    lot-hour split. `warmup` marks rows before `warm_from`.
     """
+    import sim_feed
+    # The plugin polls the dashboard's playback control file for pacing; a
+    # benchmark must never block on a "paused" left by the live feed.
+    sim_feed.CONTROL_FILE = os.path.join(HERE, 'no-such-control-file.json')
 
-    EVERY_S = 3600.0
+    class _Sampler(sim_feed.FeedPlugin):
+        def __init__(self):
+            super().__init__(sim_feed.FileSink(os.devnull, False), 0.0)
+            self.rows = []
+            self.rule = rule_name
+            self.store = None
 
-    def __init__(self, rule, warm_from):
-        self.rule = rule
-        self.warm_from = warm_from
-        self.rows = []
-        self._next = 0.0
-        self.decisions = 0
+        def _kpi_sample(self, instance, t):
+            row = super()._kpi_sample(instance, t)
+            self.rows.append(dict(row, warmup=t < warm_from))
+            return row
 
-    def note_decision(self):
-        self.decisions += 1
-
-    def maybe(self, instance):
-        t = instance.current_time
-        if t < self._next:
-            return
-        self._next = t + self.EVERY_S
-
-        done, ct, on_time, tard = 0, 0.0, 0, 0.0
-        for lot in instance.done_lots:
-            if lot.done_at is None or lot.release_at < self.warm_from:
-                continue
-            done += 1
-            ct += (lot.done_at - lot.release_at) / SECONDS_PER_DAY
-            late = lot.done_at - lot.deadline_at
-            if late <= 0:
-                on_time += 1
-            else:
-                tard += late / SECONDS_PER_DAY
-
-        # A waiting lot sits in waiting_lots of EVERY machine in its family, so
-        # summing those lists counts it ~12 times. Dedupe by lot id. Only done
-        # hourly, so the extra pass is free.
-        waiting = set()
-        for m in instance.machines:
-            for lot in m.waiting_lots:
-                waiting.add(lot.idx)
-        opt = getattr(self.rule, 'decisions_covered', 0)
-
-        self.rows.append({
-            't': round(t, 3),
-            'warmup': t < self.warm_from,
-            'wip': len(waiting),
-            'thr': done,
-            'ct': round(ct / done, 4) if done else None,
-            'otd': round(100.0 * on_time / done, 3) if done else None,
-            'tard': round(tard, 3),
-            'dec': self.decisions,
-            'opt': int(opt),
-        })
+    return _Sampler()
 
 
 class _Fingerprint:
@@ -177,11 +160,63 @@ def make_rule(spec, instance, args):
     return spec          # a plain name; sim_runner resolves it
 
 
+def warm_checkpoint(args):
+    """The shared warm-up checkpoint for this run, building it if missing.
+
+    Delegates to sim_feed.py, which owns the checkpoint format, so the fab a
+    benchmark row starts from is byte-for-byte the one the dashboard feed
+    streams from.
+    """
+    import sim_feed
+    ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
+                            args.warmup_days, args.batch_strat, args.days)
+    if ck is None:
+        print(f'  no {args.warmup_dispatcher} checkpoint for day '
+              f'{args.warmup_days:g} (horizon >= {args.days}d); building it',
+              flush=True)
+        import subprocess
+        cmd = [sys.executable, os.path.join(HERE, 'sim_feed.py'),
+               '--dataset', args.dataset, '--seed', str(args.seed),
+               '--batch-strat', args.batch_strat, '--days', str(args.days),
+               '--dispatcher', args.warmup_dispatcher,
+               '--warmup-days', str(args.warmup_days),
+               '--checkpoint-only', '--no-store', '--speed', '0',
+               '--out', os.devnull]
+        env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
+        rc = subprocess.call(cmd, cwd=REPO, env=env)
+        ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
+                                args.warmup_days, args.batch_strat, args.days)
+        if rc != 0 or ck is None:
+            sys.exit('  could not build the warm-up checkpoint')
+    return ck
+
+
+def load_warm(args, sampler):
+    """A simulator instance resumed at day --warmup-days, with `sampler`
+    attached as its plugin and the checkpoint's per-lot books restored into
+    it -- so the trailing-day KPIs are continuous across the warm-up line
+    exactly as they are for the feed."""
+    import sim_feed
+    ck = warm_checkpoint(args)
+    instance = sim_feed.load_checkpoint(ck, sampler)
+    if instance is None:
+        sys.exit(f'  checkpoint {ck} unreadable')
+    print(f'  resumed {os.path.relpath(ck, REPO)} at day '
+          f'{instance.current_time / SECONDS_PER_DAY:g}', flush=True)
+    return instance, SECONDS_PER_DAY * args.days
+
+
 def run_one(spec, args):
     from events import ResetEvent
 
-    instance, run_to = sim_runner.build(
-        args.dataset, args.days, args.seed, [], args.batch_strat)
+    use_reset = args.days > 365
+    warm_from = RESET_AT if use_reset else args.warmup_days * SECONDS_PER_DAY
+    sampler = make_sampler(spec, warm_from)
+    if args.warmup_days and not use_reset:
+        instance, run_to = load_warm(args, sampler)
+    else:
+        instance, run_to = sim_runner.build(
+            args.dataset, args.days, args.seed, [sampler], args.batch_strat)
 
     # Warm-up. Two schemes exist in this repo and they are not the same thing:
     #
@@ -196,10 +231,8 @@ def run_one(spec, args):
     # Both are supported, because a row produced here has to be comparable with
     # a row produced by the feed -- and comparing a warmed run against an
     # unwarmed one is exactly the class of error this harness exists to stop.
-    use_reset = args.days > 365
     if use_reset:
         instance.add_event(ResetEvent(RESET_AT))
-    warm_from = RESET_AT if use_reset else args.warmup_days * SECONDS_PER_DAY
 
     rule = make_rule(spec, instance, args)
     banner = rule.banner() if hasattr(rule, 'banner') else f'  rule: {spec}'
@@ -209,12 +242,9 @@ def run_one(spec, args):
     # The slate is rebuilt on the planning cadence, NOT per decision point --
     # that is production timing, and it is what turns stale-slate degradation
     # into a measured quantity rather than an assumption (adr/0002).
-    sampler = _Sampler(rule, warm_from)
-
     def before(inst):
         if hasattr(rule, 'maybe_rebuild'):
             rule.maybe_rebuild(inst)
-        sampler.maybe(inst)
 
     # Behavioural fingerprint of the whole run: every dispatch decision, in
     # order. KPIs are a weak equality check -- on a short horizon no lot has
@@ -223,7 +253,6 @@ def run_one(spec, args):
     fp = _Fingerprint()
 
     def after(instance, machine, dispatched):
-        sampler.note_decision()
         fp(instance, machine, dispatched)
 
     t0 = time.time()
@@ -288,6 +317,38 @@ def check_validation(rows):
             f"{a['fingerprint']}). The harness does not change the answer.")
 
 
+def merge(paths, out):
+    """Rules run as separate processes (they are independent by construction)
+    land in one file, and the gate is checked over the union."""
+    base, rows = None, []
+    keys = ('dataset', 'days', 'seed', 'batch_strat', 'warmup_days',
+            'cycle_s', 'budget_s')
+    for path in paths:
+        with open(path) as f:
+            d = json.load(f)
+        if base is None:
+            base = d
+        else:
+            bad = [k for k in keys if d.get(k) != base.get(k)]
+            if bad:
+                sys.exit(f'  {path} differs from {paths[0]} on '
+                         + ', '.join(bad) + '; not comparable')
+        rows.extend(d['rows'])
+    seen = set()
+    rows = [r for r in rows if not (r['rule'] in seen or seen.add(r['rule']))]
+    print(f"  {base['dataset']}  {base['days']} days  seed={base['seed']}  "
+          f"batch={base['batch_strat']}  warmup={base.get('warmup_days') or 0:g}d")
+    print(table(rows))
+    verdict = check_validation(rows)
+    if verdict:
+        print('\n' + verdict)
+    if out:
+        payload = dict(base, rows=rows)
+        with open(out, 'w') as f:
+            json.dump(payload, f, indent=2)
+        print(f'\n  wrote {out}')
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -310,10 +371,21 @@ def main():
                    help='discard lots released before this day from the KPIs. '
                         'Match the feed (--warmup-days 90 on a 120-day run) or '
                         'the rows are not comparable.')
+    p.add_argument('--warmup-dispatcher', default='fifo',
+                   help='rule that runs the shared warm-up (default: fifo)')
+    p.add_argument('--merge', nargs='+', metavar='JSON',
+                   help='combine per-rule result files (same dataset/seed/'
+                        'days/warm-up) into one table; runs nothing')
     p.add_argument('--out', default=None, help='write JSON here')
     a = p.parse_args()
     a.dataset = sim_runner.normalize_dataset(a.dataset)
     a.dispatcher = None   # unused; --rules drives this tool
+
+    if a.out:
+        a.out = os.path.join(ORIG_CWD, a.out)
+    if a.merge:
+        merge([os.path.join(ORIG_CWD, m) for m in a.merge], a.out)
+        return
 
     print(f'  {a.dataset}  {a.days} days  seed={a.seed}  batch={a.batch_strat}'
           + (f'  warmup={a.warmup_days:g}d' if a.warmup_days else ''))
@@ -333,12 +405,14 @@ def main():
         'dataset': a.dataset, 'days': a.days, 'seed': a.seed,
         'batch_strat': a.batch_strat, 'solver': a.solver,
         'warmup_days': a.warmup_days,
+        'warmup_dispatcher': a.warmup_dispatcher if a.warmup_days else None,
         'cycle_s': a.cycle, 'budget_s': a.budget,
         'rows': rows,
     }
     out = a.out or os.path.join(
         REPO, 'bench', 'results',
-        f'compare_{a.dataset}_seed{a.seed}_{a.days}d.json')
+        f'compare_{a.dataset}_seed{a.seed}_{a.days}d'
+        + (f'_w{a.warmup_days:g}' if a.warmup_days else '') + '.json')
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, 'w') as f:
         json.dump(payload, f, indent=2)

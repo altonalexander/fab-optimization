@@ -11,8 +11,8 @@ table. The design decisions behind it are in
 [`docs/adr/0009`](../docs/adr/0009-slate-rule-hybrid-split.md).
 
 ```
-python3 bench/tools/compare.py --days 30 --rules fifo,cr,slate
-python3 bench/tools/compare.py --days 2  --rules cr,slate-cr   # validate first
+python3 bench/tools/compare.py --days 92  --warmup-days 90 --rules cr,slate-cr  # validate first
+python3 bench/tools/compare.py --days 120 --warmup-days 90 --rules fifo,cr,slate
 ```
 
 It needs `dispatch/libfabslate.so`, built by `dispatch/build-slate.sh`
@@ -26,9 +26,10 @@ shape, same rebuild hook — but returns CR's ordering. It **must** reproduce
 sequence rather than comparing KPIs (on a short horizon no lot has finished and
 every rule scores 0, which would let a broken harness "validate").
 
-Measured, 2 days, LVHM seed 0: **47,149 decisions, identical, fp
-`8d77d45c4c2654a3`.** If this ever fails, nothing else in the table means
-anything.
+Measured, 2 days from day 0, LVHM seed 0: **47,149 decisions, identical, fp
+`8d77d45c4c2654a3`**; 2 days from the day-90 checkpoint: **42,139 decisions,
+identical, fp `514cf477c555b63c`.** If this ever fails, nothing else in the
+table means anything.
 
 ### What was still open, and what closed it
 
@@ -43,48 +44,85 @@ anything.
 ### Still open
 
 - **730-day runs are expensive.** Measured on LVHM: ~1,440 planning cycles per
-  simulated day at N=60s, ~5 ms of CP-SAT each across the dirty families. A
-  full 730-day slate run is hours. 30-day runs are minutes and are what the
-  numbers below come from. Parallelising the per-family solves is the obvious
+  simulated day at N=60s, ~5 ms of CP-SAT each across the dirty families;
+  30 slate days from the checkpoint is ~40 min of wall clock against ~4.5 min
+  for `fifo` or `cr`. Parallelising the per-family solves is the obvious
   next lever and is not done.
-- **Coverage is ~57%, not ~100%.** That is the share of decision points where
+- **Coverage is ~47%, not ~100%.** That is the share of decision points where
   the slate had a pick for the machine being asked; the rest fall back to a
   solver-consistent score. It is reported in every row, because a low-coverage
   row measures the fallback more than it measures the slate.
 - The pressure ablation (`slate:none` / `slate:due` / `slate:full`) is wired
   but has not been run as a full ladder.
+- **One seed.** Everything below is seed 0.
 
-### First head-to-head — LVHM, 30 days, seed 0, batch=Demand
+### The shared warm-up
 
-`compare_SMT2020_LVHM_seed0_30d.json`, produced by the command above.
+Every rule starts from the **same** fab. `--warmup-days 90` resumes the
+simulator from the checkpoint `sim_feed.py` wrote at day 90 under `fifo`
+(`bench/snapshots/SMT2020_LVHM_seed0_fifo_Demand_day90_h180.ckpt`: event
+queue, tool setups, pending breakdowns, RNG, and the feed's per-lot books) and
+the rule under test takes over from there. Same WIP, same tool states, same
+breakdowns still to come; the only difference between rows is the dispatching
+decision from day 90 on. It is also the checkpoint the live dashboard feed
+streams from, so a row here and a run on the Results tab are one experiment.
+If the checkpoint is missing, `compare.py` builds it (`sim_feed.py
+--checkpoint-only`) before running anything.
 
-| rule | cycle time (d) | throughput | on-time % | tardiness (lot·d) | coverage | wall |
+The alternative — each rule warming up under itself — was tried first and is
+wrong twice over: the rows then compare two different histories, and `slate`
+has to pay hours of its own warm-up before a single comparable day is run.
+
+KPIs in the table are over the reporting window, days 90–120: **lots that
+completed in the window**, and the cycle time, on-time share and total
+tardiness of those lots. Counting only lots *released* after day 90 would
+leave a 30-day window nearly empty against a ~35-day cycle time.
+
+The hourly series behind each row (what the Results tab draws and summarises)
+is taken by `sim_feed.FeedPlugin` itself, riding the benchmark run with a
+null sink: WIP, running, utilisation, trailing-day throughput / cycle time /
+on-time / tardiness, decisions and how many the optimizer made, starts, and
+the lot-hour split, by the feed's definitions and nobody else's.
+
+### Head-to-head — LVHM, days 90→120 from the shared fifo checkpoint, seed 0, batch=Demand
+
+`compare_SMT2020_LVHM_seed0_120d_w90.json`. Each rule ran as its own
+process (`--rules fifo`, `--rules cr`, `--rules slate`) and the files were
+merged with `--merge`:
+
+| rule | completed (30 d) | cycle time (d) | on-time % | tardiness (lot·d) | coverage | wall |
 |---|---|---|---|---|---|---|
-| fifo  | 22.822 | 66 |  98.48 | 0.1 | – | 168 s |
-| cr    | 22.008 | 55 | 100.00 | 0.0 | – | 173 s |
-| slate | **21.821** | **70** | 98.57 | 1.5 | 49.6% | 2,698 s |
+| fifo  | 1,713 | 35.900 | 97.96 | 32.9 | – | 265 s |
+| cr    | 1,599 | 36.431 | **99.81** | **2.2** | – | 274 s |
+| slate | **1,729** | **35.799** | 98.67 | 7.5 | 47.0% | 2,444 s |
 
-**Read this as a working harness, not as a result.** The caveats are larger
-than the differences:
+The gate for this configuration: `compare_SMT2020_LVHM_seed0_92d_w90.json`,
+`slate-cr` reproduced `cr`'s 42,139 decisions from the checkpoint exactly
+(fp `514cf477c555b63c`).
 
-- **30 days is the fill-up transient**, not steady state. Only 55–70 lots
-  finish, out of ~2,150 in the initial WIP, and every one of them started
-  mid-route with a `CURSTEP`. Cycle time here is dominated by initial
-  conditions, not by dispatching.
-- **One seed.** A 15-lot throughput spread across three rules on ~60
-  completions is well inside what a seed change could move.
-- **Coverage is 49.6%**, so roughly half of `slate`'s decisions were made by
-  the fallback score, not the solver.
-- `slate` is **15.6x slower in wall clock** than `cr`.
+What it says, and what it does not:
 
-The one thing that does look like signal, and is worth chasing: **`slate` is
-the worst row on tardiness** (1.5 lot·days against `cr`'s 0.0) while winning
-throughput and cycle time. Due-date pressure is in the Tier-1 urgency term, so
-either that term is too weak against the throughput-shaped objective, or the
-per-cycle assignment's blindness to sequencing is costing exactly what
-adr/0002 predicted it might. The pressure ablation
-(`--rules slate:none,slate:due,slate:full`) is the experiment that separates
-those two, and it has not been run.
+- **`slate` completes the most lots with the shortest cycle time**, +16 lots
+  (+0.9%) and −0.10 d against `fifo`, +130 lots (+8%) and −0.63 d against
+  `cr`. Thirty days is one window and one seed; the `fifo` margin is inside
+  what a seed change could move, the `cr` margin probably is not.
+- **`cr` still owns due dates.** 99.8% on time and 2.2 lot·days of tardiness
+  against `slate`'s 7.5 and `fifo`'s 32.9. The slate's due-date term is in
+  the Tier-1 urgency, so either it is too weak against the throughput-shaped
+  objective, or a per-cycle assignment blind to sequencing costs exactly what
+  adr/0002 predicted. The pressure ablation separates those two and has not
+  been run.
+- **Coverage 47%**: about half of `slate`'s decisions were the fallback score,
+  not the solver. The row is a blend and says so.
+- `slate` is **9x the wall clock** of the sort keys; 1,772 s of the 2,444 s
+  was inside CP-SAT (40,317 rebuilds).
+- **`slate` is not reproducible to the decision.** `fifo` and `cr` re-run
+  from the checkpoint to the identical fingerprint; `slate` does not, because
+  the 5 ms per-family budget is wall-clock and the incumbent CP-SAT returns
+  depends on what else the machine was doing. Two runs of the same command:
+  1,726 / 35.661 d / 98.61% / 10.3 and 1,729 / 35.799 d / 98.67% / 7.5.
+  That spread — 3 lots, 0.14 d, 2.8 lot·days — is the noise floor for any
+  `slate` number here, and it is larger than the `fifo` margin on cycle time.
 
 ### Two measurements worth keeping
 

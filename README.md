@@ -36,6 +36,92 @@ number comparing them is meaningless, and nothing in either program would tell
 you. One `data/` directory, symlinked into the baseline, removes that failure
 mode. That symlink is load-bearing: if it is ever broken, stop.
 
+## A tour of the dashboard
+
+Captured from a live session: the fab warmed up for 90 simulated days under
+`fifo`, the CP-SAT slate dispatcher switched on at day 90, paused at day
+93. Every number on these screens is computed by the simulator feed, not
+the browser, which is what makes a live run comparable with a benchmark row.
+
+### Live — the fab right now
+![live](docs/screenshots/live.png)
+
+The digital twin's front page. The header carries the fab KPIs — WIP,
+throughput, starts, cycle time, on-time delivery, tool utilisation, and
+**optimized decisions**, the share of the trailing day's dispatch decisions
+the solver actually made rather than its fallback (44% here). Below it, WIP
+split into waiting and running from day 0, the raw event feed, and every KPI
+as a series with the warm-up in black and the run under test in blue, so the
+effect of switching the dispatcher on is visible as a break at the day-90
+rule rather than inferred from a table.
+
+### Lots — cohort burndown
+![lots](docs/screenshots/lots.png)
+
+One product's releases from one day, drawn as steps-remaining against
+simulated time. A cohort is the set of lots that can actually share a
+furnace batch, so a widening band means the cohort is desynchronising and
+will stall at the next batch step. Warm-up history is kept, rework shows as
+a jog upward, and a naive projection from the product's achieved rate says
+whether the due date is in reach — the lot-level view of what the dispatch
+rule is doing to a product.
+
+### Tools — who is busy, who is down
+![tools](docs/screenshots/tools.png)
+
+All 1,313 tools in 106 groups, busiest first, with the online roster over
+time (breakdowns and PM take tools out; the feed brings them back). Queue
+depth beside an online tool is where lots are waiting, i.e. where the
+dispatch decision matters most. Each row drills down to a single tool's
+dispatches and the choice set it was offered.
+
+### Floor — the cleanroom as a map
+![floor](docs/screenshots/floor.png)
+
+A synthetic bay/chase layout of the same 913 process tools, coloured by
+area, with WIP per bay and a heatmap toggle. Hatching marks bays with a
+tool down. It answers the spatial question the tables cannot: where in the
+fab the queue is building, and whether it is one bay or a whole area.
+
+### Routes — what a product's journey looks like
+![routes](docs/screenshots/routes.png)
+
+One page per product. The lane map draws the whole route — here 521 steps
+across 12 areas — one lane per area, one column per step, with measurement
+and rework points marked. Reading across shows the re-entrancy that makes
+fab scheduling hard: the same few lanes fire over and over for 391 visits,
+and a bad exposure sends the lot back three steps. The area table below
+says where the steps go and how often the lot returns.
+
+### Slate — the optimizer, on demand
+![slate](docs/screenshots/slate.png)
+
+The CP-SAT planner from `dispatch/libfabslate.so`, the same library the
+simulator's `slate` rule calls, applied to the live ready pool: one click
+plans every waiting lot against every tool by family and returns the slate
+— primary tool, alternate, rank. The head-to-head buttons open the
+benchmark result files. This is the read-only window onto the dispatcher;
+no write path reaches the fab from here.
+
+### Results — dispatchers compared on equal terms
+![results](docs/screenshots/results.png)
+
+Every run in the Postgres run store, each resumed from the same day-90
+checkpoint: the streaming run beside finished `fifo`, `cr` and `slate`
+benchmark rows, with post-switch means and deltas against a chosen baseline,
+per-KPI series laid over each other, where cycle time goes (queueing,
+batch-holding, processing, delay steps), and the busiest tools per run.
+This is the page the whole project exists to fill honestly — see
+`bench/README.md` for what the numbers do and do not say.
+
+### Topology — the pipeline itself
+![topology](docs/screenshots/topology.png)
+
+The four security zones and the stream between them: event throughput,
+simulated clock rate against the requested playback speed, mirror lag from
+zone 2 to zone 3, and which services straddle a boundary. When the fab
+looks wrong, this is where to check whether it is the fab or the pipe.
+
 ## Architecture
 
 ```
@@ -177,6 +263,28 @@ baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
 # every time after — same command; resumes from the checkpoint in <1 s
 ```
 
+**The warm-up is shared, the rule under test is not.** The checkpoint is
+keyed by the rule that ran the warm-up (`--warmup-dispatcher`, default: the
+run's own `--dispatcher`), and the rule that takes over at day N is a
+separate choice. Warm up once under `fifo`, and `fifo`, `cr` and `slate`
+each resume the *same* fab — same WIP, same tool setups, same pending
+breakdowns, same RNG — and diverge from there. That is what makes two runs on
+the Results tab an A/B rather than two histories; it is also why a `slate`
+run does not have to pay hours of its own warm-up. If the warm-up checkpoint
+is missing, the feed builds it first (a child `sim_feed.py --checkpoint-only`
+under the warm-up rule) and then resumes from it.
+
+```bash
+# the dispatcher under test, from the shared fifo day-90 fab
+baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
+    --days 180 --warmup-days 90 --dispatcher slate --warmup-dispatcher fifo \
+    --speed 1600
+```
+
+`slate` cannot sustain 1600x (about 100 s of wall per simulated day, most of
+it CP-SAT), so that speed is effectively "unpaced" and the dashboard's speed
+menu can still slow it down to watch.
+
 A resumed run continues the same fab state but is not bit-identical to an
 uninterrupted one: the simulator iterates a `set` of usable machines and the
 set's layout changes across a pickle round-trip, so ties between equivalent
@@ -205,11 +313,14 @@ Then open http://localhost:5173/.
 | `--status` | what is listening |
 | `--stop` | stop what the script started (it refuses to kill anything it did not) |
 
-`FEED_DAYS` / `FEED_WARMUP` / `FEED_SPEED` override the producer's defaults —
-180 simulated days, a 90-day warm-up (so the dashboard opens on a fab with
-a full quarter of history and steady-state KPIs to compare against), 20x
-realtime. The first start simulates the warm-up (~10 min of CPU); later
-starts resume from its checkpoint in under a second.
+`FEED_DAYS` / `FEED_WARMUP` / `FEED_SPEED` / `FEED_RULE` / `FEED_WARMUP_RULE`
+override the producer's defaults — 180 simulated days, a 90-day warm-up (so
+the dashboard opens on a fab with a full quarter of history and steady-state
+KPIs to compare against), 20x realtime, `fifo`, warm-up under `fifo`. The
+first start simulates the warm-up (~10 min of CPU); later starts resume from
+its checkpoint in under a second. `FEED_RULE=slate FEED_SPEED=1600
+scripts/dev-up.sh --feed` is the dispatcher under test taking over the same
+fab at day 90.
 
 Run it directly rather than through a pipe; see the note at the top of the
 script.
@@ -280,11 +391,14 @@ live feed's pacing:
 ```bash
 SIM_CONTROL_FILE=/tmp/ctl.json baselines/pyscfabsim/.venv/bin/python3 \
     bench/tools/sim_feed.py --days 120 --warmup-days 90 --speed 0 \
-    --dispatcher cr --out /tmp/cr.jsonl --truncate --notes "cr baseline"
+    --dispatcher cr --warmup-dispatcher fifo \
+    --out /tmp/cr.jsonl --truncate --notes "cr baseline"
 ```
 
-The first run of a new dispatcher pays its own 90-day warm-up; later ones
-resume from that checkpoint.
+With `--warmup-dispatcher fifo` every baseline resumes the same day-90
+checkpoint the live run did, so the rows on the Results tab differ only in
+the rule. Without it, the first run of a new dispatcher pays its own 90-day
+warm-up and the rows compare two histories.
 
 ### Watching it
 
@@ -430,11 +544,15 @@ Honest accounting, because the numbers here have been wrong before:
 
 - The build works. `make test` is 56/56; OR-Tools v9.15 is linked and CP-SAT
   runs (`bench/results/2026-08-29-ortools-linked.txt`).
-- **The dispatcher has never been compared to the simulator on equal terms.**
-  The instance generators disagree — 1,625 feasible pairs vs 859 at ~200 lots —
-  and the headline +34.4% lift measures 21–30% across the two harnesses. The
-  KPI mapping is an open modelling question, not glue. [`docs/adr/0002`](docs/adr/0002-dispatcher-inside-pyscfabsim.md)
-  proposes the fix: run the dispatcher *inside* PySCFabSim.
+- **The dispatcher is compared to the baseline rules on equal terms**, inside
+  PySCFabSim ([`docs/adr/0002`](docs/adr/0002-dispatcher-inside-pyscfabsim.md),
+  [`0009`](docs/adr/0009-slate-rule-hybrid-split.md)): every rule resumes the
+  same day-90 checkpoint and runs 30 days. LVHM seed 0, days 90→120: `slate`
+  completes 1,729 lots at 35.80 d cycle time against `fifo`'s 1,713 / 35.90 d
+  and `cr`'s 1,599 / 36.43 d; `cr` keeps the best on-time delivery (99.8% vs
+  98.7%). One seed, 47% solver coverage, 9× the wall clock —
+  `bench/README.md` has the caveats and `summary.md` the account. The old
+  synthetic-instance "+34.4%" number is superseded and should not be quoted.
 - The tactical cycle needs **≥2s of solve time at 400 lots**, not the ≥1s once
   stated. A 1s-tuned cycle runs greedy on every tick while the backend table
   honestly reports `cpsat linked` — no error, no warning, no CP-SAT. Measured

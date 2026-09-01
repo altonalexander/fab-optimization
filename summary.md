@@ -122,11 +122,11 @@ The rules under test:
 
 ---
 
-## 4. Five ways the measurement was silently wrong
+## 4. Seven ways the measurement was silently wrong
 
 This is the part worth reading. Each of these produced *plausible numbers*
-while measuring something other than what the label claimed. The fifth is in
-§7.1, because it is a property of a benchmark rather than of the harness.
+while measuring something other than what the label claimed. One of them is
+in §7.1, because it is a property of a benchmark rather than of the harness.
 
 ### 4.1 The tuple shape is load-bearing
 
@@ -183,6 +183,38 @@ waiting. **Coverage 6.3% → 56.6%.**
 > the row means what it says.
 
 ---
+
+### 4.5 A per-rule warm-up compares two histories
+
+The feed cached its 90-day warm-up per *dispatcher*: a `slate` run warmed up
+under `slate`, a `cr` run under `cr`. Two consequences, one obvious in
+hindsight. A `slate` warm-up costs hours before a single comparable day is
+streamed — and its checkpoint failed to pickle anyway. Worse, two runs warmed
+under different rules reach day 90 in different fabs: different WIP, different
+tool setups, different breakdowns pending. Whatever differs from day 90 on
+is then partly the rule and partly the history, and nothing separates them.
+
+Now the checkpoint is keyed by the rule that ran the warm-up
+(`--warmup-dispatcher`), which is `fifo` for everything, and the rule under
+test takes over that one fab at day 90. `compare.py --warmup-days 90` resumes
+the same file. The benchmark table and the live dashboard are one experiment,
+and the gate (§5) is re-run from the checkpoint, not just from day 0.
+
+### 4.6 Two samplers, two definitions, one Results page
+
+`compare.py` had its own hourly sampler; the feed had another. The feed's
+counts completions over a *trailing day* and WIP as waiting *plus running*;
+the harness's counted completions *cumulatively* and WIP as waiting only.
+Published side by side on the Results tab, `slate` read **14 lots/day**
+beside the live `slate` run's **56** — same simulator, same rule, same
+checkpoint. Neither number was wrong; they were answers to different
+questions wearing the same column header.
+
+The harness no longer has a sampler. `sim_feed.FeedPlugin` rides the
+benchmark run with a null sink and its `_kpi_sample` is the definition for
+both, and `publish_runs.py` summarises a benchmark row exactly as the feed's
+run store summarises a live one. A definition that exists twice will drift;
+the fix is to have it once.
 
 ## 5. The validation gate
 
@@ -292,30 +324,45 @@ up, and the number it produced — a genuinely correct speed/coverage
 measurement — was published as a default with a latent process-killing bug
 attached to it.
 
-### 7.2 Head to head — LVHM, 30 days, seed 0
+### 7.2 Head to head — LVHM, days 90→120 from one checkpoint, seed 0
 
-| rule | cycle time (d) | throughput | on-time % | tardiness (lot·d) | coverage | wall |
+Every rule starts from the **same fab**: the simulator checkpointed at day 90
+under `fifo` (§4.5), the rule under test taking over from there. Thirty days
+later:
+
+| rule | completed (30 d) | cycle time (d) | on-time % | tardiness (lot·d) | coverage | wall |
 |---|---|---|---|---|---|---|
-| fifo | 22.822 | 66 | 98.48 | 0.1 | – | 168 s |
-| cr | 22.008 | 55 | **100.00** | **0.0** | – | 173 s |
-| **slate** | **21.821** | **70** | 98.57 | 1.5 | 49.6% | 2,698 s |
+| fifo | 1,713 | 35.900 | 97.96 | 32.9 | – | 265 s |
+| cr | 1,599 | 36.431 | **99.81** | **2.2** | – | 274 s |
+| **slate** | **1,729** | **35.799** | 98.67 | 7.5 | 47.0% | 2,444 s |
 
-**Read this as a working harness, not as a result.** The caveats are larger
-than the differences:
+The gate for this configuration passed first: `slate-cr` reproduced `cr`'s
+42,139 decisions from the checkpoint exactly (fp `514cf477c555b63c`).
 
-- **30 days is the fill-up transient**, not steady state. Only 55–70 lots
-  finish, out of 2,154 in initial WIP, and every one started mid-route. Cycle
-  time here is dominated by initial conditions, not by dispatching.
-- **One seed.** A 15-lot spread on ~60 completions is inside what a seed change
-  could move.
-- **Coverage 49.6%** — about half of `slate`'s decisions came from the fallback.
-- `slate` is **15.6× slower in wall clock** than `cr`.
+**What it says.** `slate` completes the most lots at the shortest cycle time:
++16 lots (+0.9%) and −0.10 d against `fifo`; +130 lots (+8%) and −0.63 d
+against `cr`. `cr` still owns due dates — 99.8% on time and 2.2 lot·days of
+tardiness, against `slate`'s 7.5 and `fifo`'s 32.9. That is the same shape
+the first, day-0 run showed, now on 1,600–1,700 completions per row instead of
+55–70, with the fill-up transient behind the window rather than inside it.
 
-The one thing that looks like signal: **`slate` is the worst row on tardiness**
-while winning throughput and cycle time. Due-date pressure *is* in the Tier-1
-urgency term, so either that term is too weak against a throughput-shaped
-objective, or the per-cycle assignment's blindness to sequencing is costing
-exactly what ADR-0002 predicted it might:
+**What it does not say.** One seed, one 30-day window: the `fifo` margin is
+inside the run-to-run noise, the `cr` margin probably is not. Coverage
+is **47%** — about half of `slate`'s decisions were the fallback score, and the
+row is a blend that says so. And `slate` is **9× the wall clock** of a sort
+key: 1,772 s of its 2,444 s was inside CP-SAT, across 40,317 rebuilds. And
+`slate` is not reproducible to the decision: `fifo` and `cr` re-run from the
+checkpoint to the identical fingerprint, `slate` does not, because a 5 ms
+wall-clock budget returns whatever incumbent CP-SAT had when the clock ran
+out. Two runs of the same command gave 1,726 / 35.661 d / 98.61% / 10.3 and
+1,729 / 35.799 d / 98.67% / 7.5 — a spread of 3 lots and 0.14 d that is the
+noise floor for every `slate` number above, and larger than its cycle-time
+margin over `fifo`.
+
+The tardiness gap is the thing worth chasing. Due-date pressure *is* in the
+Tier-1 urgency term, so either that term is too weak against a
+throughput-shaped objective, or the per-cycle assignment's blindness to
+sequencing is costing exactly what ADR-0002 predicted it might:
 
 > *the solver model has no time index and cannot sequence. Against CR over 730
 > days with setup minimum-run-lengths, a per-cycle assignment blind to ordering
@@ -325,15 +372,28 @@ exactly what ADR-0002 predicted it might:
 The pressure ablation (`--rules slate:none,slate:due,slate:full`) separates
 those two explanations. It has not been run.
 
+### 7.3 The same experiment, live
+
+The dashboard runs the identical experiment as a stream: `sim_feed.py
+--dispatcher slate --warmup-dispatcher fifo --warmup-days 90` resumes the
+same checkpoint in about a second, publishes the day-90 WIP as the snapshot,
+and streams `slate`'s decisions from there. The live tab draws the ninety
+fifo days in black and the slate run in blue from the day-90 rule; the
+**optimized decisions** KPI — decisions the slate made rather than its
+fallback — sits at 44–49% of the trailing day, the coverage number in the
+table seen from the other side. The Results tab lays the three benchmark
+rows over the streaming run, and because all four are sampled by the same
+`FeedPlugin` code (§4.6), the lines are comparable point for point.
+
 ---
 
 ## 8. What this does not measure
 
 Stated so nobody has to discover it later:
 
-- **730-day steady state.** Everything above is 30 days of transient. The
-  published LVHM figures assume a warm-up reset at one year; these numbers are
-  not comparable to them and `compare.py` prints that warning itself.
+- **730-day steady state.** Everything above is one 30-day window after a
+  90-day warm-up. The published LVHM figures assume a warm-up reset at one
+  year; these numbers are not comparable to them.
 - **Queue-time constraints.** PySCFabSim parses CQT and does not enforce it
   ([`adr/0008`](docs/adr/0008-what-pyscfabsim-simplifies.md)), so the q-time
   term in the C++ cost function is deliberately held inert rather than
@@ -355,15 +415,25 @@ make -C dispatch test           # 88 C++ tests
 
 VENV=baselines/pyscfabsim/.venv/bin/python3
 
-# 1. the gate. Never skip this.
-$VENV bench/tools/compare.py --days 2  --rules cr,slate-cr
+# 1. the gate, from the shared day-90 checkpoint. Never skip this.
+#    (builds bench/snapshots/..._fifo_Demand_day90_h*.ckpt first if missing)
+$VENV bench/tools/compare.py --days 92 --warmup-days 90 --rules cr,slate-cr
 
-# 2. the comparison
-$VENV bench/tools/compare.py --days 30 --rules fifo,cr,slate
+# 2. the comparison -- one process per rule, in parallel, then merge
+for r in fifo cr slate; do
+  SIM_CONTROL_FILE=/nonexistent $VENV bench/tools/compare.py \
+      --days 120 --warmup-days 90 --rules $r --out /tmp/$r.json &
+done; wait
+$VENV bench/tools/compare.py --merge /tmp/fifo.json /tmp/cr.json /tmp/slate.json \
+    --out bench/results/compare_SMT2020_LVHM_seed0_120d_w90.json
 
 # 3. publish to the dashboard's run store
 dispatch/api/.venv/bin/python3 bench/tools/publish_runs.py \
-    bench/results/compare_SMT2020_LVHM_seed0_30d.json
+    bench/results/compare_SMT2020_LVHM_seed0_120d_w90.json
+
+# 4. the same experiment, live on http://localhost:5173/#/live
+scripts/dev-up.sh --fresh
+FEED_RULE=slate FEED_SPEED=1600 scripts/dev-up.sh --feed
 ```
 
 Runs then appear on the dashboard's **Results** tab, and the live ready pool
@@ -385,9 +455,8 @@ nothing. What makes a comparison worth anything is the machinery that makes it
   greedy is never comparable to one that did not
 - caveats printed by the tool itself, not remembered by the person reading it
 
-Five times during this work the numbers looked fine and were measuring the
-wrong thing. Four were caught by an invariant rather than by suspicion. The
-fifth — a solver flag that aborts the process, hidden behind a benchmark too
+Seven times during this work the numbers looked fine and were measuring the
+wrong thing. Most were caught by an invariant rather than by suspicion. One — a solver flag that aborts the process, hidden behind a benchmark too
 short to reach it — was caught only by running the longer thing, which is the
 uncomfortable part: some failure modes are only visible at the scale you were
 trying to avoid paying for.

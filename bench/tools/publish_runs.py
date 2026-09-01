@@ -59,12 +59,18 @@ def run_key(payload, row):
     return h.hexdigest()
 
 
-# compare.py's KPI names -> the metric names run_summary pivots on.
+# compare.py's end-of-run window aggregates, stored under distinct names.
 METRICS = {
-    "cycle_time_days": "cycle_time_days",
-    "on_time_pct": "on_time_pct",
-    "tardiness_lot_days": "tardiness_days",
+    "throughput": "window_completions",
+    "cycle_time_days": "window_cycle_time_days",
+    "on_time_pct": "window_on_time_pct",
+    "tardiness_lot_days": "window_tardiness_lot_days",
 }
+# Feed sample key -> run_kpis metric, as sim_feed.RunStore.METRICS.
+SAMPLE_METRICS = (("throughput_day", "thr"), ("starts_day", "starts"),
+                  ("cycle_time_days", "ct"), ("on_time_pct", "otd"),
+                  ("tardiness_days", "tard"), ("wip_lots", "wip"),
+                  ("util_pct", "util"))
 
 
 def publish(payload, path, dry_run=False):
@@ -120,51 +126,58 @@ def publish(payload, path, dry_run=False):
                  solver, linked, notes, key))
             run_id = cur.fetchone()[0]
 
+            # Window aggregates from compare.py's table (lots completed in
+            # the window) are kept under their own names so they never
+            # masquerade as the trailing-day means the page compares on.
             for src, metric in METRICS.items():
-                if row.get(src) is None:
-                    continue
-                cur.execute(
-                    "INSERT INTO run_kpis (run_id, metric, product, value)"
-                    " VALUES (%s,%s,'',%s)", (run_id, metric, float(row[src])))
-            # throughput_day makes rows at different horizons comparable;
-            # the raw count does not.
-            if row.get("throughput") is not None and days:
-                cur.execute(
-                    "INSERT INTO run_kpis (run_id, metric, product, value)"
-                    " VALUES (%s,'throughput_day','',%s)",
-                    (run_id, float(row["throughput"]) / float(days)))
-            # The share of decisions the optimizer actually made. For the
-            # sort-key rules this is 0, which is the honest value: it is what
-            # separates a solver-driven row from one that fell back.
-            cov = detail.get("coverage")
-            cur.execute(
-                "INSERT INTO run_kpis (run_id, metric, product, value)"
-                " VALUES (%s,'optimized_pct','',%s)",
-                (run_id, 100.0 * float(cov) if cov is not None else 0.0))
+                if row.get(src) is not None:
+                    cur.execute(
+                        "INSERT INTO run_kpis (run_id, metric, product, value)"
+                        " VALUES (%s,%s,'',%s)",
+                        (run_id, metric, float(row[src])))
 
             samples = row.get("samples") or []
-            # wip_lots is a column the Results table shows and this harness
-            # genuinely measures, so publish the mean over non-warmup samples.
-            # util_pct and starts_day are NOT published: they come from the
-            # feed's own accounting, this harness does not compute them, and a
-            # fabricated value would be worse than the blank the page shows.
+            # The series and its summary use the feed's definitions -- the
+            # samples ARE the feed plugin's (compare.make_sampler), and the
+            # summary is the same post-warm-up mean RunStore.finish takes for
+            # a live run -- so a benchmark row and a live row on the Results
+            # page are one measurement, not two that happen to share names.
             live = [s for s in samples if not s.get("warmup")]
-            wip = [s["wip"] for s in live if s.get("wip") is not None]
-            if wip:
+            summary = {}
+            for metric, key in SAMPLE_METRICS:
+                vals = [s[key] for s in live if s.get(key) is not None]
+                if vals:
+                    summary[metric] = sum(vals) / len(vals)
+            tot = sum(s.get("wq", 0) + s.get("wb", 0) + s.get("wp", 0)
+                      + s.get("wd", 0) for s in live)
+            if tot:
+                for metric, key in (("queue_share_pct", "wq"),
+                                    ("batch_wait_share_pct", "wb"),
+                                    ("processing_share_pct", "wp"),
+                                    ("delay_share_pct", "wd")):
+                    summary[metric] = 100.0 * sum(s.get(key, 0) for s in live) / tot
+            dec = sum(s.get("dec", 0) for s in live)
+            summary["optimized_pct"] = (
+                100.0 * sum(s.get("opt", 0) for s in live) / dec if dec else 0.0)
+            for metric, value in summary.items():
                 cur.execute(
                     "INSERT INTO run_kpis (run_id, metric, product, value)"
-                    " VALUES (%s,'wip_lots','',%s)",
-                    (run_id, sum(wip) / len(wip)))
+                    " VALUES (%s,%s,'',%s) ON CONFLICT (run_id, metric, product)"
+                    " DO UPDATE SET value=EXCLUDED.value",
+                    (run_id, metric, float(value)))
 
             for s in samples:
                 cur.execute(
                     "INSERT INTO run_kpi_samples"
-                    " (run_id, t, warmup, wip, thr, ct, otd, tard, dec, opt)"
-                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                    " (run_id, t, warmup, wip, running, util, thr, ct, otd,"
+                    "  tard, dec, opt, wq, wb, wp, starts, wd)"
+                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
                     " ON CONFLICT (run_id, t) DO NOTHING",
-                    (run_id, s["t"], s["warmup"], s.get("wip"), s.get("thr"),
-                     s.get("ct"), s.get("otd"), s.get("tard"), s.get("dec"),
-                     s.get("opt")))
+                    (run_id, s["t"], s["warmup"], s.get("wip"), s.get("running"),
+                     s.get("util"), s.get("thr"), s.get("ct"), s.get("otd"),
+                     s.get("tard"), s.get("dec"), s.get("opt"), s.get("wq", 0),
+                     s.get("wb", 0), s.get("wp", 0), s.get("starts", 0),
+                     s.get("wd", 0)))
             published.append((run_id, row["rule"], len(samples)))
         conn.commit()
     return published

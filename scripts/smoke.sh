@@ -74,7 +74,7 @@ fi
 
 note 'fixture'
 # Short and unpaced: this is a correctness check, not a benchmark.
-if "$SIM_PY" "$REPO/bench/tools/sim_feed.py" --out "$FEED" --days 1 --speed 0 \
+if SIM_CONTROL_FILE="$RUN/ctl.json" "$SIM_PY" "$REPO/bench/tools/sim_feed.py" --out "$FEED" --days 1 --speed 0 --no-store \
      --truncate >/dev/null 2>&1; then
   ok "generated $(wc -l < "$FEED") events"
 else

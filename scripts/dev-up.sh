@@ -13,7 +13,8 @@
 #   scripts/dev-up.sh --stop   stop whatever this script started
 #   scripts/dev-up.sh --status show what is listening
 #
-# FEED_DAYS / FEED_WARMUP / FEED_SPEED override the feed defaults
+# FEED_DAYS / FEED_WARMUP / FEED_SPEED / FEED_RULE / FEED_WARMUP_RULE override
+# the feed defaults (180d, 90d warm-up, 20x, fifo, warm-up under fifo)
 # (180 days, 90-day warm-up, 20x realtime). The warm-up is simulated once and
 # checkpointed to bench/snapshots/; later starts resume from it in seconds.
 #
@@ -270,8 +271,13 @@ wait_for "http://localhost:$UI_PORT/api/state"        'ui -> api proxy'    15 ||
 # two run ids and a timeline the mirror will correctly flag as stitched.
 info 'feed'
 SIM_PY="$REPO/baselines/pyscfabsim/.venv/bin/python3"
+# FEED_RULE is the dispatcher under test; FEED_WARMUP_RULE runs the warm-up,
+# so every rule takes over the SAME fab at the same day (an A/B, not two
+# histories). fifo is the checkpoint that is normally already cached.
 FEED_CMD=("$SIM_PY" "$REPO/bench/tools/sim_feed.py"
           --days "${FEED_DAYS:-180}" --warmup-days "${FEED_WARMUP:-90}"
+          --dispatcher "${FEED_RULE:-fifo}"
+          --warmup-dispatcher "${FEED_WARMUP_RULE:-fifo}"
           --speed "${FEED_SPEED:-20}")
 if (( WANT_FEED )); then
   if [[ ! -x "$SIM_PY" ]]; then

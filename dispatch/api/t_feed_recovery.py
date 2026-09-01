@@ -21,6 +21,8 @@ for line in open(path):
     if rec.get("topic") != "fab.tool.events":
         seen_lots = True
         continue
+    if rec.get("payload") is None:      # compaction tombstone
+        continue
     ev = dict(kv.split("=", 1) for kv in rec["payload"].split(";") if "=" in kv)
     if ev.get("type") != "TOOL_STATUS":
         continue

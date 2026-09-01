@@ -239,6 +239,12 @@ def save_checkpoint(path, instance, feed, days):
     import cloudpickle
     from randomizer import Randomizer
     plugins, instance.plugins = instance.plugins, []
+    # The event queue and lot->step->lot references pickle as one long chain;
+    # at day 0, before anything has been dispatched, it exceeds the default
+    # limit and the checkpoint is silently skipped ("excessively deep
+    # recursion required"). Raise it for the dump only.
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(old_limit, 100000))
     try:
         blob = {
             'version': 1,
@@ -254,6 +260,7 @@ def save_checkpoint(path, instance, feed, days):
             cloudpickle.dump(blob, f, protocol=5)
         os.replace(tmp, path)
     finally:
+        sys.setrecursionlimit(old_limit)
         instance.plugins = plugins
 
 
@@ -588,7 +595,8 @@ class KafkaSink:
         # record per key, so a keyless write to them would be retained forever
         # as unrelated history instead of superseding the previous state.
         try:
-            self.p.produce(topic, payload.encode('utf-8'),
+            # payload None is a compaction tombstone: the broker drops the key.
+            self.p.produce(topic, None if payload is None else payload.encode('utf-8'),
                            key=None if key is None else key.encode('utf-8'),
                            callback=self._ack)
         except BufferError:
@@ -946,6 +954,10 @@ class FeedPlugin(IPlugin):
             lot=self._lot_id(lot),
             cohort=self._cohort(lot),
             part=lot.part_name,
+            # The step the lot now waits for. A mirror fed without a
+            # snapshot learns ready lots from this record, and the scenario
+            # planner keys tool eligibility on it.
+            step=getattr(getattr(lot, 'actual_step', None), 'step_name', '') or '',
             t=round(instance.current_time, 1),
             left=remaining,
             idx=done,
@@ -1182,6 +1194,12 @@ class FeedPlugin(IPlugin):
         self._lot_off_tool(instance, lot)
         self._tick_kpi(instance)
         self._write(LOT_TOPIC, envelope(type='LOT_COMPLETE', lot=self._lot_id(lot)))
+        # Tombstone the lot on the compacted state topic. The snapshot put a
+        # LOT_STATE record there for every lot in WIP at the warm-up line;
+        # without a delete, a mirror that restarts days later bootstraps
+        # every lot that has since completed back into WIP and over-reports
+        # it by hundreds of lots -- silently, which is the worse failure.
+        self._write(LOT_STATE_TOPIC, None, key=self._lot_id(lot))
         self._burn(instance, lot, 'done')
         self._last_split.pop(lot.idx, None)
         self._route_len.pop(lot.idx, None)
@@ -1330,6 +1348,10 @@ class FeedPlugin(IPlugin):
             self._down_until[tool] = 0.0
 
 
+class _CheckpointDone(Exception):
+    """--checkpoint-only: the warm-up checkpoint is on disk, nothing else to do."""
+
+
 def main():
     p = argparse.ArgumentParser(description='run PySCFabSim as a dashboard feed')
     sink = p.add_mutually_exclusive_group()
@@ -1366,6 +1388,16 @@ def main():
                    help='do not record this run in the Postgres run store')
     p.add_argument('--notes', default=None,
                    help='free text stored with the run (what this run is for)')
+    p.add_argument('--warmup-dispatcher', default=None,
+                   help='the rule that runs the warm-up (default: --dispatcher). '
+                        'The checkpoint is keyed by THIS rule, so every rule '
+                        'under test can take over the same fab at the same '
+                        'instant: warm up once under fifo, then fifo, cr and '
+                        'slate each diverge from day N. That is the only way '
+                        'two live runs are an A/B rather than two histories')
+    p.add_argument('--checkpoint-only', action='store_true',
+                   help='stop as soon as the --warmup-days checkpoint is '
+                        'written (used to build a shared warm-up)')
     p.add_argument('--rebuild', action='store_true',
                    help='ignore a cached simulator checkpoint for --warmup-days '
                         'and re-simulate the warm-up from day 0')
@@ -1388,6 +1420,9 @@ def main():
     a = p.parse_args()
 
     a.dataset = sim_runner.normalize_dataset(a.dataset)
+    warm_rule = a.warmup_dispatcher or a.dispatcher
+    if warm_rule != a.dispatcher and a.warmup_days is None:
+        p.error('--warmup-dispatcher needs --warmup-days')
     if (a.from_day is not None and a.to_day is not None
             and a.from_day > a.to_day):
         p.error('--from-day must not exceed --to-day')
@@ -1407,6 +1442,9 @@ def main():
 
     print(f'  feeding {out.label}  ({a.dataset}, {a.days}d, {a.dispatcher}, '
           f'speed={a.speed:g})', file=sys.stderr)
+    if warm_rule != a.dispatcher:
+        print(f'  warm-up under {warm_rule}; {a.dispatcher} takes over at '
+              f'day {a.warmup_days:g}', file=sys.stderr)
     if a.tool_prefix:
         print(f'  filtered to tools starting with {a.tool_prefix!r}',
               file=sys.stderr)
@@ -1449,7 +1487,26 @@ def main():
     # paid once per (dataset, seed, dispatcher, batching, day) rather than on
     # every start. --rebuild forces the slow path.
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
-        a.dataset, a.seed, a.dispatcher, a.warmup_days, a.batch_strat, a.days)
+        a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days)
+    if warm_s and ckpt is None and warm_rule != a.dispatcher:
+        # No shared checkpoint yet. Build it under the warm-up rule -- a
+        # separate process, so that rule's checkpoint is exactly what a plain
+        # `--dispatcher <warm_rule>` run would have produced and resumed from.
+        print(f'  no {warm_rule} checkpoint for day {a.warmup_days:g}; '
+              f'building it first', file=sys.stderr)
+        cmd = [sys.executable, os.path.abspath(__file__),
+               '--dataset', a.dataset, '--seed', str(a.seed),
+               '--batch-strat', a.batch_strat, '--days', str(a.days),
+               '--dispatcher', warm_rule, '--warmup-days', str(a.warmup_days),
+               '--checkpoint-only', '--no-store', '--speed', '0',
+               '--out', os.devnull]
+        env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
+        rc = subprocess.call(cmd, cwd=REPO, env=env)
+        ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
+                         a.batch_strat, a.days)
+        if rc != 0 or ckpt is None:
+            p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
+                    'checkpoint')
     if warm_s == 0:
         print('  no warm-up: snapshotting the WIP the dataset ships with, '
               'then streaming', file=sys.stderr)
@@ -1467,7 +1524,11 @@ def main():
     write_control(a.speed)
     if not a.no_store:
         feed.store = RunStore()
-        feed.store.begin(feed.run_id, a, notes=a.notes)
+        notes = a.notes
+        if warm_rule != a.dispatcher:
+            notes = (f'warm-up under {warm_rule} to day {a.warmup_days:g}'
+                     + (f'; {a.notes}' if a.notes else ''))
+        feed.store.begin(feed.run_id, a, notes=notes)
     # A feed is normally ended with SIGTERM (dev-up.sh --stop, or a kill).
     # Turn that into the Ctrl-C path so the run store still gets a status
     # instead of a row that says "running" forever.
@@ -1537,7 +1598,7 @@ def main():
                                history=feed._hist, cohort=feed._cohort_of,
                                kpi=feed._kpi)
             save_snapshot(cpath, snap)
-            kpath = ckpt_path(a.dataset, a.seed, a.dispatcher, a.warmup_days,
+            kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
                               a.batch_strat, a.days)
             try:
                 t0 = time.time()
@@ -1547,6 +1608,10 @@ def main():
                       f'-- later starts resume from here', file=sys.stderr)
             except Exception as e:      # a cache miss next time, not a failure now
                 print(f'  checkpoint not saved ({e})', file=sys.stderr)
+                if a.checkpoint_only:
+                    raise
+            if a.checkpoint_only:
+                raise _CheckpointDone()
             feed.from_s = None            # stop suppressing
             feed.speed = a.speed          # start pacing
             feed._control_checked = 0.0   # honour any dashboard change
@@ -1585,8 +1650,14 @@ def main():
             slate.maybe_rebuild(inst)
             feed_before(inst)
 
-    stopped = sim_runner.run(instance, run_to, rule,
-                             before_dispatch=before_dispatch)
+    try:
+        stopped = sim_runner.run(instance, run_to, rule,
+                                 before_dispatch=before_dispatch)
+    except _CheckpointDone:
+        out.close()
+        print('  checkpoint written; --checkpoint-only, stopping here',
+              file=sys.stderr)
+        return
     if slate is not None:
         print(f'  slate: {slate.stats()}', file=sys.stderr)
 

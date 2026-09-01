@@ -21,6 +21,8 @@ for line in open(sys.argv[1]):
         rec = json.loads(line)
     except ValueError:
         continue
+    if rec.get("payload") is None:      # compaction tombstone
+        continue
     ev = dict(kv.split("=", 1) for kv in rec["payload"].split(";") if "=" in kv)
     # Drop every recovery, so the mirror sees the strictly one-way stream.
     if ev.get("type") == "TOOL_STATUS" and ev.get("online") != "0":

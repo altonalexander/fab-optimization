@@ -1065,23 +1065,7 @@ export default function App() {
       )}
 
       {tab === 'live' && (
-        <div className="grid-wide" style={{ marginBottom: 16 }}>
-          <section>
-            <h3>KPIs since day 0</h3>
-            <p className="muted" style={{ marginTop: -4 }}>
-              The fab from its first simulated hour. <b>Black</b> is warm-up
-              &mdash; simulated before this run started, published with the
-              snapshot &mdash; and <b>blue</b> is the run you are watching. Both
-              are sampled by the producer with one definition, which is what
-              makes a later run under a different dispatcher comparable.
-            </p>
-            <KpiPanel />
-          </section>
-        </div>
-      )}
-
-      {tab === 'live' && (
-        <div className="grid">
+        <div className="grid" style={{ marginBottom: 16 }}>
           <section>
             <h3>WIP — whole fab, since day 0</h3>
             <p className="muted" style={{ marginTop: -4 }}>
@@ -1112,6 +1096,22 @@ export default function App() {
                 </div>
               ))}
             </div>
+          </section>
+        </div>
+      )}
+
+      {tab === 'live' && (
+        <div className="grid-wide">
+          <section>
+            <h3>KPIs since day 0</h3>
+            <p className="muted" style={{ marginTop: -4 }}>
+              The fab from its first simulated hour. <b>Black</b> is warm-up
+              &mdash; simulated before this run started, published with the
+              snapshot &mdash; and <b>blue</b> is the run you are watching. Both
+              are sampled by the producer with one definition, which is what
+              makes a later run under a different dispatcher comparable.
+            </p>
+            <KpiPanel />
           </section>
         </div>
       )}

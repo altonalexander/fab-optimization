@@ -200,6 +200,31 @@ export function RouteProductView({ data, order = [], zones = [], backHref,
       </div>
 
       <section>
+        <h4>The route, end to end</h4>
+        <p className="muted" style={{ marginTop: -4 }}>
+          One lane per process area, one column per step: a block marks where
+          that step runs. The lane says which bay, so colour is free to say what
+          the step <i>does</i> — plain process, measurement, or a measurement
+          that can send the lot backwards. Reading across, the same few lanes
+          fire over and over for {data.n_visits} visits: that is the
+          re-entrancy, and it is why a {data.n_steps}-step route needs only{' '}
+          {data.n_areas} bays.
+        </p>
+        <LaneMap data={data} zones={zones} />
+        <LaneLegend data={data} />
+        {data.rework.length > 0 && (
+          <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+            Every rework point on this route is a{' '}
+            <b>{data.rework[0].area}</b> step — the lot is measured after
+            lithography, and a bad exposure goes back{' '}
+            {data.rework[0].at - data.rework[0].back_to + 1} steps to be
+            stripped and re-exposed. Nothing else on the route can send a lot
+            backwards.
+          </p>
+        )}
+      </section>
+
+      <section>
         <h4>Where the steps go</h4>
         <p className="muted" style={{ marginTop: -4 }}>
           Steps are route positions; visits are arrivals at the bay. A bay with
@@ -233,31 +258,6 @@ export function RouteProductView({ data, order = [], zones = [], backHref,
             ))}
           </tbody>
         </table>
-      </section>
-
-      <section>
-        <h4>The route, end to end</h4>
-        <p className="muted" style={{ marginTop: -4 }}>
-          One lane per process area, one column per step: a block marks where
-          that step runs. The lane says which bay, so colour is free to say what
-          the step <i>does</i> — plain process, measurement, or a measurement
-          that can send the lot backwards. Reading across, the same few lanes
-          fire over and over for {data.n_visits} visits: that is the
-          re-entrancy, and it is why a {data.n_steps}-step route needs only{' '}
-          {data.n_areas} bays.
-        </p>
-        <LaneMap data={data} zones={zones} />
-        <LaneLegend data={data} />
-        {data.rework.length > 0 && (
-          <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-            Every rework point on this route is a{' '}
-            <b>{data.rework[0].area}</b> step — the lot is measured after
-            lithography, and a bad exposure goes back{' '}
-            {data.rework[0].at - data.rework[0].back_to + 1} steps to be
-            stripped and re-exposed. Nothing else on the route can send a lot
-            backwards.
-          </p>
-        )}
       </section>
 
       {data.rework.length > 0 && (
