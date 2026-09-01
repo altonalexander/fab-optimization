@@ -118,6 +118,9 @@ class FabMirror:
         self.tools      = {}          # tool_id -> {online, last_seen}
         self.lots_ready = {}          # lot_id  -> lot dict
         self.in_flight  = {}          # lot_id  -> tool_id
+        # lot_id -> {"t": start, "end": finish} in simulated seconds, when the
+        # LOT_STARTED carried them. Lets the tool page count a run down.
+        self.in_flight_meta = {}
         self.counts     = Counter()
         self.decisions  = deque(maxlen=500)
         self.throughput = deque(maxlen=300)   # (ts, completed_total)
@@ -149,6 +152,10 @@ class FabMirror:
         # evicted long before anyone drills into it, so the detail view would
         # always show an empty history. Bounded per tool, so still no leak.
         self.tool_recent = defaultdict(lambda: deque(maxlen=40))
+        # Per-tool ring of lots that left it (finished a step or completed),
+        # newest last, with the simulated day. Feeds the tool page's "recent
+        # lots out"; bounded, so still no leak.
+        self.tool_out = defaultdict(lambda: deque(maxlen=TOOL_OUT_MAX))
         # Timeline provenance: which run and simulated day the snapshot came
         # from, and which the live stream is on. See note_timeline().
         self.snapshot_run = None
@@ -187,6 +194,11 @@ class FabMirror:
                 lot = ev.get("lot")
                 self.lots_ready.pop(lot, None)
                 self.in_flight[lot] = ev.get("tool")
+                start, end = _as_float(ev.get("t")), _as_float(ev.get("end"))
+                if start is not None or end is not None:
+                    self.in_flight_meta[lot] = {"t": start, "end": end}
+                else:
+                    self.in_flight_meta.pop(lot, None)
                 if ev.get("tool"):
                     self.tool_stats[ev["tool"]]["started"] += 1
                     # A tool that just started a lot is up, whatever the last
@@ -196,11 +208,13 @@ class FabMirror:
                 # Credit the completion to whichever tool was running it, which
                 # only in_flight knows -- the event itself carries no tool.
                 tool = self.in_flight.pop(ev.get("lot"), None)
+                self.in_flight_meta.pop(ev.get("lot"), None)
                 # A lot the mirror still believed waiting (a stale snapshot
                 # position after a restart) is gone either way.
                 self.lots_ready.pop(ev.get("lot"), None)
                 if tool:
                     self.tool_stats[tool]["completed"] += 1
+                    self._note_out(tool, ev.get("lot"), None)
                 # Stamped with the *simulated* clock: throughput is a fab
                 # number, and measured against wall time it scaled with the
                 # playback speed (960/hr at 400x for a fab doing ~60/day).
@@ -216,7 +230,9 @@ class FabMirror:
                 st = ev.get("state") or "active"
                 if lot and st in ("active", "released") \
                         and lot in self.in_flight:
-                    self.in_flight.pop(lot, None)
+                    self._note_out(self.in_flight.pop(lot, None), lot,
+                                   _as_float(ev.get("t")))
+                    self.in_flight_meta.pop(lot, None)
                     self.lots_ready[lot] = ev
                 self._apply_progress(ev)
             elif t == "LOT_STATE":
@@ -243,6 +259,17 @@ class FabMirror:
         if ev.get("type") in ("KPI", "KPI_HIST"):
             self.apply_kpi(ev)
         self._fanout({"kind": "event", "topic": topic, "event": ev})
+
+    def _note_out(self, tool, lot, t):
+        """Record that `lot` just left `tool`. Called with the lock held."""
+        if not tool or not lot:
+            return
+        if t is None:
+            t = self.sim_t
+        self.tool_out[tool].append({
+            "lot": lot,
+            "day": round(t / 86400.0, 3) if t is not None else None,
+        })
 
     def _mark_up(self, tool, how):
         """Put a tool back online. Called with the lock held.
@@ -1416,6 +1443,11 @@ def _tool_row(tool_id):
         running = [l for l, t in mirror.in_flight.items() if t == tool_id]
         down_since = mirror.down_since.get(tool_id)
         recovered = mirror.recovered_by.get(tool_id)
+        waiting = _waiting_for(tool_id)
+        out = list(mirror.tool_out.get(tool_id, ()))
+        running_lots = [{"lot": l, **mirror.in_flight_meta.get(l, {})}
+                        for l in running[:25]]
+        sim_t, sim_t_at = mirror.sim_t, mirror.sim_t_at
     return {
         "id": tool_id,
         "group": tool_group(tool_id),
@@ -1439,7 +1471,41 @@ def _tool_row(tool_id):
         "last_ts": s.get("last_ts"),
         "running": running[:25],
         "running_count": len(running),
+        # Same lots with their simulated start/finish, when known, plus the
+        # clock reading they should be counted down against.
+        "running_lots": running_lots,
+        "sim_t": sim_t,
+        "sim_t_at": sim_t_at,
+        # The family queue, oldest first: what this tool would pick from next.
+        # Capped -- the page draws nine cells and says "+n" for the rest.
+        "waiting": waiting[:WAITING_SHOWN],
+        "waiting_count": len(waiting),
+        # Newest first, so the page can show the last few and count the rest.
+        "recent_out": out[::-1],
     }
+
+
+WAITING_SHOWN = 12
+TOOL_OUT_MAX = 20
+
+
+def _waiting_for(tool_id):
+    """Lot ids waiting for this tool's station family, oldest first.
+
+    A lot queues at its step's family, not at one machine, and any machine in
+    the family may take it, so the family queue IS the queue at each of its
+    tools. Lots whose ready record predates the `fam` field are skipped rather
+    than guessed at. Called with the mirror lock held.
+    """
+    fam = tool_group(tool_id)
+    rows = []
+    for lid, ev in mirror.lots_ready.items():
+        if (ev.get("fam") or "") != fam:
+            continue
+        t = _as_float(ev.get("t"))
+        rows.append((t if t is not None else float("-inf"), lid))
+    rows.sort()
+    return [lid for _, lid in rows]
 
 
 def _known_tools():
@@ -1608,6 +1674,11 @@ def tool_detail(tool_id):
     row = _tool_row(tool_id)
     row["recent_decisions"] = recent
     row["recent_events"] = events
+    # Pacing, so the page can advance the countdown between polls at the
+    # rate the clock is actually moving (and hold it while paused).
+    ctl = read_sim_control()
+    row["speed"] = ctl.get("speed")
+    row["paused"] = bool(ctl.get("paused"))
     return jsonify(row)
 
 

@@ -495,3 +495,36 @@ table.runs tr.row-base td{background:#f9fafb}
 .pill-live{border-color:#2563eb;color:#1d4ed8;background:#dbeafe}
 
 .seg-label{font-size:11px;color:var(--mut);padding:0 6px;align-self:center}
+
+/* tool page flow strip: queue grid -> tool box -> recent out */
+.toolflow{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin:6px 0 14px}
+.tf-col{display:flex;flex-direction:column;gap:6px;min-width:120px}
+.tf-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+.tf-label b{color:var(--fg);font-weight:600}
+.tf-arrow{align-self:center;font-size:22px;color:#9ca3af;padding-top:14px}
+.tf-grid{display:grid;grid-template-columns:repeat(3,46px);grid-auto-rows:46px;gap:6px}
+.tf-cell{width:46px;height:46px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:11px;font-weight:600;background:#e5e7eb;color:#374151;
+  font-variant-numeric:tabular-nums}
+.tf-cell-empty{background:transparent;border:1px dashed var(--line)}
+.tf-cell-more{background:#f3f4f6;color:var(--mut);border:1px solid var(--line)}
+.tf-cell-hot{background:#fee2e2;color:#991b1b}
+.tf-box{position:relative;width:180px;height:180px;border-radius:10px;
+  border:2px solid #15803d;background:var(--card)}
+.tf-box-idle{border-color:var(--line);border-style:dashed}
+.tf-idle{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  color:var(--mut);font-size:12px}
+.tf-setup{position:absolute;top:-10px;left:50%;transform:translateX(-50%);
+  font-size:10px;padding:1px 8px;border-radius:999px;background:#fef3c7;color:#92400e;
+  border:1px solid #fcd34d;white-space:nowrap;max-width:140px;overflow:hidden;
+  text-overflow:ellipsis;z-index:2}
+.tf-more{position:absolute;right:6px;bottom:4px;font-size:11px;color:var(--mut)}
+.tf-run{position:absolute;width:52px;height:52px;border-radius:50%;
+  transform:translate(-50%,-50%);background:#dcfce7;padding:3px;box-sizing:border-box}
+.tf-run-in{width:100%;height:100%;border-radius:50%;background:var(--card);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1}
+.tf-run-id{font-size:11px;font-weight:600;color:#166534}
+.tf-run-hot .tf-run-id{color:#991b1b}
+.tf-run-left{font-size:9px;color:var(--mut);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tf-out{list-style:none;margin:0;padding:0;font-size:12px;display:flex;flex-direction:column;gap:4px}
+.tf-none{font-size:12px}

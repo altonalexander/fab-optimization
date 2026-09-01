@@ -341,6 +341,7 @@ def snapshot_of(instance, lot_id, machine_name, history=None, cohort=None,
             # snapshot lot's part disagree with its own cohort id.
             'part': getattr(lot, 'part_name', '') or lot.name,
             'step': getattr(step, 'step_name', '') if step else '',
+            'fam': getattr(step, 'family', '') if step else '',
             'setup': getattr(step, 'setup_needed', '') if step else '',
             'tool': running.get(lid),          # None => waiting, not running
             'done_steps': len(getattr(lot, 'processed_steps', []) or []),
@@ -958,6 +959,10 @@ class FeedPlugin(IPlugin):
             # snapshot learns ready lots from this record, and the scenario
             # planner keys tool eligibility on it.
             step=getattr(getattr(lot, 'actual_step', None), 'step_name', '') or '',
+            # Station family of that step. A lot waits in its family's queue
+            # and any machine of the family may take it, so this is what the
+            # tool page keys "waiting at this tool" on.
+            fam=getattr(getattr(lot, 'actual_step', None), 'family', '') or '',
             t=round(instance.current_time, 1),
             left=remaining,
             idx=done,
@@ -1142,9 +1147,15 @@ class FeedPlugin(IPlugin):
             self._decisions.append((instance.current_time, optimized))
         for lot in lots:
             self._on_tool[self._lot_id(lot)] = tool
+            # t/end are the simulated start and finish of this run on the
+            # tool (lot_end_time is absolute and already includes setup),
+            # so a consumer can count down what is left without knowing the
+            # sampled process time. Additive; older consumers ignore them.
             self._write(LOT_TOPIC, envelope(
                 type='LOT_STARTED', lot=self._lot_id(lot), tool=tool,
-                recipe=lot.actual_step.step_name, prio=1))
+                recipe=lot.actual_step.step_name, prio=1,
+                t=round(instance.current_time, 1),
+                end=round(lot_end_time, 1)))
         if tool not in self._busy:
             self._busy_since[tool] = instance.current_time
         self._busy[tool] = self._busy.get(tool, 0) + len(lots)
@@ -1271,7 +1282,8 @@ class FeedPlugin(IPlugin):
             self.sink.write(LOT_STATE_TOPIC, envelope(
                 type='LOT_STATE', lot=L['lot'], product=L['product'],
                 part=L.get('part') or L['product'],
-                step=L['step'], tool=L['tool'], done_steps=L['done_steps'],
+                step=L['step'], fam=L.get('fam') or '', tool=L['tool'],
+                done_steps=L['done_steps'],
                 run=self.run_id, warm_t=self._warm_t, day=snap['day'],
                 cohort=L.get('cohort') or self._cohort_of(L['lot']),
                 due=L.get('due'), rel=L.get('rel'), prio=L.get('prio'),

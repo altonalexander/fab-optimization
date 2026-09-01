@@ -6,6 +6,7 @@ import { RouteIndex, RouteProduct } from './RoutePages.jsx'
 import SlatePage from './SlatePage.jsx'
 import { useRoute, linkTo, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
+import ToolFlow from './ToolFlow.jsx'
 import StreamChart from './StreamChart.jsx'
 import KpiPanel, { KPIS, Info, valueOf, WipSinceDay0 } from './KpiPanel.jsx'
 import ResultsPage from './ResultsPage.jsx'
@@ -510,14 +511,11 @@ function ToolDetail({ id, backHref }) {
         <Stat label="changeovers" value={t.changeovers} sub={t.setup || 'no setup'} />
       </div>
 
-      {t.running_count > 0 && (
-        <>
-          <h4>In flight</h4>
-          <div className="chips">
-            {t.running.map(l => <span key={l} className="chip">{l}</span>)}
-          </div>
-        </>
-      )}
+      {/* Queue -> tool -> out. The queue is the station family's (a lot
+          waits for a family, not a machine); the box and its countdown are
+          this tool's own. */}
+      <h4>Flow</h4>
+      <ToolFlow t={t} />
 
       <h4>Recent decisions</h4>
       {t.recent_decisions.length === 0 ? (
