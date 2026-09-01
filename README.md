@@ -134,6 +134,17 @@ the tables cannot: where in the fab the queue is building, and whether it
 is one bay or a whole area. The selection lives in the URL
 (`#/floor?bay=8,2`), so a view is pasteable.
 
+### Products — the ten routes at a glance
+![products](docs/screenshots/products.png)
+
+The ten saleable LVHM products, one card each: route length in steps,
+**visits** (consecutive steps in one bay, collapsed — always well below
+steps, which is the re-entrancy), the areas touched, a bar of where the
+route's steps are spent by process area, and how many cohorts and lots of
+that product are live in the fab right now. Routes run from 242 to 583
+steps and every one of them spends most of its time in wet etch. Each card
+opens the product's route page.
+
 ### Routes — what a product's journey looks like
 ![routes](docs/screenshots/routes.png)
 
