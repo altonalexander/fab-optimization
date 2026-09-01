@@ -108,6 +108,20 @@ where it counts: at the top of the log the tool is choosing one lot from
 `slate-fallback` rows at the bottom are from the first hours after the
 switch, before the planner had a token for this tool.
 
+### Tool — setups and changeovers
+![tool-changeovers](docs/screenshots/tool-changeovers.png)
+
+`#/tools/Implant_132_870`: the same page on an implanter, where the
+**setup** column is the story. This tool has done 21 changeovers; reading
+down the log it runs a block of lots in `SU132_1`, switches to `SU132_2`,
+then `SU132_3`, then back — each switch costs setup time and, under
+SMT2020's minimum-run-length rule, commits the tool to a run of that setup
+before it may switch again. The dispatch rule sees the queue of 6–16 lots
+across those setups and decides both which lot goes next and, implicitly,
+when the tool pays for a changeover. This is the sequencing problem a
+per-cycle assignment is blind to (see `docs/adr/0002`), visible one
+decision at a time.
+
 ### Floor — the cleanroom as a map
 ![floor](docs/screenshots/floor.png)
 
