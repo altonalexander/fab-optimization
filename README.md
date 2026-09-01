@@ -87,10 +87,12 @@ the lot-level view of what the dispatch rule is doing to a product.
 ![tools](docs/screenshots/tools.png)
 
 All 1,313 tools in 106 groups, busiest first, with the online roster over
-time (breakdowns and PM take tools out; the feed brings them back). Queue
-depth beside an online tool is where lots are waiting, i.e. where the
-dispatch decision matters most. Each row drills down to a single tool's
-dispatches and the choice set it was offered.
+time (breakdowns and PM take tools out; the feed brings them back, and a
+watchdog holds the roster if an event is lost). Expanding a group — here
+`WE_FE_84`, 17 wet-etch tools, 7,247 dispatches — shows each tool's queue
+and dispatch count; queue depth beside an online tool is where lots are
+waiting, i.e. where the dispatch decision matters most. Each tool card
+drills down to its dispatches and the choice set it was offered.
 
 ### Floor — the cleanroom as a map
 ![floor](docs/screenshots/floor.png)
