@@ -83,6 +83,19 @@ from the product's achieved rate says whether it is in reach (`0 of 6
 projected late`, worst slack +6.6 d). Rework shows as a jog upward. This is
 the lot-level view of what the dispatch rule is doing to a product.
 
+### Lots — one lot at a time
+![lots-lotview](docs/screenshots/lots-lotview.png)
+
+The same cohort view switched from **envelope** to **lots**: `part_3-d47`,
+six lots released on day 47 with 583 steps ahead of them, each drawn as its
+own line. Warm-up is black; from the `sim start` rule each lot is coloured
+by what it is doing at the last point — waiting on its cohort for a batch
+(purple), queued for a tool (grey), processing (green) — and the dashed
+rays project each one to the zero line at the product's achieved rate, to
+be read against its due-date dot. Here the cohort has spread to 78 steps
+between fastest and slowest, yet 0 of 6 are projected late with 3.5 days
+of slack on the worst. Clicking a line opens that lot.
+
 ### Tools — who is busy, who is down
 ![tools](docs/screenshots/tools.png)
 
