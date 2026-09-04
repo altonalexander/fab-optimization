@@ -36,6 +36,145 @@ number comparing them is meaningless, and nothing in either program would tell
 you. One `data/` directory, symlinked into the baseline, removes that failure
 mode. That symlink is load-bearing: if it is ever broken, stop.
 
+## What it solves
+
+Nobody can A/B a dispatching rule in a real fab: the demand, the breakdowns
+and the machine set are never the same twice, so a rule that looks better
+this quarter may simply have had an easier quarter. Here every candidate
+starts from the *same* warmed-up fab — 90 simulated days under `fifo`,
+checkpointed — and runs on identical demand and identical breakdowns, so
+the only thing that differs between two rows is the rule. That is the page
+the whole project exists to fill honestly:
+
+![results](docs/screenshots/results.png)
+
+Every run in the Postgres run store, each resumed from the same day-90
+checkpoint: the streaming run beside finished `fifo`, `cr` and `slate`
+benchmark rows, with post-switch means and deltas against a chosen baseline,
+per-KPI series laid over each other, where cycle time goes (queueing,
+batch-holding, processing, delay steps), and the busiest tools per run.
+`bench/README.md` says what the numbers do and do not say.
+
+### The KPIs
+
+The numbers on that page are the same KPIs that head every page of the
+dashboard, each with an (i) that states its definition.
+The header of every page carries the fab KPIs, each with an (i) that states
+its definition; the live tab draws them from day 0. They are **computed by
+the producer**, not the dashboard: `sim_feed.py` samples them once per
+simulated hour over a trailing simulated day, during warm-up and live alike,
+and publishes them on the compacted `fab.kpi.state` topic keyed by run
+(one `KPI_HIST` record with the warm-up series, then one `KPI` record per
+hour). The mirror only draws them. That is deliberate: warm-up and live —
+and, later, the fifo baseline and the dispatcher — are then measured by one
+piece of code, so an A/B compares like with like.
+
+| KPI | definition |
+|---|---|
+| WIP | lots released and not complete (waiting + on a tool) |
+| throughput | lots that completed their route in the trailing day |
+| starts | lots released in the trailing day — today the dataset's `order.txt` schedule verbatim; the number a release policy (CONWIP, workload regulation, mix) would be judged on |
+| cycle time | mean release→complete of those lots, days |
+| on-time delivery | share of those lots done by their due date; mean tardiness of the late ones alongside |
+| tool utilization | share of real tools with a lot processing at the sample instant; the `Delay_*` pseudo-toolset (400 stations for fixed waits, ADR 0008) is excluded |
+| where cycle time goes | lot-hours in the trailing day spent queueing for a tool, holding for batch partners, processing on a real tool, and sitting in route-prescribed delay steps — as shares |
+| busiest tools / toolsets | per run: share of the streamed span each tool had a lot on it, dispatches, queue seen at dispatch; rolled up by family |
+| optimized decisions | dispatch decisions in the trailing day that did **not** fall back to the default rule — 0% for the fifo baseline by construction. A dispatcher running inside the simulator stamps `instance.dispatch_source` before `instance.dispatch()`; anything not `rule:*` counts |
+
+`/api/kpi` returns the series; `/api/state` carries the latest sample.
+
+## Architecture
+
+```
+   ┌──────────── zone 1: equipment ────────────┐
+   │  equipment-sim ──HSMS/SECS-II over TCP──> │
+   │                        amhs-adapter       │   no browser reaches here
+   └────────────────────────┬──────────────────┘
+                            │ ZeroMQ
+   ┌────────────────────────▼─── zone 2: realtime ──────────────────────┐
+   │                                                                    │
+   │   ingest ──> FabState ──> planner ──(CP-SAT, 30-60s)──> Slate      │
+   │   (single writer)              │                    (atomic swap)  │
+   │                                ▼                                   │
+   │   move request ──> slate lookup (~200 ns) ──> decision             │
+   └────────────────────────┬───────────────────────────────────────────┘
+                            │ Kafka
+   ┌────────────────────────▼─── zone 3: data ──────────┐
+   │   kafka · postgres · api (read-only)               │
+   └────────────────────────┬───────────────────────────┘
+                            │ HTTP (nginx)
+   ┌────────────────────────▼─── zone 4: enterprise ────┐
+   │   ui — React dashboard                             │
+   └────────────────────────────────────────────────────┘
+```
+
+The zones are enforced by separate Docker networks, not convention. No service
+touches both the tools and a browser. `dispatch/infra/zones.yaml` is the
+declaration; `dispatch/infra/verify-zones.sh` checks it.
+
+## The components
+
+**The simulator** — `baselines/pyscfabsim/`. A discrete-event model of the fab:
+multi-step routes with rework, setup matrices with minimum-run-lengths,
+batching, time- and piece-based PM, breakdowns, due dates. Runs 730 simulated
+days and reports cycle time, throughput, on-time %, tardiness, utilization.
+Pinned upstream at `ae3d55ef`, read-only — changes belong in `dispatch/` or
+`bench/`. See its `UPSTREAM.md`. What it simplifies — transport is one
+uniform draw for the whole fab, delays are a 400-station pseudo-toolset,
+there is no storage and queue-time constraints are parsed but not enforced —
+and what that hides from an A/B, is inventoried in
+[`docs/adr/0008`](docs/adr/0008-what-pyscfabsim-simplifies.md). It plays three roles: fast batch KPI runs for
+scenario comparison, paced playback for watching one tool, and (designed, not
+built) the environment the dispatcher itself runs inside.
+
+**The dispatch solver** — `dispatch/include/fab/solver.hpp`. A single-period
+assignment: one Boolean per feasible (lot, tool) pair, at-most-one tool per lot,
+tool capacity, batch-furnace firing bounds, reticle exclusivity. CP-SAT via
+OR-Tools when linked, a cost-ordered greedy otherwise. There is **no time
+index** — it assigns, it does not sequence. Backends announce whether they are
+actually linked, so an unlinked solver cannot masquerade as a tie with greedy.
+
+**The planner and slate** — `planner.hpp`, `slate.hpp`. The planner solves on a
+cycle and publishes an immutable `Slate` by atomic pointer swap. The real-time
+path never calls a solver: it reads the slate and answers in ~200 ns, falling
+back to an alternate tool if the primary went down mid-cycle. This split is the
+core design claim of the system.
+
+**The producer** — `producer_sim.hpp`. A load generator, not a fab model: a
+hardcoded product mix, random priorities, coin-flip tool downs. It exists so the
+ready pool does not grow unbounded while the pipeline is exercised. Anything
+that needs fab physics uses the simulator instead.
+
+**The stores** — two, with different jobs. **Kafka** holds live state: the
+compacted `fab.lot.state` / `fab.tool.state` topics are the keyed,
+restart-survivable record the dashboard bootstraps from, which is what solves
+cold start (see below). **Postgres** (`infra/postgres-init.sql`) is the *run*
+store — runs, KPIs and per-tool outcomes, for comparing dispatchers across
+seeds and scenarios. It deliberately holds no live fab state; giving the same
+fact two homes is how they drift.
+
+**The transport** — `transport.hpp` (Kafka), `zmq_transport.hpp` (ZeroMQ),
+`hsms.hpp` and `secs2.hpp` (equipment protocol). SECS-II is real; HSMS is a
+state machine with the wire codec stubbed; the Kafka bodies are sketched against
+librdkafka and not yet compiled.
+
+**The viewer** — one of them now. `dispatch/ui/` is a React 18 + Vite
+dashboard reading the Flask API (`/api/state`, `/api/stream`, `/api/kpi`,
+`/api/runs`, `/api/lots`, `/api/zones`). The what-if tab that called
+`/api/scenario/compare` — the C++ planner re-assigning a synthetic instance
+with tools marked down — is gone from the UI; the endpoint stays for
+`scripts/smoke.sh`, which is what exercises the C++ path. `bench/tools/tool_probe.py` used to carry a second
+one: a `--follow` mode that drew its own terminal view of a tool with its own
+pacing and breakpoints, over a private copy of the run loop. That is gone. The
+probe is now headless-only — run the window, report the time budget — and both
+it and `sim_feed.py` drive the simulator through `bench/tools/sim_runner.py`,
+so a measured run and a published run are the same run rather than two.
+
+What remains of the unification is the transport: the probe still computes the
+per-tool time budget in-process instead of publishing `EquipmentState` onto the
+stream the API already speaks. Once it does, the React tool view can show the
+busy/setup/pm/down/blocked/starved split that today only the terminal has.
+
 ## A tour of the dashboard
 
 Captured from a live session: the fab warmed up for 90 simulated days under
@@ -84,6 +223,15 @@ line are the due dates; a naive projection from the product's achieved rate
 says whether they are in reach (`0 of 6 projected late`, worst slack
 +3.5 d). Rework shows as a jog upward. This is the product-level view of
 what the dispatch rule is doing.
+
+The **lots** tab draws one cohort's burndown (steps left against simulated
+time). Two toggles add context: **± cohorts** overlays the nearest earlier
+(cyan) and later (orange) cohorts of the same product, nearest by release
+*and* due date together so they are the ones that will actually meet it at a
+batch step; **hot lots catching up** overlays the M hot lots (priority 20,
+red dashed) of that product that are behind it in the route and released
+nearest to it — the ones moving fast enough to contend for its batches.
+`/api/lots?part=…` and `/api/lots/hot` serve them.
 
 ### Lots — one lot at a time
 ![lots-lotview](docs/screenshots/lots-lotview.png)
@@ -181,14 +329,10 @@ benchmark result files. This is the read-only window onto the dispatcher;
 no write path reaches the fab from here.
 
 ### Results — dispatchers compared on equal terms
-![results](docs/screenshots/results.png)
 
-Every run in the Postgres run store, each resumed from the same day-90
-checkpoint: the streaming run beside finished `fifo`, `cr` and `slate`
-benchmark rows, with post-switch means and deltas against a chosen baseline,
-per-KPI series laid over each other, where cycle time goes (queueing,
-batch-holding, processing, delay steps), and the busiest tools per run.
-This is the page the whole project exists to fill honestly — see
+The screenshot at the top of this README. Every run in the Postgres run store,
+each resumed from the same day-90 checkpoint, with post-switch means and
+deltas against a chosen baseline — see [What it solves](#what-it-solves) and
 `bench/README.md` for what the numbers do and do not say.
 
 ### Topology — the pipeline itself
@@ -201,98 +345,6 @@ cannot plan faster than that, so the gap is the solver's cost in fab time
 — mirror lag from zone 2 to zone 3, frames seen, and which services
 straddle a boundary. When the fab looks wrong, this is where to check
 whether it is the fab or the pipe.
-
-## Architecture
-
-```
-   ┌──────────── zone 1: equipment ────────────┐
-   │  equipment-sim ──HSMS/SECS-II over TCP──> │
-   │                        amhs-adapter       │   no browser reaches here
-   └────────────────────────┬──────────────────┘
-                            │ ZeroMQ
-   ┌────────────────────────▼─── zone 2: realtime ──────────────────────┐
-   │                                                                    │
-   │   ingest ──> FabState ──> planner ──(CP-SAT, 30-60s)──> Slate      │
-   │   (single writer)              │                    (atomic swap)  │
-   │                                ▼                                   │
-   │   move request ──> slate lookup (~200 ns) ──> decision             │
-   └────────────────────────┬───────────────────────────────────────────┘
-                            │ Kafka
-   ┌────────────────────────▼─── zone 3: data ──────────┐
-   │   kafka · postgres · api (read-only)               │
-   └────────────────────────┬───────────────────────────┘
-                            │ HTTP (nginx)
-   ┌────────────────────────▼─── zone 4: enterprise ────┐
-   │   ui — React dashboard                             │
-   └────────────────────────────────────────────────────┘
-```
-
-The zones are enforced by separate Docker networks, not convention. No service
-touches both the tools and a browser. `dispatch/infra/zones.yaml` is the
-declaration; `dispatch/infra/verify-zones.sh` checks it.
-
-## The components
-
-**The simulator** — `baselines/pyscfabsim/`. A discrete-event model of the fab:
-multi-step routes with rework, setup matrices with minimum-run-lengths,
-batching, time- and piece-based PM, breakdowns, due dates. Runs 730 simulated
-days and reports cycle time, throughput, on-time %, tardiness, utilization.
-Pinned upstream at `ae3d55ef`, read-only — changes belong in `dispatch/` or
-`bench/`. See its `UPSTREAM.md`. What it simplifies — transport is one
-uniform draw for the whole fab, delays are a 400-station pseudo-toolset,
-there is no storage and queue-time constraints are parsed but not enforced —
-and what that hides from an A/B, is inventoried in
-[`docs/adr/0008`](docs/adr/0008-what-pyscfabsim-simplifies.md). It plays three roles: fast batch KPI runs for
-scenario comparison, paced playback for watching one tool, and (designed, not
-built) the environment the dispatcher itself runs inside.
-
-**The dispatch solver** — `dispatch/include/fab/solver.hpp`. A single-period
-assignment: one Boolean per feasible (lot, tool) pair, at-most-one tool per lot,
-tool capacity, batch-furnace firing bounds, reticle exclusivity. CP-SAT via
-OR-Tools when linked, a cost-ordered greedy otherwise. There is **no time
-index** — it assigns, it does not sequence. Backends announce whether they are
-actually linked, so an unlinked solver cannot masquerade as a tie with greedy.
-
-**The planner and slate** — `planner.hpp`, `slate.hpp`. The planner solves on a
-cycle and publishes an immutable `Slate` by atomic pointer swap. The real-time
-path never calls a solver: it reads the slate and answers in ~200 ns, falling
-back to an alternate tool if the primary went down mid-cycle. This split is the
-core design claim of the system.
-
-**The producer** — `producer_sim.hpp`. A load generator, not a fab model: a
-hardcoded product mix, random priorities, coin-flip tool downs. It exists so the
-ready pool does not grow unbounded while the pipeline is exercised. Anything
-that needs fab physics uses the simulator instead.
-
-**The stores** — two, with different jobs. **Kafka** holds live state: the
-compacted `fab.lot.state` / `fab.tool.state` topics are the keyed,
-restart-survivable record the dashboard bootstraps from, which is what solves
-cold start (see below). **Postgres** (`infra/postgres-init.sql`) is the *run*
-store — runs, KPIs and per-tool outcomes, for comparing dispatchers across
-seeds and scenarios. It deliberately holds no live fab state; giving the same
-fact two homes is how they drift.
-
-**The transport** — `transport.hpp` (Kafka), `zmq_transport.hpp` (ZeroMQ),
-`hsms.hpp` and `secs2.hpp` (equipment protocol). SECS-II is real; HSMS is a
-state machine with the wire codec stubbed; the Kafka bodies are sketched against
-librdkafka and not yet compiled.
-
-**The viewer** — one of them now. `dispatch/ui/` is a React 18 + Vite
-dashboard reading the Flask API (`/api/state`, `/api/stream`, `/api/kpi`,
-`/api/runs`, `/api/lots`, `/api/zones`). The what-if tab that called
-`/api/scenario/compare` — the C++ planner re-assigning a synthetic instance
-with tools marked down — is gone from the UI; the endpoint stays for
-`scripts/smoke.sh`, which is what exercises the C++ path. `bench/tools/tool_probe.py` used to carry a second
-one: a `--follow` mode that drew its own terminal view of a tool with its own
-pacing and breakpoints, over a private copy of the run loop. That is gone. The
-probe is now headless-only — run the window, report the time budget — and both
-it and `sim_feed.py` drive the simulator through `bench/tools/sim_runner.py`,
-so a measured run and a published run are the same run rather than two.
-
-What remains of the unification is the transport: the probe still computes the
-per-tool time budget in-process instead of publishing `EquipmentState` onto the
-stream the API already speaks. Once it does, the React tool view can show the
-busy/setup/pm/down/blocked/starved split that today only the terminal has.
 
 ## Cold start
 
@@ -411,41 +463,6 @@ Two processes would mean two producer run ids, and the dashboard would be
 drawing a snapshot from one run against a live stream from another — which it
 will now tell you about (the header badge goes red), but is better not to do.
 See [`docs/adr/0003`](docs/adr/0003-cold-start-snapshot-and-delta.md).
-
-### The KPIs
-
-The header of every page carries the fab KPIs, each with an (i) that states
-its definition; the live tab draws them from day 0. They are **computed by
-the producer**, not the dashboard: `sim_feed.py` samples them once per
-simulated hour over a trailing simulated day, during warm-up and live alike,
-and publishes them on the compacted `fab.kpi.state` topic keyed by run
-(one `KPI_HIST` record with the warm-up series, then one `KPI` record per
-hour). The mirror only draws them. That is deliberate: warm-up and live —
-and, later, the fifo baseline and the dispatcher — are then measured by one
-piece of code, so an A/B compares like with like.
-
-| KPI | definition |
-|---|---|
-| WIP | lots released and not complete (waiting + on a tool) |
-| throughput | lots that completed their route in the trailing day |
-| starts | lots released in the trailing day — today the dataset's `order.txt` schedule verbatim; the number a release policy (CONWIP, workload regulation, mix) would be judged on |
-| cycle time | mean release→complete of those lots, days |
-| on-time delivery | share of those lots done by their due date; mean tardiness of the late ones alongside |
-| tool utilization | share of real tools with a lot processing at the sample instant; the `Delay_*` pseudo-toolset (400 stations for fixed waits, ADR 0008) is excluded |
-| where cycle time goes | lot-hours in the trailing day spent queueing for a tool, holding for batch partners, processing on a real tool, and sitting in route-prescribed delay steps — as shares |
-| busiest tools / toolsets | per run: share of the streamed span each tool had a lot on it, dispatches, queue seen at dispatch; rolled up by family |
-| optimized decisions | dispatch decisions in the trailing day that did **not** fall back to the default rule — 0% for the fifo baseline by construction. A dispatcher running inside the simulator stamps `instance.dispatch_source` before `instance.dispatch()`; anything not `rule:*` counts |
-
-`/api/kpi` returns the series; `/api/state` carries the latest sample.
-
-The **lots** tab draws one cohort's burndown (steps left against simulated
-time). Two toggles add context: **± cohorts** overlays the nearest earlier
-(cyan) and later (orange) cohorts of the same product, nearest by release
-*and* due date together so they are the ones that will actually meet it at a
-batch step; **hot lots catching up** overlays the M hot lots (priority 20,
-red dashed) of that product that are behind it in the route and released
-nearest to it — the ones moving fast enough to contend for its batches.
-`/api/lots?part=…` and `/api/lots/hot` serve them.
 
 ### Runs and the results tab
 
@@ -661,8 +678,8 @@ See `BUILD.md` for the toolchain and the OR-Tools recipe.
 
 ## Credits
 
-This project stands on two pieces of work by other people. If you use it,
-credit them too.
+This project stands on three pieces of work by other people — a simulator,
+a solver and a dataset. If you use it, credit them too.
 
 ### PySCFabSim — the baseline simulator
 
@@ -739,9 +756,10 @@ formal references.
 }
 ```
 
-If you publish results, cite the two works underneath this one as well. They
-are not incidental: PySCFabSim produced every baseline number reported here,
-and SMT2020 is the load both it and the dispatcher read.
+If you publish results, cite the three works underneath this one as well.
+They are not incidental: PySCFabSim produced every baseline number reported
+here, SMT2020 is the load both it and the dispatcher read, and CP-SAT did the
+search under every slate decision.
 
 ```bibtex
 @article{kopp2020smt2020,
