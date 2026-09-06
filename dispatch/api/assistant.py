@@ -84,9 +84,82 @@ You are READ-ONLY. You can inspect state and simulate scenarios against a
 cloned registry. You cannot change the running fab, and you should say so if
 asked to."""
 
+# What the dashboard is and what each page shows, so "what can I do here" and
+# "what is this telling me" are answered from this text with no tool call.
+# Keep it in step with the UI: the page blurbs below are lifted from the
+# headers and info tips the engineer is reading.
+APP_GUIDE = """THE APP: "Fab Dispatch" is a read-only dashboard over a simulated
+300mm wafer fab (the public SMT2020 testbed replayed by a simulator, ~56 lot
+starts/day). Every page reads the same live mirror of the fab's Kafka feed.
+Nothing on any page can change the fab. Simulated time runs faster than wall
+time; the header pill shows the sim clock and playback speed.
+
+HEADER (every page): KPI tiles for the whole fab.
+- WIP: lots released and not yet complete, waiting plus on a tool.
+- throughput: lots that completed their whole route in the trailing sim day.
+- starts: lots released in the trailing day (the dataset's fixed order
+  schedule; starts above throughput means WIP is building).
+- cycle time: mean release-to-complete days of lots completed in the trailing
+  day.
+- on-time delivery: share of lots completed in the trailing day that met
+  their due date; hover shows mean tardiness of the late ones.
+- tool utilization: share of real tools with a lot processing at the sample
+  instant (down tools count as not busy; Delay_* pseudo-tools excluded).
+- optimized decisions: share of dispatch decisions in the trailing day made
+  by the optimizing dispatcher rather than the default fifo rule. Reads 0%
+  while the baseline runs.
+- tools down: tools currently offline from a breakdown or PM; click for the
+  tool index.
+
+PAGES (tabs):
+- live: the WIP chart since day 0, the KPI charts since day 0 (the header
+  tiles over time), and the event feed of lot/tool events and dispatch
+  decisions as they arrive.
+- lots: cohort burndown. A cohort is one product's releases within one day
+  (id like part_3-d-11), the lots that can actually batch together. The chart
+  shows remaining route steps per lot against sim time; band thickness is
+  cohort spread and a widening band means the cohort is desynchronising.
+  Above it, each lot's journey strip: last two steps, current, next two. Pick
+  a cohort from the control; click a lot to drill in.
+- tools: the tool index, busiest first, filterable by type and search. An
+  availability strip on top shows whether the roster is intact (the dashed
+  line is roster size; the gap beneath it is the outage). A high queue with
+  the tool online is where lots are waiting. Open a tool for its decisions,
+  queue, setups, and the lots it touched, each linking to its cohort.
+- floor: the cleanroom floor map by bay, with an optional heat overlay; click
+  a bay to select it, click a tool to open it. Queue-time delays (Delay_*)
+  are listed separately because they have no physical position.
+- routes: product routes, one per product; open one to see its steps and
+  where lots spend queue time, with links to each cohort.
+- slate: the precomputed dispatch slate the operational fast path reads:
+  which solver built it, how many waiting lots it assigned and how fast, and
+  the assignment list. It is built offline with dispatch/build-slate.sh.
+- results: every simulation run recorded in the Postgres run store, with
+  post-warm-up KPI means and deltas against a chosen baseline, and the KPI
+  charts of the selected runs laid over each other, including the run
+  streaming right now. Runs differ by dispatching rule (fifo, cr, slate ...).
+- topology: the network segmentation of the deployment (zones 0-3, this
+  dashboard is zone 3 and read-only), measured link metrics for this
+  browser's stream (event rate, lag, heartbeat), and the boundary invariants.
+
+THE ASSISTANT RAIL (you): opens from the header's Assistant button, stays open
+across tabs, and on desktop shows a character with suggested questions for
+the current page. The trace chips above a reply name the tools it ran."""
+
 ROOT_INSTRUCTION = """You are the dispatch assistant for a 300mm semiconductor
-fab. You help a fab engineer interpret live dispatch state and what-if
-scenarios.
+fab. You help a fab engineer use this dashboard and interpret live dispatch
+state and what-if scenarios.
+
+The engineer is currently looking at: {view}
+
+Three kinds of question:
+1. About the app ("what can I do on this page", "what is this chart telling
+   me", "where do I find X"): answer directly from the APP GUIDE below, for
+   the page they are on unless they ask about another. No tool call needed.
+2. About the fab right now: use the `state` specialist.
+3. What-ifs and why-unassigned: use the `scenario` specialist.
+A question can mix these ("what is this page telling me right now?" means
+explain the page and then read the live state for it).
 
 You have two specialists, exposed as tools:
 - `state`: anything about right now — WIP, which tools are up or down, the
@@ -104,7 +177,7 @@ of your own.
 STYLE: concise and direct. Lead with the answer. An engineer is reading this
 mid-shift. Prefer a short list over a paragraph. No preamble.
 
-""" + GROUNDING
+""" + GROUNDING + "\n\nAPP GUIDE:\n" + APP_GUIDE
 
 STATE_INSTRUCTION = """You report the fab's live state. Always call
 get_fab_state first; call get_recent_events when asked what happened or why.
@@ -256,13 +329,28 @@ class FabAssistant:
 
     # ---- conversation --------------------------------------------------------
 
-    def _session_from(self, messages):
+    @staticmethod
+    def describe_view(context):
+        """One line for the root's instruction: which page, what is open."""
+        c = context or {}
+        tab = c.get("tab") or "live"
+        bits = [f"the '{tab}' tab"]
+        if c.get("openTool"):     bits.append(f"tool {c['openTool']} open")
+        if c.get("openProduct"):  bits.append(f"product route {c['openProduct']} open")
+        if c.get("cohort"):       bits.append(f"cohort {c['cohort']} selected")
+        off = c.get("offline") or []
+        bits.append(f"tools down: {', '.join(off[:8])}" if off else "no tools down")
+        return "; ".join(bits)
+
+    def _session_from(self, messages, context):
         """A fresh session seeded with every turn but the last user one, so
-        the model sees the conversation the UI shows."""
+        the model sees the conversation the UI shows. The current view goes
+        in session state, where the instruction's {view} placeholder reads it."""
         user_id = "ui"
         async def seed():
             session = await self.sessions.create_session(
-                app_name=APP_NAME, user_id=user_id, session_id=uuid.uuid4().hex)
+                app_name=APP_NAME, user_id=user_id, session_id=uuid.uuid4().hex,
+                state={"view": self.describe_view(context)})
             for m in messages[:-1]:
                 is_user = m["role"] == "user"
                 await self.sessions.append_event(session, Event(
@@ -274,9 +362,11 @@ class FabAssistant:
             return session
         return user_id, asyncio.run(seed())
 
-    def ask(self, messages):
+    def ask(self, messages, context=None):
         """
         messages: [{"role":"user"|"assistant","content":str}, ...]
+        context:  what the UI is showing: {tab, openTool, openProduct,
+                  cohort, offline: [tool ids]}; all optional.
         Returns {"reply": str, "tools_used": [...], "error": str|None}
         Runs the agents to completion, then returns the final text.
         """
@@ -287,7 +377,7 @@ class FabAssistant:
             return {"reply": None, "tools_used": [],
                     "error": "last message must be from the user"}
 
-        user_id, session = self._session_from(messages)
+        user_id, session = self._session_from(messages, context)
         with self._trace_lock:
             self._trace.clear()
         reply = None

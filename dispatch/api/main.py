@@ -2560,7 +2560,9 @@ def chat():
     if len(msgs) > 40:
         msgs = msgs[-40:]                  # bound context growth
 
-    result = assistant.ask(msgs)
+    # What the UI is showing, so "what can I do on this page" has an answer.
+    ctx = body.get("context") if isinstance(body.get("context"), dict) else None
+    result = assistant.ask(msgs, ctx)
     if result["error"] and not result["reply"]:
         return jsonify(result), 503
     return jsonify(result)

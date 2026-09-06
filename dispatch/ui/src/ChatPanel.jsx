@@ -43,9 +43,11 @@ export default function ChatPanel() {
       const r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Send only role/content; tool metadata stays client-side.
+        // Send only role/content; tool metadata stays client-side. The
+        // current view rides along so the assistant can explain this page.
         body: JSON.stringify({
           messages: next.map(m => ({ role: m.role, content: m.content })),
+          context: context || {},
         }),
       })
       const j = await r.json()
