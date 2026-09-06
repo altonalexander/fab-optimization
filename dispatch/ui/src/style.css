@@ -1,5 +1,8 @@
 :root{--bg:#f7f8fa;--fg:#111827;--mut:#6b7280;--line:#e5e7eb;--card:#fff}
 *{box-sizing:border-box}
+/* The scrollbar gutter is always reserved: a short page and a long page
+   otherwise differ by its width, and every tab click shifts the layout. */
+html{overflow-y:scroll}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
@@ -638,7 +641,7 @@ a.tf-run:hover .tf-run-in{box-shadow:inset 0 0 0 2px #93c5fd}
   transition:transform .2s,box-shadow .2s}
 /* Zoomed in: the figure is larger than the circle and centred on the face,
    so the crown and shoulders crop against the ring. */
-.launcher-badge .avatar{position:absolute;width:98px;height:98px;left:-15px;top:-13px}
+.launcher-badge .avatar{position:absolute;width:98px;height:98px;left:-15px;top:-23px}
 .launcher-badge:hover{transform:translateY(-2px);
   box-shadow:0 0 0 3px #fff,0 0 0 7px rgba(37,99,235,.5),0 10px 24px rgba(0,0,0,.26)}
 .launcher-badge::after{content:"";position:absolute;inset:-6px;border-radius:50%;
@@ -672,3 +675,15 @@ a.tf-run:hover .tf-run-in{box-shadow:inset 0 0 0 2px #93c5fd}
 @media(prefers-reduced-motion:reduce){
   .launcher,.launcher-badge::after,.launcher-caret,.launcher-q{animation:none}
 }
+
+/* Assistant replies are markdown-lite: tight paragraphs and lists, links in
+   the app's link colour so a tool or cohort name reads as a jump. */
+.md p{margin:0 0 6px}
+.md p:last-child,.md ul:last-child{margin-bottom:0}
+.md ul{margin:0 0 6px;padding-left:18px}
+.md li{margin:2px 0}
+.md a{color:#1d4ed8;text-decoration:underline;text-underline-offset:2px}
+.md a:hover{color:#1e40af}
+.md code{font-family:ui-monospace,monospace;font-size:12px;background:#e5e7eb;
+  padding:0 4px;border-radius:3px}
+.bubble:has(.md){white-space:normal}

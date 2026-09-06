@@ -2484,7 +2484,16 @@ def scenario_runner(tool_overrides):
     }
 
 
-assistant = FabAssistant(mirror, scenario_runner)
+def _local_get(path):
+    """The assistant reading a page's data the way the page does: through
+    this app's own GET endpoint, in-process. Read-only by construction."""
+    with app.test_client() as c:
+        r = c.get(path)
+        body = r.get_json(silent=True)
+        return r.status_code, body if body is not None else r.get_data(as_text=True)
+
+
+assistant = FabAssistant(mirror, scenario_runner, local_get=_local_get)
 
 
 @app.get("/api/sim/control")
@@ -2542,7 +2551,8 @@ def chat_status():
     """Whether the assistant is configured, and which model backs it."""
     return jsonify({"available": assistant.available, "error": assistant.error,
                     "model": os.getenv("VERTEX_MODEL", "gemini-2.5-flash"),
-                    "project": assistant.project})
+                    "project": assistant.project,
+                    "readme": assistant.readme_loaded})
 
 
 @app.post("/api/chat")

@@ -1,24 +1,28 @@
-# api/assistant.py — Gemini agents (Google ADK) on Vertex AI, grounded in live
-# fab state.
+# api/assistant.py — Gemini (Google ADK) on Vertex AI, grounded in live fab
+# state and the repo README.
 #
 # ZONE 3 boundary component. Same read-only rule as the rest of the API: the
-# assistant can READ live state and RUN SCENARIOS against a cloned registry.
-# It has no path to the dispatcher and cannot change the fab.
+# assistant can READ live state, READ any page's data, and RUN SCENARIOS
+# against a cloned registry. It has no path to the dispatcher and cannot
+# change the fab.
 #
-# Grounding strategy: the model is never asked to recall fab numbers. Every
-# figure it states comes from a tool result injected into the conversation. A
-# dispatch assistant that hallucinates a tool ID is worse than no assistant.
+# Two kinds of question, two sources:
+#   "how does this page work"      -> the README, held in the system prompt.
+#                                     No tool call: one model round trip.
+#   "what is this page showing me" -> a tool call to the page's own API
+#                                     endpoint (get_page_data), or to live
+#                                     state / the planner. Two round trips.
 #
-# Shape: one root "dispatch" agent that answers the engineer, routing to two
-# specialists it calls as tools -- `state` (what is happening now) and
-# `scenario` (what-if against the cloned registry). Each specialist owns the
-# tools for its question so the root never mixes a live number with a
-# simulated one. Adding a specialist (say, a KPI-history agent over Postgres)
-# is one more LlmAgent in AGENTS below; the routing is the root's job.
+# Latency is the design constraint. One agent, no sub-agents: every extra
+# agent is another model call. Thinking is off: Flash answers a grounded
+# question in well under a second without it and ~2 s slower with it. The
+# system prompt is static (README included) and long enough that Vertex's
+# implicit prompt cache serves it from the second request on; the only
+# per-request text is the one-line view description at the very end.
 #
-# Runs in-process: the ADK Runner is driven synchronously per request with an
+# Runs in-process: the ADK Runner is driven synchronously per request over an
 # in-memory session rebuilt from the transcript the UI sends. Nothing persists
-# server-side, which keeps the API stateless like every other endpoint.
+# server-side, so the API stays stateless like every other endpoint.
 
 import asyncio
 import json
@@ -37,7 +41,8 @@ try:
     from google.adk.events import Event
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
-    from google.adk.tools import AgentTool
+    from google.adk.models.google_llm import Gemini
+    from google import genai
     from google.genai import types as gtypes
     _SDK = True
 except ImportError:
@@ -46,8 +51,15 @@ except ImportError:
 MODEL       = os.getenv("VERTEX_MODEL", "gemini-2.5-flash")
 REGION      = os.getenv("VERTEX_REGION", "us-central1")
 PROJECT     = os.getenv("GOOGLE_CLOUD_PROJECT", "")
-MAX_TOKENS  = int(os.getenv("ASSISTANT_MAX_TOKENS", "1500"))
+MAX_TOKENS  = int(os.getenv("ASSISTANT_MAX_TOKENS", "1200"))
+# Thinking budget in tokens; 0 is off. Leave off unless answers get sloppy.
+THINKING    = int(os.getenv("ASSISTANT_THINKING", "0"))
 APP_NAME    = "fab-dispatch"
+_HERE       = os.path.dirname(os.path.abspath(__file__))
+# The repo README is the help guide. Resolved relative to this file so the
+# dev box finds it; the container sets README_PATH (or ships without one and
+# the agent says so rather than guessing).
+README_PATH = os.getenv("README_PATH", os.path.join(_HERE, "..", "..", "README.md"))
 
 
 def _adc_project():
@@ -60,158 +72,146 @@ def _adc_project():
         return ""
 
 
-GROUNDING = """GROUNDING RULES — these are absolute:
+def _read_readme():
+    try:
+        with open(README_PATH, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+# Which API endpoint backs which page, for get_page_data. Only GET endpoints
+# that already serve the dashboard; nothing here can write.
+READABLE = ("/api/state", "/api/events", "/api/kpi", "/api/lots", "/api/tools",
+            "/api/layout", "/api/routes", "/api/slate/status", "/api/slate/compare",
+            "/api/runs", "/api/zones", "/api/decisions")
+PAGE_DATA = """PAGE -> DATA ENDPOINT (for get_page_data):
+- #/live                 /api/state (counts, per-tool status, KPIs, sim clock)
+                         /api/events?limit=N (recent feed), /api/kpi (history)
+- #/lots                 /api/lots (cohort index), /api/lots/hot (lots to watch)
+- #/lots?cohort=ID       /api/lots/ID (that cohort's lots, journeys, burndown)
+- #/tools                /api/tools (index: queues, status, groups),
+                         /api/tools/availability (roster over time)
+- #/tools/ID             /api/tools/ID (that tool's decisions, setups, lots)
+- #/floor                /api/layout (bays and positions), /api/layout/state
+                         (what is on each position now)
+- #/routes               /api/routes (products), #/routes/P -> /api/routes/P
+- #/slate                /api/slate/status, /api/slate/compare
+- #/results              /api/runs (all runs), /api/runs/N/kpi, /api/runs/N/tools
+- #/topology             /api/zones
+Always pass the path exactly as listed, e.g. get_page_data("/api/tools/ETCH_11")."""
+
+LINKS = """LINKING: the dashboard is hash-routed. When a reply names something that
+has a page, link it in markdown so the engineer can jump there:
+- a tool:     [ETCH_11](#/tools/ETCH_11)
+- a cohort:   [part_3-d-11](#/lots?cohort=part_3-d-11)
+- a product:  [part_3](#/routes/part_3)
+- a bay:      [bay 3,2](#/floor?bay=3,2)
+- pages:      [tools](#/tools) [floor](#/floor) [lots](#/lots) [routes](#/routes)
+              [slate](#/slate) [results](#/results) [topology](#/topology) [live](#/live)
+Link only things the tools or the README actually named. One link per item,
+inline, never a bare URL."""
+
+GROUNDING = """GROUNDING RULES — absolute:
 - Every number, tool ID, lot ID, and recipe you state must come from a tool
   result in this conversation. Never recall or invent one.
 - If you don't have the data, call a tool. If a tool can't get it, say so
   plainly rather than estimating.
-- When you don't know why something happened, say you don't know and name what
-  data would answer it.
+- When you don't know why something happened, say you don't know and name
+  what data would answer it.
+- You are READ-ONLY. You can read pages, live state and run scenarios against
+  a cloned registry. You cannot change the fab; say so if asked to."""
 
-DOMAIN CONTEXT you may reason from:
+DOMAIN = """DOMAIN CONTEXT you may reason from:
 - Tool kinds: SINGLE_WAFER (one lot, recipe-change setup), BATCH_FURNACE
-  (fixed process time, needs a minimum batch to fire), CLUSTER (per-chamber
-  qualification, parallel), LITHO_SCANNER (reticle is exclusive — one reticle
-  cannot be on two scanners), METROLOGY (sampled; skipping is valid),
-  PROBE_TESTER (probe card must match product; hot/cold soak is expensive).
+  (fixed process time, needs a minimum batch), CLUSTER (per-chamber
+  qualification, parallel), LITHO_SCANNER (reticle is exclusive), METROLOGY
+  (sampled; skipping is valid), PROBE_TESTER (probe card must match product).
 - Common reasons a lot is unassigned: no qualified tool, no free capacity,
   batch below minimum, reticle held elsewhere, no matching probe card.
-- Three horizons: strategic (weekly MILP), tactical (10-30s CP-SAT), and the
-  operational fast path (sub-millisecond, no solving — it reads a precomputed
-  slate).
+- Delay_* stations are queue-time placeholders, not equipment."""
 
-You are READ-ONLY. You can inspect state and simulate scenarios against a
-cloned registry. You cannot change the running fab, and you should say so if
-asked to."""
+INSTRUCTION_HEAD = """You are the assistant built into the Fab Dispatch dashboard, a
+read-only view of a simulated 300mm wafer fab. You help the engineer using it.
 
-# What the dashboard is and what each page shows, so "what can I do here" and
-# "what is this telling me" are answered from this text with no tool call.
-# Keep it in step with the UI: the page blurbs below are lifted from the
-# headers and info tips the engineer is reading.
-APP_GUIDE = """THE APP: "Fab Dispatch" is a read-only dashboard over a simulated
-300mm wafer fab (the public SMT2020 testbed replayed by a simulator, ~56 lot
-starts/day). Every page reads the same live mirror of the fab's Kafka feed.
-Nothing on any page can change the fab. Simulated time runs faster than wall
-time; the header pill shows the sim clock and playback speed.
-
-HEADER (every page): KPI tiles for the whole fab.
-- WIP: lots released and not yet complete, waiting plus on a tool.
-- throughput: lots that completed their whole route in the trailing sim day.
-- starts: lots released in the trailing day (the dataset's fixed order
-  schedule; starts above throughput means WIP is building).
-- cycle time: mean release-to-complete days of lots completed in the trailing
-  day.
-- on-time delivery: share of lots completed in the trailing day that met
-  their due date; hover shows mean tardiness of the late ones.
-- tool utilization: share of real tools with a lot processing at the sample
-  instant (down tools count as not busy; Delay_* pseudo-tools excluded).
-- optimized decisions: share of dispatch decisions in the trailing day made
-  by the optimizing dispatcher rather than the default fifo rule. Reads 0%
-  while the baseline runs.
-- tools down: tools currently offline from a breakdown or PM; click for the
-  tool index.
-
-PAGES (tabs):
-- live: the WIP chart since day 0, the KPI charts since day 0 (the header
-  tiles over time), and the event feed of lot/tool events and dispatch
-  decisions as they arrive.
-- lots: cohort burndown. A cohort is one product's releases within one day
-  (id like part_3-d-11), the lots that can actually batch together. The chart
-  shows remaining route steps per lot against sim time; band thickness is
-  cohort spread and a widening band means the cohort is desynchronising.
-  Above it, each lot's journey strip: last two steps, current, next two. Pick
-  a cohort from the control; click a lot to drill in.
-- tools: the tool index, busiest first, filterable by type and search. An
-  availability strip on top shows whether the roster is intact (the dashed
-  line is roster size; the gap beneath it is the outage). A high queue with
-  the tool online is where lots are waiting. Open a tool for its decisions,
-  queue, setups, and the lots it touched, each linking to its cohort.
-- floor: the cleanroom floor map by bay, with an optional heat overlay; click
-  a bay to select it, click a tool to open it. Queue-time delays (Delay_*)
-  are listed separately because they have no physical position.
-- routes: product routes, one per product; open one to see its steps and
-  where lots spend queue time, with links to each cohort.
-- slate: the precomputed dispatch slate the operational fast path reads:
-  which solver built it, how many waiting lots it assigned and how fast, and
-  the assignment list. It is built offline with dispatch/build-slate.sh.
-- results: every simulation run recorded in the Postgres run store, with
-  post-warm-up KPI means and deltas against a chosen baseline, and the KPI
-  charts of the selected runs laid over each other, including the run
-  streaming right now. Runs differ by dispatching rule (fifo, cr, slate ...).
-- topology: the network segmentation of the deployment (zones 0-3, this
-  dashboard is zone 3 and read-only), measured link metrics for this
-  browser's stream (event rate, lag, heartbeat), and the boundary invariants.
-
-THE ASSISTANT RAIL (you): opens from the header's Assistant button, stays open
-across tabs, and on desktop shows a character with suggested questions for
-the current page. The trace chips above a reply name the tools it ran."""
-
-ROOT_INSTRUCTION = """You are the dispatch assistant for a 300mm semiconductor
-fab. You help a fab engineer use this dashboard and interpret live dispatch
-state and what-if scenarios.
-
-The engineer is currently looking at: {view}
-
-Three kinds of question:
-1. About the app ("what can I do on this page", "what is this chart telling
-   me", "where do I find X"): answer directly from the APP GUIDE below, for
-   the page they are on unless they ask about another. No tool call needed.
-2. About the fab right now: use the `state` specialist.
-3. What-ifs and why-unassigned: use the `scenario` specialist.
-A question can mix these ("what is this page telling me right now?" means
-explain the page and then read the live state for it).
-
-You have two specialists, exposed as tools:
-- `state`: anything about right now — WIP, which tools are up or down, the
-  bottleneck, what just happened.
-- `scenario`: any "what if" — a tool going down, re-planning, which lots would
-  reroute or become unassignable — and any "why are lots unassigned / held /
-  waiting" question, because only the planner can say why it could not place
-  a lot.
-Route each question to the specialist that owns it; a question can need both
-(e.g. "is LITHO_03 the bottleneck and what if it goes down?"). Pass the
-engineer's question through verbatim plus any tool IDs already mentioned in
-the conversation. Answer from what the specialists return; do not add figures
-of your own.
+HOW TO ANSWER
+1. "How does this page work / what can I do here / what does this chart
+   mean / where do I find X": answer from the README below. No tool call.
+   Be specific to the page they are on unless they ask about another.
+2. "What is this page showing / interpret this / what is happening / which
+   tool, lot, cohort ...": call get_page_data on the page's endpoint (table
+   below), or get_fab_state for the whole fab, then answer from the result.
+3. "What if X goes down" -> run_scenario. "Why are lots unassigned/held" ->
+   explain_unassigned. Only the planner can answer those.
+4. "Which tool is the bottleneck / where is WIP piling up / what is slowing
+   the fab / busiest area": call get_bottlenecks. It ranks tool categories
+   (groups) by the WIP queued at them right now, the same numbers as the
+   floor page's heatmap, plus the busiest bays. Report the top three unless
+   they ask for a specific number, tool type, or bay. Link each group as
+   [GROUP](#/tools?type=GROUP) and each bay as [bay B,S](#/floor?bay=B,S).
+Call at most the tools you need, in one round when possible. Then answer.
+If a tool returns an error naming valid paths, call it again with the right
+path before answering; never answer from an error alone.
 
 STYLE: concise and direct. Lead with the answer. An engineer is reading this
-mid-shift. Prefer a short list over a paragraph. No preamble.
+mid-shift. Short list over paragraph. No preamble, no restating the question.
+Markdown: bold sparingly, lists, and links as below.
 
-""" + GROUNDING + "\n\nAPP GUIDE:\n" + APP_GUIDE
-
-STATE_INSTRUCTION = """You report the fab's live state. Always call
-get_fab_state first; call get_recent_events when asked what happened or why.
-Reply with the facts the caller needs, tool IDs and numbers exactly as the
-tools returned them, in a few short lines.
-
-""" + GROUNDING
-
-SCENARIO_INSTRUCTION = """You run what-if scenarios against a CLONED registry
-using the same C++ planner the dispatcher uses. For "what if X goes down" call
-run_scenario with those tool IDs. For "why are lots unassigned" call
-explain_unassigned. Report the baseline-vs-scenario diff plainly: which lots
-reroute, which become unassignable, and the reasons the planner gave.
-
-""" + GROUNDING
+""" + LINKS + "\n\n" + PAGE_DATA + "\n\n" + GROUNDING + "\n\n" + DOMAIN
 
 
-def _cap(obj, limit=20000):
-    """Bound what a tool hands back to the model so one long event list
-    cannot blow the context."""
+def _instruction():
+    readme = _read_readme()
+    guide = ("README (the help guide for the whole app; the 'tour of the "
+             "dashboard' section describes each page):\n\n" + readme) if readme \
+        else "README: not available in this deployment; answer app questions " \
+             "from the page table above and say the guide is missing."
+    return INSTRUCTION_HEAD + "\n\n" + guide
+
+
+def _shrink(obj, max_items=40, max_str=240, depth=0):
+    """Trim a page payload to what a model needs: long lists become their
+    head plus a count, long strings are cut. Structure is preserved so the
+    model still sees the field names."""
+    if isinstance(obj, dict):
+        return {k: _shrink(v, max_items, max_str, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        if len(obj) > max_items:
+            head = [_shrink(v, max_items, max_str, depth + 1) for v in obj[:max_items]]
+            return head + [f"... {len(obj) - max_items} more items omitted"]
+        return [_shrink(v, max_items, max_str, depth + 1) for v in obj]
+    if isinstance(obj, str) and len(obj) > max_str:
+        return obj[:max_str] + "…"
+    return obj
+
+
+def _cap(obj, limit=16000):
+    """Bound what a tool hands back to the model so one payload cannot blow
+    the context or the latency."""
+    obj = _shrink(obj)
+    s = json.dumps(obj)
+    if len(s) <= limit:
+        return obj
+    obj = _shrink(obj, max_items=12, max_str=120)
     s = json.dumps(obj)
     return obj if len(s) <= limit else {"truncated": True, "data": s[:limit]}
 
 
 class FabAssistant:
-    """Root dispatch agent plus specialists, bound to the live mirror."""
+    """One agent with five read-only tools, bound to the live mirror, the
+    planner, and the API's own GET endpoints."""
 
-    def __init__(self, mirror, scenario_runner):
+    def __init__(self, mirror, scenario_runner, local_get=None):
         self.mirror = mirror
         self.run_scenario = scenario_runner
+        # local_get(path) -> (status, json|text): the API calling itself, so
+        # get_page_data returns exactly what the page fetched.
+        self.local_get = local_get
         self.runner = None
         self.error = None
         self._trace, self._trace_lock = [], threading.Lock()
         self.project = PROJECT or _adc_project()
+        self.readme_loaded = bool(_read_readme())
         if not _SDK:
             self.error = "google-adk not installed"
         elif not self.project:
@@ -223,12 +223,31 @@ class FabAssistant:
             os.environ.setdefault("GOOGLE_CLOUD_PROJECT", self.project)
             os.environ.setdefault("GOOGLE_CLOUD_LOCATION", REGION)
             try:
-                self.root = self._build_agents()
+                # One client for the process. Given the model as a string,
+                # ADK builds a client per request, and each build runs
+                # google-auth's Cloud SDK probe (`gcloud config config-helper`,
+                # ~18 s on a WSL box with the Windows SDK). Built here once,
+                # with the project passed explicitly, so no request pays it.
+                self._client = genai.Client(vertexai=True, project=self.project,
+                                            location=REGION)
+                self.root = self._build_agent()
                 self.sessions = InMemorySessionService()
                 self.runner = Runner(app_name=APP_NAME, agent=self.root,
                                      session_service=self.sessions)
+                # The first request would otherwise pay the credential probe
+                # and the first token fetch (tens of seconds on some boxes).
+                # Pay it now, off the request path; a failure here just
+                # means the first user request pays it instead.
+                threading.Thread(target=self._warm, name="assistant-warm",
+                                 daemon=True).start()
             except Exception as e:                      # noqa: BLE001
                 self.error = f"agent init failed: {e}"
+
+    def _warm(self):
+        try:
+            self._client.models.count_tokens(model=MODEL, contents="warm")
+        except Exception:                                # noqa: BLE001
+            pass
 
     @property
     def available(self):
@@ -239,13 +258,7 @@ class FabAssistant:
     # docstring, which is what the model sees. Keep the docstrings honest.
 
     def _tools(self):
-        mirror, planner = self.mirror, self.run_scenario
-        # The specialists run inside AgentTool's nested runner, whose events do
-        # not surface on the outer stream, so each data tool records itself
-        # here and ask() reads the list back. One trace per assistant: two
-        # chats hitting the API at the same instant could interleave, which is
-        # acceptable for a single-engineer dashboard and noted rather than
-        # solved with a session-keyed registry.
+        mirror, planner, local_get = self.mirror, self.run_scenario, self.local_get
         trace, lock = self._trace, self._trace_lock
 
         def note(name, **args):
@@ -253,18 +266,97 @@ class FabAssistant:
                 trace.append({"tool": name, "input": args})
 
         def get_fab_state() -> dict:
-            """Current live fab state: ready/in-flight lot counts, completed
-            total, throughput, and per-tool online status, plus the list of
-            tools currently offline. Call this before answering anything about
-            right now."""
+            """Whole-fab live state: ready/in-flight lot counts, completed
+            total, KPIs, sim clock, per-tool online status, and the list of
+            tools currently offline. Use for "what is the fab doing" and
+            "which tools are down"."""
             note("get_fab_state")
             snap = mirror.snapshot()
             offline = [t for t, v in snap["tools"].items() if not v["online"]]
             return _cap({**snap, "tools_offline": offline})
 
+        def get_page_data(path: str) -> dict:
+            """Read the data behind a dashboard page from the API's own GET
+            endpoint, e.g. "/api/tools/ETCH_11" for a tool page or
+            "/api/lots/part_3-d-11" for a cohort. Use the PAGE -> DATA table
+            to pick the path. Read-only. Large lists come back trimmed to
+            their first items plus a count.
+
+            Args:
+                path: the endpoint path starting with /api/, as in the table.
+            """
+            note("get_page_data", path=path)
+            p = (path or "").strip()
+            # Common guesses, mapped rather than refused.
+            p = {"/api/floor": "/api/layout/state", "/api/floor/state": "/api/layout/state",
+                 "/api/cohorts": "/api/lots", "/api/products": "/api/routes",
+                 "/api/tool": "/api/tools", "/api/live": "/api/state"}.get(p, p)
+            if p.startswith("/api/tool/"):
+                p = "/api/tools/" + p[len("/api/tool/"):]
+            base = p.split("?", 1)[0].rstrip("/")
+            ok = any(base == r or base.startswith(r + "/") for r in READABLE)
+            if not ok:
+                return {"error": f"{p} is not a page endpoint",
+                        "use_one_of": list(READABLE),
+                        "hint": "see the PAGE -> DATA table; e.g. /api/layout/state for the floor"}
+            if local_get is None:
+                return {"error": "page data is not wired up in this deployment"}
+            status, body = local_get(p)
+            if status != 200:
+                return {"error": f"{p} returned {status}", "body": str(body)[:300]}
+            return _cap(body)
+
+        def get_bottlenecks(n: int = 3) -> dict:
+            """Where WIP is piling up right now: tool categories (groups)
+            ranked by the lots queued at them, with each group's busiest
+            tools, plus the busiest floor bays. Same numbers as the floor
+            page's WIP heatmap. Use for "which tool is the bottleneck",
+            "what is slowing the fab", "busiest area".
+
+            Args:
+                n: how many groups and bays to return (default 3, max 10).
+            """
+            n = max(1, min(int(n or 3), 10))
+            note("get_bottlenecks", n=n)
+            if local_get is None:
+                return {"error": "page data is not wired up in this deployment"}
+            st, tools = local_get("/api/tools")
+            if st != 200 or not isinstance(tools, dict):
+                return {"error": f"/api/tools returned {st}"}
+            groups = []
+            for g in tools.get("groups", []):
+                # Delay_* groups are route-prescribed waits, not equipment:
+                # lots sit there by design, so they are never the bottleneck.
+                if str(g.get("group", "")).startswith("Delay_"):
+                    continue
+                rows = g.get("tools") or []
+                q = lambda r: r.get("queue") if r.get("queue") is not None else r.get("waiting_count", 0) or 0
+                wip = sum(q(r) for r in rows)
+                busiest = sorted(rows, key=q, reverse=True)[:3]
+                groups.append({
+                    "group": g.get("group"), "wip_queued": wip,
+                    "tools": g.get("count", len(rows)), "offline": g.get("offline", 0),
+                    "queue_max": g.get("queue_max"),
+                    "running": sum(r.get("running_count", 0) or 0 for r in rows),
+                    "busiest_tools": [{"id": r.get("id"), "queue": q(r),
+                                       "online": r.get("online")} for r in busiest],
+                })
+            groups.sort(key=lambda x: x["wip_queued"], reverse=True)
+            out = {"ranked_by": "lots queued at the tool group right now "
+                                "(Delay_* queue-time placeholders excluded)",
+                   "top_groups": groups[:n],
+                   "total_queued": sum(x["wip_queued"] for x in groups)}
+            st, lay = local_get("/api/layout/state")
+            if st == 200 and isinstance(lay, dict):
+                cells = sorted(lay.get("cells", []), key=lambda c: c.get("wip", 0), reverse=True)
+                out["top_bays"] = [{"bay": f"{c['bay']},{c['seg']}", "wip": c.get("wip"),
+                                    "queue_max": c.get("queue_max"), "tools": c.get("tools"),
+                                    "down": c.get("down")} for c in cells[:n]]
+            return out
+
         def get_recent_events(limit: int = 40) -> dict:
-            """Recent lot and tool events from the Kafka mirror, oldest first.
-            Use to explain what just happened or spot a pattern.
+            """Recent lot and tool events from the live feed, oldest first.
+            Use to explain what just happened.
 
             Args:
                 limit: how many events to return, at most 100.
@@ -275,20 +367,19 @@ class FabAssistant:
                 return _cap({"events": list(mirror.events)[-n:]})
 
         def run_scenario(tools_down: list[str]) -> dict:
-            """Run a what-if against a CLONED registry using the same C++
-            planner the dispatcher uses. Takes the given tools offline and
-            re-plans, returning a baseline-vs-scenario diff: which lots
-            reroute, which become unassignable.
+            """What-if against a CLONED registry using the same C++ planner
+            the dispatcher uses: takes the given tools offline, re-plans, and
+            returns a baseline-vs-scenario diff (which lots reroute, which
+            become unassignable). Nothing in the real fab changes.
 
             Args:
                 tools_down: tool IDs to take offline, e.g. ["LITHO_03"].
             """
             note("run_scenario", tools_down=list(tools_down or []))
-            return _cap(planner(
-                [{"tool_id": t, "online": False} for t in tools_down or []]))
+            return _cap(planner([{"tool_id": t, "online": False} for t in tools_down or []]))
 
         def explain_unassigned() -> dict:
-            """For the current ready pool, list lots the planner could not
+            """For the current ready pool, the lots the planner could not
             assign, with the reason for each."""
             note("explain_unassigned")
             res = planner([])
@@ -298,48 +389,44 @@ class FabAssistant:
             return _cap({"unassigned": body.get("unassigned", []),
                          "assigned": body.get("assigned", 0)})
 
-        return {"state": [get_fab_state, get_recent_events],
-                "scenario": [run_scenario, explain_unassigned]}
+        return [get_fab_state, get_page_data, get_bottlenecks, get_recent_events,
+                run_scenario, explain_unassigned]
 
-    def _build_agents(self):
-        tools = self._tools()
-        cfg = gtypes.GenerateContentConfig(max_output_tokens=MAX_TOKENS,
-                                           temperature=0.2)
-        state = LlmAgent(
-            name="state", model=MODEL, generate_content_config=cfg,
-            description="Reports the fab's live state: WIP, tool status, "
-                        "recent events, the bottleneck, why lots are waiting.",
-            instruction=STATE_INSTRUCTION, tools=tools["state"],
-        )
-        scenario = LlmAgent(
-            name="scenario", model=MODEL, generate_content_config=cfg,
-            description="Runs what-if scenarios (tools down, re-plan) against "
-                        "a cloned registry and explains unassigned lots.",
-            instruction=SCENARIO_INSTRUCTION, tools=tools["scenario"],
-        )
-        # AgentTool rather than sub_agents: the root keeps the conversation and
-        # may consult both specialists for one question, instead of handing the
-        # whole turn over to one of them.
+    def _build_agent(self):
+        # A callable instruction rather than a string: ADK would otherwise
+        # template `{...}` in the README as state placeholders. The static
+        # text is built once; the view line is appended last so everything
+        # before it is a byte-stable prefix for the prompt cache.
+        static = _instruction()
+
+        def instruction(ctx):
+            view = (ctx.session.state or {}).get("view", "the dashboard")
+            return static + "\n\nCURRENT VIEW: the engineer is looking at " + view
+
+        cfg = gtypes.GenerateContentConfig(
+            max_output_tokens=MAX_TOKENS, temperature=0.2,
+            thinking_config=gtypes.ThinkingConfig(thinking_budget=THINKING))
         return LlmAgent(
-            name="dispatch", model=MODEL, generate_content_config=cfg,
-            description="Dispatch assistant for the fab engineer.",
-            instruction=ROOT_INSTRUCTION,
-            tools=[AgentTool(state), AgentTool(scenario)],
+            name="dispatch", model=Gemini(model=MODEL, client=self._client),
+            generate_content_config=cfg,
+            description="Assistant built into the Fab Dispatch dashboard.",
+            instruction=instruction, tools=self._tools(),
         )
 
     # ---- conversation --------------------------------------------------------
 
     @staticmethod
     def describe_view(context):
-        """One line for the root's instruction: which page, what is open."""
+        """One line for the instruction: which page, what is open, the URL."""
         c = context or {}
         tab = c.get("tab") or "live"
         bits = [f"the '{tab}' tab"]
+        if c.get("url"):          bits.append(f"URL {c['url']}")
         if c.get("openTool"):     bits.append(f"tool {c['openTool']} open")
         if c.get("openProduct"):  bits.append(f"product route {c['openProduct']} open")
         if c.get("cohort"):       bits.append(f"cohort {c['cohort']} selected")
         off = c.get("offline") or []
-        bits.append(f"tools down: {', '.join(off[:8])}" if off else "no tools down")
+        bits.append(f"tools down now: {', '.join(off[:8])}" if off else "no tools down now")
         return "; ".join(bits)
 
     def _session_from(self, messages, context):
@@ -362,13 +449,16 @@ class FabAssistant:
             return session
         return user_id, asyncio.run(seed())
 
+    def _used(self):
+        with self._trace_lock:
+            return list(self._trace)
+
     def ask(self, messages, context=None):
         """
         messages: [{"role":"user"|"assistant","content":str}, ...]
-        context:  what the UI is showing: {tab, openTool, openProduct,
+        context:  what the UI is showing: {tab, url, openTool, openProduct,
                   cohort, offline: [tool ids]}; all optional.
         Returns {"reply": str, "tools_used": [...], "error": str|None}
-        Runs the agents to completion, then returns the final text.
         """
         if not self.available:
             return {"reply": None, "tools_used": [],
@@ -408,7 +498,3 @@ class FabAssistant:
             return {"reply": None, "tools_used": self._used(),
                     "error": "the agent finished without a reply"}
         return {"reply": reply, "tools_used": self._used(), "error": None}
-
-    def _used(self):
-        with self._trace_lock:
-            return list(self._trace)

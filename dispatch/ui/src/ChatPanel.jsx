@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Avatar, { useDesktop } from './Avatar.jsx'
+import Md from './md.jsx'
 
 // Grounded assistant. Every figure in a reply comes from a tool result run
 // against live state or the C++ scenario planner — never from model recall.
@@ -14,6 +15,7 @@ const SUGGESTIONS = [
 
 const TOOL_LABEL = {
   get_fab_state: 'read live state',
+  get_page_data: 'read page data',
   get_recent_events: 'read event feed',
   run_scenario: 'ran what-if',
   explain_unassigned: 'checked held lots',
@@ -57,7 +59,7 @@ export default function ChatPanel({ context, pending, onPendingSent }) {
         // current view rides along so the assistant can explain this page.
         body: JSON.stringify({
           messages: next.map(m => ({ role: m.role, content: m.content })),
-          context: context || {},
+          context: { ...(context || {}), url: window.location.hash },
         }),
       })
       const j = await r.json()
@@ -133,12 +135,13 @@ export default function ChatPanel({ context, pending, onPendingSent }) {
                     {TOOL_LABEL[t.tool] || t.tool}
                     {t.input?.tools_down?.length
                       ? `: ${t.input.tools_down.join(', ')}` : ''}
+                    {t.input?.path ? `: ${t.input.path.replace(/^\/api/, '')}` : ''}
                   </span>
                 ))}
               </div>
             )}
             <div className={m.failed ? 'bubble bubble-err' : 'bubble'}>
-              {m.content}
+              {m.role === 'assistant' && !m.failed ? <Md text={m.content} /> : m.content}
             </div>
           </div>
         ))}
