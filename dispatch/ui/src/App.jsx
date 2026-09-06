@@ -1229,6 +1229,7 @@ export default function App() {
       <footer className="muted">
         No write path exists from this page to the dispatcher. Scenario runs use
         a cloned registry in the same C++ planner binary.
+        {' '}<a href="/admin">access codes</a> · <a href="/auth/logout">sign out</a>
       </footer>
 
         </div>

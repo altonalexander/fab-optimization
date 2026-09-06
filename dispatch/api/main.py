@@ -25,6 +25,10 @@ from openapi import register_docs
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": os.getenv("CORS_ORIGINS", "*")}})
+# Access gate (codes + magic links). Enforced by nginx's auth_request in the
+# deployed stack; in dev the endpoints exist but nothing forces them.
+from auth import auth_bp   # noqa: E402
+app.register_blueprint(auth_bp)
 
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "kafka:9092")
 READ_ONLY     = os.getenv("READ_ONLY", "true").lower() == "true"

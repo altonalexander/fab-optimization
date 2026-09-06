@@ -589,8 +589,7 @@ slate, not from it.
 
 ```bash
 cd dispatch/infra
-cp .env.example .env            # set POSTGRES_PASSWORD
-./make-htpasswd.sh <username>   # basic-auth login for the whole site
+cp .env.example .env            # POSTGRES_PASSWORD, PUBLIC_URL, SMTP_* for magic links
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
     --profile all up -d --build
 make -C .. verify               # passes clean: no dev override, no host ports
@@ -623,13 +622,22 @@ dashboard gets a modal explaining the jump, and the previous run stays under
 Results. A checkpoint is per horizon, so the first start at a new `FEED_DAYS`
 re-simulates the warm-up once (~10 min).
 
-The password file is mounted into nginx, so the login covers the dashboard,
-every `/api` route and the SSE stream in one place; `/health` stays open for
-uptime checks. Locally (no override) the mount is absent and the site is
-open. The four POST routes are the reason the gate exists: `/api/scenario`
-and `/api/scenario/compare` run the C++ planner (CPU), `/api/sim/control`
-changes the playback speed for *everyone* watching, and `/api/chat` calls
-Claude on Vertex on your project's bill.
+**Access gate.** nginx asks the API (`auth_request`) on every request, so one
+gate covers the dashboard, every `/api` route and the SSE stream; `/health`
+stays open for uptime checks. Visitors sign in at `/login` with a six-character
+**access code**, or ask for a **magic link**: they enter an email, the API
+mints a code tied to that email and mails it (from `MAIL_FROM` over `SMTP_*`)
+with a one-click link. Codes are shareable on purpose; every use is recorded.
+Sign-ins from `@AUTH_ADMIN_DOMAIN` (frontanalytics.com) get `/admin`: mint
+codes with a note, see who used what and when, disable a code. State lives in
+the fab Postgres (`access_codes`, `sessions`). The first code has to come from
+somewhere: `dispatch/infra/mint-code.sh` mints one from the box itself.
+
+The gate exists because of the POST routes: `/api/scenario` and
+`/api/scenario/compare` run the C++ planner (CPU), `/api/sim/control` changes
+the playback speed for *everyone* watching, and `/api/chat` calls Gemini on
+Vertex on your project's bill. In dev (`dev-up.sh`, no nginx) nothing enforces
+it.
 
 **The dispatcher on its own:**
 
