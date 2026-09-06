@@ -286,12 +286,12 @@ services:
       PGDATABASE: fab
       PGUSER: fab
       PGPASSWORD: fab          # >>> PLACEHOLDER: a secret outside local dev
-      # --- Claude on Vertex AI ---------------------------------------------
+      # --- Assistant: Gemini via Google ADK on Vertex AI --------------------
       # The assistant is the ONE component with egress, and only because it is
-      # in zone 3. It reaches Vertex, never the fab.
+      # in zone 3. It reaches Vertex, never the fab. Unset project = disabled.
       GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT:-}"
-      VERTEX_REGION: "${VERTEX_REGION:-us-east5}"
-      VERTEX_MODEL: "${VERTEX_MODEL:-claude-sonnet-4-5@20250929}"
+      VERTEX_REGION: "${VERTEX_REGION:-us-central1}"
+      VERTEX_MODEL: "${VERTEX_MODEL:-gemini-2.5-flash}"
       GOOGLE_APPLICATION_CREDENTIALS: "/var/secrets/gcp/sa.json"
       # zones.yaml gets its own mount: a file bind-mount cannot be created
       # inside a directory that is itself mounted read-only (runc refuses to
