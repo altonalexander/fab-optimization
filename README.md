@@ -626,7 +626,7 @@ re-simulates the warm-up once (~10 min).
 gate covers the dashboard, every `/api` route and the SSE stream; `/health`
 stays open for uptime checks. Visitors sign in at `/login` with a six-character
 **access code**, or ask for a **magic link**: they enter an email, the API
-mints a code tied to that email and mails it (from `MAIL_FROM` over `SMTP_*`)
+mints a code tied to that email and mails it (from `MAIL_FROM` via Mailgun, `MAILGUN_*`)
 with a one-click link. Codes are shareable on purpose; every use is recorded.
 Sign-ins from `@AUTH_ADMIN_DOMAIN` (frontanalytics.com) get `/admin`: mint
 codes with a note, see who used what and when, disable a code. State lives in

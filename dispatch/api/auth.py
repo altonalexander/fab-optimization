@@ -39,6 +39,10 @@ SESSION_DAYS   = int(os.getenv("AUTH_SESSION_DAYS", "30"))
 CODE_ALPHABET  = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"     # no 0/O/1/I
 CODE_LEN       = 6
 MAIL_FROM      = os.getenv("MAIL_FROM", "fab-support@frontanalytics.com")
+# Mailgun is the house mailer; SMTP stays as a fallback for other setups.
+MAILGUN_API_KEY = os.getenv("MAILGUN_API_KEY", "")
+MAILGUN_DOMAIN  = os.getenv("MAILGUN_DOMAIN", "")
+MAILGUN_API_BASE = os.getenv("MAILGUN_API_BASE", "https://api.mailgun.net").rstrip("/")
 SMTP_HOST      = os.getenv("SMTP_HOST", "")
 SMTP_PORT      = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER      = os.getenv("SMTP_USER", "")
@@ -210,23 +214,43 @@ def _throttled(ip):
 
 # ---- email -----------------------------------------------------------------
 def email_configured():
-    return bool(SMTP_HOST)
+    return bool(MAILGUN_API_KEY and MAILGUN_DOMAIN) or bool(SMTP_HOST)
 
 
-def _send_magic(email, code):
+def _magic_text(email, code):
     base = PUBLIC_URL or (request.headers.get("X-Forwarded-Proto", request.scheme)
                           + "://" + request.host)
     link = f"{base}/auth/magic?code={code}&email={quote(email)}"
+    subject = f"Your fab dashboard access code: {code}"
+    text = (f"Your access code for the fab optimization dashboard is:\n\n"
+            f"    {code}\n\n"
+            f"Open this link to sign in directly:\n\n    {link}\n\n"
+            f"Or enter the code at {base}/login. The code stays valid until it is\n"
+            f"disabled, so keep it if you plan to come back.\n")
+    return subject, text
+
+
+def _send_magic(email, code):
+    subject, text = _magic_text(email, code)
+    if MAILGUN_API_KEY and MAILGUN_DOMAIN:
+        import base64
+        import json as _json
+        import urllib.request
+        from urllib.parse import urlencode
+        data = urlencode({"from": MAIL_FROM, "to": email, "subject": subject,
+                          "text": text, "o:tag": "fab-magic-link"}).encode()
+        req = urllib.request.Request(
+            f"{MAILGUN_API_BASE}/v3/{MAILGUN_DOMAIN}/messages", data=data, method="POST")
+        req.add_header("Authorization", "Basic " +
+                       base64.b64encode(f"api:{MAILGUN_API_KEY}".encode()).decode())
+        with urllib.request.urlopen(req, timeout=20) as r:
+            _json.loads(r.read().decode() or "{}")   # raises on non-2xx
+        return
     msg = EmailMessage()
     msg["From"] = MAIL_FROM
     msg["To"] = email
-    msg["Subject"] = f"Your fab dashboard access code: {code}"
-    msg.set_content(
-        f"Your access code for the fab optimization dashboard is:\n\n"
-        f"    {code}\n\n"
-        f"Open this link to sign in directly:\n\n    {link}\n\n"
-        f"Or enter the code at {base}/login. The code stays valid until it is\n"
-        f"disabled, so keep it if you plan to come back.\n")
+    msg["Subject"] = subject
+    msg.set_content(text)
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
         s.ehlo()
         if SMTP_PORT != 25:

@@ -27,6 +27,9 @@ services:
       # Access gate (api/auth.py): magic-link mail + where links point.
       PUBLIC_URL: "${PUBLIC_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-fab-support@frontanalytics.com}"
+      MAILGUN_API_KEY: "${MAILGUN_API_KEY:-}"
+      MAILGUN_DOMAIN: "${MAILGUN_DOMAIN:-}"
+      MAILGUN_API_BASE: "${MAILGUN_API_BASE:-https://api.mailgun.net}"
       SMTP_HOST: "${SMTP_HOST:-}"
       SMTP_PORT: "${SMTP_PORT:-587}"
       SMTP_USER: "${SMTP_USER:-}"
