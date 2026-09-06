@@ -1188,6 +1188,10 @@ def enforce_read_only():
     # Everything else is refused.
     if request.path in SCENARIO_PATHS and request.method == "POST":
         return None
+    # The access gate's own state (codes, sessions) is this boundary's, not
+    # the fab's: nothing under /auth/ touches Kafka or the dispatcher.
+    if request.path.startswith("/auth/"):
+        return None
     return jsonify({"error": "read-only zone boundary: writes are not permitted"}), 403
 
 
