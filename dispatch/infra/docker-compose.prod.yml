@@ -1,0 +1,80 @@
+# Homelab / public-demo override. Use it INSTEAD of docker-compose.dev.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile all up -d --build
+#
+# What it changes and why:
+#   * The UI is bound to loopback only. The reverse proxy / tunnel on the same
+#     box (Cloudflare Tunnel, Caddy, Traefik) is the only thing that should
+#     reach it, and it terminates TLS for fabsim.<your-domain>.
+#   * No dev override means no host-published Kafka/Postgres and no second
+#     network on them: `make verify` and reachability-test.sh pass clean.
+#   * Every long-lived service restarts on reboot. The dispatcher is a
+#     one-shot benchmark (it prints its numbers and exits 0) so it stays "no".
+#   * The Postgres password is a secret read from the environment / .env.
+
+services:
+  ui:
+    # !override: compose MERGES list fields across files, so without it the
+    # base file's 0.0.0.0:8080 stays published beside this one.
+    ports: !override
+      - "${UI_BIND:-127.0.0.1}:${UI_PORT:-8080}:80"
+    restart: unless-stopped
+    # HTTP basic auth for the whole site. Create the password file once:
+    #   ./make-htpasswd.sh <username>
+    volumes:
+      - ./auth:/etc/nginx/auth:ro
+
+  api:
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+
+  feed:
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+    # Warm-up cache on the host checkout, so a checkpoint copied in from a dev
+    # machine is reused instead of re-simulating. The directory must be
+    # writable by uid 10004 (chmod 777, or chown) for new checkpoints to land.
+    volumes:
+      - ../../bench/snapshots:/app/bench/snapshots
+      - sim-control:/var/run/fab-sim
+
+  postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+
+  kafka:
+    restart: unless-stopped
+
+  amhs-controller:
+    restart: unless-stopped
+
+  amhs-adapter:
+    restart: unless-stopped
+
+  # Public ingress: Cloudflare Tunnel. Outbound-only, so no port forwarding
+  # and no inbound firewall rule; Cloudflare terminates TLS for the hostname.
+  # Sits on the enterprise network and reaches the UI by service name, so the
+  # loopback port above is only for checks from the box itself.
+  #
+  #   1. Zero Trust -> Networks -> Tunnels -> Create (Cloudflared) -> copy token
+  #   2. Public hostname: fab.<your-domain>  ->  http://ui:80
+  #   3. CLOUDFLARE_TUNNEL_TOKEN=... in .env, then --profile tunnel
+  cloudflared:
+    container_name: fab-enterprise-tunnel
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:2025.8.1
+    # Via env, not a :? interpolation: compose evaluates every service's
+    # strings even when its profile is off, so a required var here would
+    # break `--profile all` for people without a tunnel.
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:-}"
+    networks: [enterprise-net]
+    depends_on: [ui]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }

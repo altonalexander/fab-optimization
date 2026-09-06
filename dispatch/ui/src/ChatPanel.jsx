@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import Avatar from './Avatar.jsx'
 
 // Grounded assistant. Every figure in a reply comes from a tool result run
 // against live state or the C++ scenario planner — never from model recall.
@@ -18,8 +19,33 @@ const TOOL_LABEL = {
   explain_unassigned: 'checked held lots',
 }
 
-export default function ChatPanel() {
+// Mounts only on a real desktop viewport: wide enough for the rail to be a
+// rail, and a pointer that can hover. Re-evaluated on resize so a window
+// dragged narrow drops the character rather than squeezing it.
+function useDesktop() {
+  const q = '(min-width: 1101px) and (hover: hover) and (pointer: fine)'
+  const [on, setOn] = useState(() => window.matchMedia?.(q).matches ?? false)
+  useEffect(() => {
+    const m = window.matchMedia?.(q)
+    if (!m) return
+    const f = e => setOn(e.matches)
+    m.addEventListener('change', f)
+    return () => m.removeEventListener('change', f)
+  }, [])
+  return on
+}
+
+export default function ChatPanel({ context }) {
   const [status, setStatus] = useState(null)
+  const desktop = useDesktop()
+  const [focused, setFocused] = useState(false)
+  // 'speaking' is a short window after a reply lands, then back to idle.
+  const [spoke, setSpoke] = useState(0)
+  useEffect(() => {
+    if (!spoke) return
+    const t = setTimeout(() => setSpoke(0), 2600)
+    return () => clearTimeout(t)
+  }, [spoke])
   const [msgs, setMsgs] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -57,6 +83,7 @@ export default function ChatPanel() {
         tools: j.tools_used || [],
         failed: !j.reply,
       }])
+      if (j.reply) setSpoke(Date.now())
     } catch (e) {
       setMsgs(m => [...m, { role: 'assistant', content: String(e), failed: true }])
     }
@@ -78,8 +105,13 @@ export default function ChatPanel() {
     )
   }
 
+  const mood = busy ? 'thinking' : spoke ? 'speaking' : focused ? 'listening' : 'idle'
+
   return (
     <div className="chat">
+      {desktop && (
+        <Avatar mood={mood} context={context} busy={busy} onAsk={send} />
+      )}
       <div className="chat-log">
         {msgs.length === 0 && (
           <div className="chat-empty">
@@ -88,13 +120,15 @@ export default function ChatPanel() {
               tool results — live Kafka state and the same C++ planner the
               dispatcher uses.
             </p>
-            <div className="chips">
+            {/* On desktop the character's bubble already offers questions
+                tuned to the current view; the generic chips would repeat it. */}
+            {!desktop && <div className="chips">
               {SUGGESTIONS.map(s => (
                 <button key={s} className="chip chip-btn" onClick={() => send(s)}>
                   {s}
                 </button>
               ))}
-            </div>
+            </div>}
           </div>
         )}
 
@@ -131,6 +165,8 @@ export default function ChatPanel() {
           placeholder="Ask about the fab…"
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && send()}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           disabled={busy}
         />
         <button onClick={() => send()} disabled={busy || !input.trim()}>Send</button>

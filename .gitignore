@@ -51,3 +51,10 @@ bench/snapshots/
 
 # sim playback control: runtime state written by the feed and the API
 bench/.sim_control.json
+
+# deployment secrets (dispatch/infra/.env)
+.env
+**/.env
+
+# dashboard basic-auth credentials (dispatch/infra/auth/htpasswd)
+dispatch/infra/auth/htpasswd

@@ -53,6 +53,8 @@ volumes:
   kafka-data:
   fab-ipc:
   pg-data:
+  feed-cache:     # warm-up checkpoints; regenerable, ~10 min CPU each
+  sim-control:    # playback pacing file: API writes it, feed polls it
 
 services:
 
@@ -187,17 +189,45 @@ services:
       - ./create-topics.sh:/init/create-topics.sh:ro
     restart: "no"
 
-  # mes-producer REMOVED: it ran /app/mes_producer, built from
-  # src/mes_producer_main.cpp, which does not exist -- also hidden by
-  # `|| true`. The MES feed is bench/tools/sim_feed.py, run from the host
-  # against the published broker:
+  # MES/AMHS producer stand-in. bench/tools/sim_feed.py drives PySCFabSim as
+  # a paced event source: real routes, setups and breakdowns rather than a
+  # synthetic C++ stand-in (the old mes_producer never existed -- its build
+  # was hidden by `|| true`). In production the MES is here instead.
   #
-  #   baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-  #       --kafka localhost:9092 --days 3 --speed 400
-  #
-  # Driving it from the simulator gives real routes, setups and breakdowns
-  # instead of a synthetic stand-in, which is why it is not being replaced by
-  # another C++ producer.
+  # First start simulates the warm-up (~10 min CPU) and caches the checkpoint
+  # in feed-cache; every later start resumes from it in seconds. The dev
+  # override swaps that volume for the host's bench/snapshots so a checkpoint
+  # built by dev-up.sh is picked up here, and the other way round.
+  feed:
+    container_name: fab-data-feed
+    profiles: ["all", "data"]
+    build: { context: ../.., dockerfile: dispatch/infra/Dockerfile.feed }
+    command:
+      - --kafka=kafka:9092
+      - --days=${FEED_DAYS:-180}       # same horizon dev-up.sh uses, so its checkpoint is reusable
+      - --warmup-days=${FEED_WARMUP_DAYS:-90}
+      - --dispatcher=${FEED_RULE:-slate}
+      - --warmup-dispatcher=${FEED_WARMUP_RULE:-fifo}
+      - --speed=${FEED_SPEED:-20}
+    networks: [data-net]
+    environment:
+      FAB_ZONE: "data"
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: fab
+      PGUSER: fab
+      PGPASSWORD: fab          # >>> PLACEHOLDER: a secret outside local dev
+    volumes:
+      - feed-cache:/app/bench/snapshots
+      - sim-control:/var/run/fab-sim
+    depends_on:
+      kafka: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "4.0", memory: 4G }
 
   # =========================================================================
   # ZONE 2 <-> ZONE 3 BOUNDARY
@@ -241,13 +271,21 @@ services:
   api:
     container_name: fab-data-api
     profiles: ["all", "data"]
-    build: { context: .., dockerfile: infra/Dockerfile.api }
+    build: { context: ../.., dockerfile: dispatch/infra/Dockerfile.api }
     networks: [data-net, enterprise-net]   # <-- DUAL HOMED, zones 2+3
     environment:
       KAFKA_BROKERS: "kafka:9092"
       READ_ONLY: "true"                    # enforced in code, not just here
       FAB_ZONE: "boundary-2-3"
       SOLVER: "cpsat"
+      # Run store (compare runs across dispatchers). Without these the API
+      # defaulted to localhost:25432 -- the dev host's published port -- and
+      # every /api/runs call failed inside the container.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: fab
+      PGUSER: fab
+      PGPASSWORD: fab          # >>> PLACEHOLDER: a secret outside local dev
       # --- Claude on Vertex AI ---------------------------------------------
       # The assistant is the ONE component with egress, and only because it is
       # in zone 3. It reaches Vertex, never the fab.
@@ -255,10 +293,17 @@ services:
       VERTEX_REGION: "${VERTEX_REGION:-us-east5}"
       VERTEX_MODEL: "${VERTEX_MODEL:-claude-sonnet-4-5@20250929}"
       GOOGLE_APPLICATION_CREDENTIALS: "/var/secrets/gcp/sa.json"
+      # zones.yaml gets its own mount: a file bind-mount cannot be created
+      # inside a directory that is itself mounted read-only (runc refuses to
+      # mknod the mountpoint), so it must not live under /etc/fab.
+      ZONES_FILE: "/etc/fab-zones/zones.yaml"
+      # Playback pacing handoff to the feed (POST /api/sim/control).
+      SIM_CONTROL_FILE: "/var/run/fab-sim/sim_control.json"
     volumes:
+      - sim-control:/var/run/fab-sim
       # Same tool master the dispatcher uses, and the zone policy the UI renders.
       - ../config:/etc/fab:ro
-      - ./zones.yaml:/etc/fab/zones.yaml:ro
+      - ./zones.yaml:/etc/fab-zones/zones.yaml:ro
       # >>> PLACEHOLDER: use Workload Identity in GKE instead of a key file.
       #     A long-lived service-account key on disk is the weakest link here.
       - ${GCP_SA_KEY:-/dev/null}:/var/secrets/gcp/sa.json:ro

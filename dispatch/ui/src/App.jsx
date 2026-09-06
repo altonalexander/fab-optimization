@@ -1219,7 +1219,7 @@ export default function App() {
             <button className="rail-toggle" onClick={() => setAssistantOpen(false)}
                     title="Hide assistant">×</button>
           </div>
-          <ChatPanel />
+          <ChatPanel context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }} />
         </aside>
       </div>
     </div>

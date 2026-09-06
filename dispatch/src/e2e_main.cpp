@@ -34,8 +34,13 @@ using namespace fab;
 namespace {
 std::atomic<bool> g_shutdown{false};
 void header(const char* s) { std::cout << "\n=== " << s << " ===\n"; }
+// Accepts both `--key value` and `--key=value`; compose files use the latter.
 std::string arg(int c, char** v, const std::string& k, const std::string& d) {
-    for (int i = 1; i < c - 1; ++i) if (k == v[i]) return v[i + 1];
+    const std::string eq = k + "=";
+    for (int i = 1; i < c; ++i) {
+        if (k == v[i] && i + 1 < c) return v[i + 1];
+        if (std::string(v[i]).rfind(eq, 0) == 0) return std::string(v[i]).substr(eq.size());
+    }
     return d;
 }
 } // namespace

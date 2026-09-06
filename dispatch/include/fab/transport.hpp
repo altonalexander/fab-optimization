@@ -22,6 +22,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef FAB_HAVE_RDKAFKA
+#include <librdkafka/rdkafkacpp.h>   // system header: must stay outside namespace fab
+#endif
+
 namespace fab {
 
 class Producer {
@@ -133,7 +137,6 @@ private:
 // ---------------------------------------------------------------------------
 
 #ifdef FAB_HAVE_RDKAFKA
-#include <librdkafka/rdkafkacpp.h>
 
 class KafkaProducer : public Producer {
 public:

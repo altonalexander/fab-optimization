@@ -13,7 +13,13 @@ t() { # container target description
 t amhs-controller kafka/9092        "equipment -> kafka"
 t amhs-controller api/8000          "equipment -> api"
 t dispatcher      amhs-controller/5000 "dispatcher -> equipment (adapter must mediate)"
-t api             kafka/9092        "api -> kafka  (this one SHOULD connect)"
+echo
+echo "=== Positive control: this one MUST connect ==="
+if docker compose exec -T api timeout 3 bash -c "</dev/tcp/kafka/9092" 2>/dev/null; then
+  echo "  OK  api -> kafka"
+else
+  echo "  BROKEN  api -> kafka  <-- the mirror cannot see the fab"
+fi
 echo
 echo "=== Egress: zones 0-2 must not reach the internet ==="
 for s in amhs-controller dispatcher kafka; do

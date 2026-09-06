@@ -2623,9 +2623,9 @@ _slate_lock = threading.Lock()
 
 def _slate_planner():
     """Lazily build a planner over the live tool set. Returns (planner, error)."""
-    sys.path.insert(0, os.path.join(
+    sys.path.insert(0, os.getenv("BENCH_TOOLS", os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "bench", "tools"))
+        "bench", "tools")))
     try:
         import fabslate
     except Exception as e:                      # pragma: no cover

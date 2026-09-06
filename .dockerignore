@@ -1,0 +1,30 @@
+# Build context for infra/Dockerfile.feed is the repo root. Without this the
+# context is ~5.4 GB (the simulator venv alone is 4.9 GB).
+.git
+.claude
+.dev-run
+.vscode
+**/__pycache__
+**/*.pyc
+**/.venv
+**/node_modules
+baselines/pyscfabsim/wandb
+baselines/pyscfabsim/debug_data
+baselines/pyscfabsim/docs
+baselines/pyscfabsim/*.html
+baselines/pyscfabsim/PPO_algorithmus_dr_phil_original
+bench/snapshots
+bench/.sim_control.json
+dispatch/build
+dispatch/build-ortools
+dispatch/build-greedy
+!dispatch/build-slate.sh
+dispatch/ui/dist
+dispatch/*.so
+dispatch/fabdisp
+dispatch/amhs_adapter
+dispatch/fab_scenario
+dispatch/hsms_sim
+dispatch/fabtest
+viz
+!viz/routes_lvhm.json
