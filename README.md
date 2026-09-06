@@ -589,11 +589,14 @@ slate, not from it.
 
 ```bash
 cd dispatch/infra
-cp .env.example .env            # POSTGRES_PASSWORD, PUBLIC_URL, SMTP_* for magic links
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-    --profile all up -d --build
+cp .env.example .env            # POSTGRES_PASSWORD, PUBLIC_URL (per-app settings)
+./deploy.sh                     # compose up --build under the shared secrets
 make -C .. verify               # passes clean: no dev override, no host ports
 ```
+
+`deploy.sh` injects secrets that several apps on the box share (Mailgun for
+now) from the homelab SOPS store with `sops exec-env`, so they are never
+written in plaintext; per-app values stay in `.env`.
 
 `docker-compose.prod.yml` binds the UI to `127.0.0.1:8080` and nothing else,
 so the only way in is the reverse proxy or tunnel on the same box. The
