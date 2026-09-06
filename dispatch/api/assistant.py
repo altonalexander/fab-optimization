@@ -23,6 +23,7 @@
 import asyncio
 import json
 import os
+import threading
 import uuid
 
 # Credentials come from Application Default Credentials:
@@ -89,9 +90,11 @@ scenarios.
 
 You have two specialists, exposed as tools:
 - `state`: anything about right now — WIP, which tools are up or down, the
-  bottleneck, what just happened, why lots are waiting.
+  bottleneck, what just happened.
 - `scenario`: any "what if" — a tool going down, re-planning, which lots would
-  reroute or become unassignable.
+  reroute or become unassignable — and any "why are lots unassigned / held /
+  waiting" question, because only the planner can say why it could not place
+  a lot.
 Route each question to the specialist that owns it; a question can need both
 (e.g. "is LITHO_03 the bottleneck and what if it goes down?"). Pass the
 engineer's question through verbatim plus any tool IDs already mentioned in
@@ -134,6 +137,7 @@ class FabAssistant:
         self.run_scenario = scenario_runner
         self.runner = None
         self.error = None
+        self._trace, self._trace_lock = [], threading.Lock()
         self.project = PROJECT or _adc_project()
         if not _SDK:
             self.error = "google-adk not installed"
@@ -163,12 +167,24 @@ class FabAssistant:
 
     def _tools(self):
         mirror, planner = self.mirror, self.run_scenario
+        # The specialists run inside AgentTool's nested runner, whose events do
+        # not surface on the outer stream, so each data tool records itself
+        # here and ask() reads the list back. One trace per assistant: two
+        # chats hitting the API at the same instant could interleave, which is
+        # acceptable for a single-engineer dashboard and noted rather than
+        # solved with a session-keyed registry.
+        trace, lock = self._trace, self._trace_lock
+
+        def note(name, **args):
+            with lock:
+                trace.append({"tool": name, "input": args})
 
         def get_fab_state() -> dict:
             """Current live fab state: ready/in-flight lot counts, completed
             total, throughput, and per-tool online status, plus the list of
             tools currently offline. Call this before answering anything about
             right now."""
+            note("get_fab_state")
             snap = mirror.snapshot()
             offline = [t for t, v in snap["tools"].items() if not v["online"]]
             return _cap({**snap, "tools_offline": offline})
@@ -181,6 +197,7 @@ class FabAssistant:
                 limit: how many events to return, at most 100.
             """
             n = max(1, min(int(limit or 40), 100))
+            note("get_recent_events", limit=n)
             with mirror.lock:
                 return _cap({"events": list(mirror.events)[-n:]})
 
@@ -193,12 +210,14 @@ class FabAssistant:
             Args:
                 tools_down: tool IDs to take offline, e.g. ["LITHO_03"].
             """
+            note("run_scenario", tools_down=list(tools_down or []))
             return _cap(planner(
                 [{"tool_id": t, "online": False} for t in tools_down or []]))
 
         def explain_unassigned() -> dict:
             """For the current ready pool, list lots the planner could not
             assign, with the reason for each."""
+            note("explain_unassigned")
             res = planner([])
             if "error" in res:
                 return res
@@ -269,7 +288,9 @@ class FabAssistant:
                     "error": "last message must be from the user"}
 
         user_id, session = self._session_from(messages)
-        used, reply = [], None
+        with self._trace_lock:
+            self._trace.clear()
+        reply = None
         try:
             events = self.runner.run(
                 user_id=user_id, session_id=session.id,
@@ -277,22 +298,15 @@ class FabAssistant:
                     role="user",
                     parts=[gtypes.Part.from_text(text=messages[-1]["content"])]))
             for ev in events:
-                for fc in ev.get_function_calls():
-                    # Specialist calls are routing, not data; the UI trace
-                    # shows the data tools the specialists actually ran.
-                    if fc.name in ("state", "scenario"):
-                        continue
-                    used.append({"tool": fc.name, "input": dict(fc.args or {}),
-                                 "agent": ev.author})
                 if ev.error_message:
-                    return {"reply": None, "tools_used": used,
+                    return {"reply": None, "tools_used": self._used(),
                             "error": ev.error_message}
                 if ev.author == self.root.name and ev.is_final_response() and ev.content:
                     text = "".join(p.text or "" for p in ev.content.parts or [])
                     if text.strip():
                         reply = text
         except Exception as e:                           # noqa: BLE001
-            return {"reply": None, "tools_used": used, "error": str(e)}
+            return {"reply": None, "tools_used": self._used(), "error": str(e)}
         finally:
             try:
                 self.sessions.delete_session_sync(
@@ -301,6 +315,10 @@ class FabAssistant:
                 pass
 
         if reply is None:
-            return {"reply": None, "tools_used": used,
+            return {"reply": None, "tools_used": self._used(),
                     "error": "the agent finished without a reply"}
-        return {"reply": reply, "tools_used": used, "error": None}
+        return {"reply": reply, "tools_used": self._used(), "error": None}
+
+    def _used(self):
+        with self._trace_lock:
+            return list(self._trace)
