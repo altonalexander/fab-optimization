@@ -41,6 +41,37 @@ export const CHARACTERS = {
 
 const rand = (lo, hi) => lo + Math.random() * (hi - lo)
 
+// Mounts only on a real desktop viewport: wide enough for the rail to be a
+// rail, and a pointer that can hover. Re-evaluated on resize so a window
+// dragged narrow drops the character rather than squeezing it.
+export function useDesktop() {
+  const q = '(min-width: 1101px) and (hover: hover) and (pointer: fine)'
+  const [on, setOn] = useState(() => window.matchMedia?.(q).matches ?? false)
+  useEffect(() => {
+    const m = window.matchMedia?.(q)
+    if (!m) return
+    const f = e => setOn(e.matches)
+    m.addEventListener('change', f)
+    return () => m.removeEventListener('change', f)
+  }, [])
+  return on
+}
+
+// Types `text` out one character at a time; returns what has been typed.
+function useTypewriter(text, speed = 28) {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    setN(0)
+    if (!text) return
+    const t = setInterval(() => setN(k => {
+      if (k >= text.length) { clearInterval(t); return k }
+      return k + 1
+    }), speed)
+    return () => clearInterval(t)
+  }, [text, speed])
+  return text.slice(0, n)
+}
+
 // Idle gesture scheduler. Each gesture is a state patch plus how long it
 // holds; the effect re-arms itself with a fresh random delay after each one so
 // the rhythm never repeats. Returns the pose the SVG should render.
@@ -324,6 +355,79 @@ export default function Avatar({ mood = 'idle', context, onAsk, busy }) {
         )}
         {mood === 'thinking' && <div className="avatar-dots"><i /><i /><i /></div>}
       </div>
+    </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// Corner launcher. Lives in the bottom-right of the viewport while the rail is
+// closed: a round badge with the character and, beside it, a speech bubble
+// that types out a greeting and offers one question for the current page.
+// It appears a little while after the page loads rather than immediately, so
+// the engineer has settled on the page before something waves at them.
+// Clicking the character opens the rail; clicking the question opens the rail
+// and asks it. The bubble can be dismissed for the session; the badge stays.
+// ---------------------------------------------------------------------------
+export const LAUNCHER_DELAY_MS = 20000
+
+export function AvatarLauncher({ context, onOpen, onAsk, delay = LAUNCHER_DELAY_MS }) {
+  const desktop = useDesktop()
+  const [shown, setShown] = useState(false)
+  const [bubble, setBubble] = useState(() => {
+    try { return sessionStorage.getItem('launcherBubble') !== '0' } catch { return true }
+  })
+  const [hover, setHover] = useState(false)
+  const [character] = useState(() => {
+    try { return localStorage.getItem('avatarCharacter') || 'ada' } catch { return 'ada' }
+  })
+  const c = CHARACTERS[character] || CHARACTERS.ada
+
+  useEffect(() => {
+    const t = setTimeout(() => setShown(true), delay)
+    return () => clearTimeout(t)
+  }, [delay])
+
+  const ctxKey = JSON.stringify(context || {})
+  const all = useMemo(() => suggestionsFor(JSON.parse(ctxKey)), [ctxKey])
+  // One question at a time, rotating slowly; the two app questions lead the
+  // pool so a fresh visitor sees "what can I do on this page" first.
+  const [i, setI] = useState(0)
+  useEffect(() => { setI(0) }, [ctxKey])
+  useEffect(() => {
+    if (!shown || !bubble) return
+    const t = setInterval(() => setI(k => (k + 1) % all.length), 18000)
+    return () => clearInterval(t)
+  }, [shown, bubble, all.length])
+  const question = all[i % all.length]
+  const typed = useTypewriter(shown && bubble
+    ? `Hi! I'm ${c.name}. Need a hand with this page, or want to know what the fab is doing? Ask me anything, for example:` : '')
+
+  const dismiss = () => {
+    setBubble(false)
+    try { sessionStorage.setItem('launcherBubble', '0') } catch { /* ignore */ }
+  }
+
+  if (!desktop || !shown) return null
+  return (
+    <div className="launcher" role="complementary" aria-label="Assistant">
+      {bubble && (
+        <div className="launcher-bubble">
+          <button type="button" className="launcher-close" onClick={dismiss}
+                  title="Hide" aria-label="Hide this message">&times;</button>
+          <div className="launcher-text">{typed}<span className="launcher-caret" /></div>
+          {typed.length > 40 && (
+            <button type="button" className="launcher-q" onClick={() => onAsk?.(question)}>
+              {question}
+            </button>
+          )}
+        </div>
+      )}
+      <button type="button" className="launcher-badge" onClick={onOpen}
+              onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+              title="Open the assistant" aria-label="Open the assistant">
+        <AvatarFigure character={character} mood={hover ? 'listening' : 'idle'} size={64} />
+      </button>
     </div>
   )
 }

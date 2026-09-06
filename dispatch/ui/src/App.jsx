@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
+import { AvatarLauncher } from './Avatar.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
 import { RouteIndex, RouteProduct } from './RoutePages.jsx'
@@ -980,6 +981,10 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('assistantOpen', assistantOpen ? '1' : '0') } catch { /* ignore */ }
   }, [assistantOpen])
+  // A question picked on the corner launcher: opens the rail and is sent by
+  // the chat panel once it is showing.
+  const [pendingAsk, setPendingAsk] = useState(null)
+  const askFromLauncher = (q) => { setPendingAsk(q); setAssistantOpen(true) }
 
   useEffect(() => {
     fetch('/api/zones').then(r => r.json()).then(setZones).catch(() => {})
@@ -1219,8 +1224,15 @@ export default function App() {
             <button className="rail-toggle" onClick={() => setAssistantOpen(false)}
                     title="Hide assistant">×</button>
           </div>
-          <ChatPanel context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }} />
+          <ChatPanel context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
+                     pending={assistantOpen ? pendingAsk : null}
+                     onPendingSent={() => setPendingAsk(null)} />
         </aside>
+        {!assistantOpen && (
+          <AvatarLauncher context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
+                          onOpen={() => setAssistantOpen(true)}
+                          onAsk={askFromLauncher} />
+        )}
       </div>
     </div>
   )

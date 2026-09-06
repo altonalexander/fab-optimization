@@ -622,3 +622,51 @@ a.tf-run:hover .tf-run-in{box-shadow:inset 0 0 0 2px #93c5fd}
   .av-head,.av-lid,.av-pupil,.av-brow,.av-mouth,.avatar{transition:none;animation:none}
   .av-body,.av-antenna,.avatar-qs,.avatar-dots i{animation:none}
 }
+
+/* ------------------------------------------------------- corner launcher */
+/* Bottom-right of the viewport while the rail is closed. Desktop only: the
+   component already checks, and this guard keeps a narrow window clean. */
+.launcher{position:fixed;right:22px;bottom:22px;z-index:45;
+  display:flex;align-items:flex-end;gap:12px;
+  animation:launcher-in .45s cubic-bezier(.2,.8,.2,1)}
+@media(max-width:1100px),(hover:none){.launcher{display:none}}
+@keyframes launcher-in{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:none}}
+
+.launcher-badge{width:68px;height:68px;border-radius:50%;padding:0;border:0;
+  cursor:pointer;overflow:hidden;background:#fff;
+  box-shadow:0 0 0 3px #fff,0 0 0 6px rgba(37,99,235,.35),0 6px 18px rgba(0,0,0,.22);
+  transition:transform .2s,box-shadow .2s}
+.launcher-badge .avatar{width:64px;height:64px;margin:2px}
+.launcher-badge:hover{transform:translateY(-2px);
+  box-shadow:0 0 0 3px #fff,0 0 0 7px rgba(37,99,235,.5),0 10px 24px rgba(0,0,0,.26)}
+.launcher-badge::after{content:"";position:absolute;inset:-6px;border-radius:50%;
+  box-shadow:0 0 18px 4px rgba(59,130,246,.35);animation:launcher-glow 2.6s ease-in-out infinite;
+  pointer-events:none}
+.launcher-badge{position:relative}
+@keyframes launcher-glow{0%,100%{opacity:.55}50%{opacity:1}}
+
+.launcher-bubble{position:relative;max-width:260px;background:#fff;
+  border:1px solid var(--line);border-radius:10px;padding:14px 30px 12px 14px;
+  font-size:14px;line-height:1.45;color:var(--fg);
+  box-shadow:0 8px 24px rgba(0,0,0,.14);margin-bottom:8px}
+.launcher-bubble::after{content:"";position:absolute;right:-8px;bottom:22px;
+  border:8px solid transparent;border-left-color:#fff;border-right:0}
+.launcher-bubble::before{content:"";position:absolute;right:-9px;bottom:22px;
+  border:8px solid transparent;border-left-color:var(--line);border-right:0}
+.launcher-close{position:absolute;top:6px;right:6px;width:22px;height:22px;
+  border-radius:50%;border:1px solid var(--line);background:#fff;color:#6b7280;
+  font-size:15px;line-height:1;cursor:pointer;padding:0}
+.launcher-close:hover{color:var(--fg);border-color:#9ca3af}
+.launcher-text{min-height:1.4em}
+.launcher-caret{display:inline-block;width:1px;height:1em;background:var(--fg);
+  margin-left:2px;vertical-align:-2px;animation:launcher-caret 1s steps(2) infinite}
+@keyframes launcher-caret{to{opacity:0}}
+.launcher-q{display:block;width:100%;margin-top:10px;text-align:left;
+  background:#f3f4f6;border:1px solid var(--line);border-radius:8px;
+  padding:7px 10px;font:inherit;font-size:13px;cursor:pointer;color:var(--fg);
+  animation:av-fade .3s ease}
+.launcher-q:hover{background:#fff;border-color:#9ca3af}
+
+@media(prefers-reduced-motion:reduce){
+  .launcher,.launcher-badge::after,.launcher-caret,.launcher-q{animation:none}
+}

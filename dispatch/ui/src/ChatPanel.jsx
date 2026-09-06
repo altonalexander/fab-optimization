@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import Avatar from './Avatar.jsx'
+import Avatar, { useDesktop } from './Avatar.jsx'
 
 // Grounded assistant. Every figure in a reply comes from a tool result run
 // against live state or the C++ scenario planner — never from model recall.
@@ -19,23 +19,7 @@ const TOOL_LABEL = {
   explain_unassigned: 'checked held lots',
 }
 
-// Mounts only on a real desktop viewport: wide enough for the rail to be a
-// rail, and a pointer that can hover. Re-evaluated on resize so a window
-// dragged narrow drops the character rather than squeezing it.
-function useDesktop() {
-  const q = '(min-width: 1101px) and (hover: hover) and (pointer: fine)'
-  const [on, setOn] = useState(() => window.matchMedia?.(q).matches ?? false)
-  useEffect(() => {
-    const m = window.matchMedia?.(q)
-    if (!m) return
-    const f = e => setOn(e.matches)
-    m.addEventListener('change', f)
-    return () => m.removeEventListener('change', f)
-  }, [])
-  return on
-}
-
-export default function ChatPanel({ context }) {
+export default function ChatPanel({ context, pending, onPendingSent }) {
   const [status, setStatus] = useState(null)
   const desktop = useDesktop()
   const [focused, setFocused] = useState(false)
@@ -104,6 +88,14 @@ export default function ChatPanel({ context }) {
       </div>
     )
   }
+
+  // A question handed in from outside (the corner launcher) is sent once the
+  // panel is mounted and idle, then acknowledged so it cannot fire twice.
+  useEffect(() => {
+    if (!pending || busy) return
+    onPendingSent?.()
+    send(pending)
+  }, [pending, busy])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const mood = busy ? 'thinking' : spoke ? 'speaking' : focused ? 'listening' : 'idle'
 
