@@ -597,9 +597,23 @@ make -C .. verify               # passes clean: no dev override, no host ports
 ```
 
 `docker-compose.prod.yml` binds the UI to `127.0.0.1:8080` and nothing else,
-so the only way in is the reverse proxy or tunnel on the same box. Put
-Cloudflare Tunnel (or Caddy/Traefik with a real certificate) in front of
-:8080 for `fab.<your-domain>`; basic auth is only meaningful behind that TLS.
+so the only way in is the reverse proxy or tunnel on the same box. The
+included ingress is a Cloudflare Tunnel (`--profile tunnel`), driven from the
+command line by `infra/cf-tunnel.sh` with a Cloudflare API token (Account:
+Cloudflare Tunnel Edit, Zone: Zone Read + DNS Edit):
+
+```bash
+export CLOUDFLARE_API_TOKEN=...          # or: sops exec-env <file> '...'
+./cf-tunnel.sh create walden-fab         # tunnel + token -> .env
+./cf-tunnel.sh route fab.<your-domain> http://ui:80   # ingress rule + CNAME
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+    --profile all --profile tunnel up -d
+./cf-tunnel.sh status
+```
+
+Routes are stored at Cloudflare, so another `route` later (a second hostname,
+another service on the same box) takes effect without restarting anything.
+Basic auth is only meaningful behind the TLS the tunnel provides.
 
 The password file is mounted into nginx, so the login covers the dashboard,
 every `/api` route and the SSE stream in one place; `/health` stays open for
