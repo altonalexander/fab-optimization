@@ -145,8 +145,9 @@ HOW TO ANSWER
    explain_unassigned. Only the planner can answer those.
 4. "Which tool is the bottleneck / where is WIP piling up / what is slowing
    the fab / busiest area": call get_bottlenecks. It ranks tool categories
-   (groups) by the WIP queued at them right now, the same numbers as the
-   floor page's heatmap, plus the busiest bays. Report the top three unless
+   (groups) by the lots waiting for them right now, the same numbers as
+   the floor page's heatmap, plus the busiest bays. A group with a long
+   queue but many machines may be fine: mention lots_per_tool. Report the top three unless
    they ask for a specific number, tool type, or bay. Link each group as
    [GROUP](#/tools?type=GROUP) and each bay as [bay B,S](#/floor?bay=B,S).
 Call at most the tools you need, in one round when possible. Then answer.
@@ -330,19 +331,24 @@ class FabAssistant:
                 if str(g.get("group", "")).startswith("Delay_"):
                     continue
                 rows = g.get("tools") or []
-                q = lambda r: r.get("queue") if r.get("queue") is not None else r.get("waiting_count", 0) or 0
-                wip = sum(q(r) for r in rows)
-                busiest = sorted(rows, key=q, reverse=True)[:3]
+                # A lot queues at its station family and every tool in the
+                # family reports the same family queue, so the group's WIP is
+                # that one queue, not the sum over its tools (which would
+                # count each lot once per machine).
+                def q(r):
+                    return r.get("waiting_count") or r.get("queue") or 0
+                wip = g.get("waiting") or max((q(r) for r in rows), default=0)
+                down = [r.get("id") for r in rows if not r.get("online", True)]
                 groups.append({
                     "group": g.get("group"), "wip_queued": wip,
-                    "tools": g.get("count", len(rows)), "offline": g.get("offline", 0),
-                    "queue_max": g.get("queue_max"),
+                    "tools": g.get("count", len(rows)),
+                    "tools_down": down,
                     "running": sum(r.get("running_count", 0) or 0 for r in rows),
-                    "busiest_tools": [{"id": r.get("id"), "queue": q(r),
-                                       "online": r.get("online")} for r in busiest],
+                    "lots_per_tool": round(wip / len(rows), 1) if rows else None,
                 })
             groups.sort(key=lambda x: x["wip_queued"], reverse=True)
-            out = {"ranked_by": "lots queued at the tool group right now "
+            out = {"ranked_by": "distinct lots waiting for the tool group right now; "
+                                "lots_per_tool = that queue over the group's machines "
                                 "(Delay_* queue-time placeholders excluded)",
                    "top_groups": groups[:n],
                    "total_queued": sum(x["wip_queued"] for x in groups)}

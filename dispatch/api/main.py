@@ -1582,6 +1582,17 @@ def layout_state():
     cells = []
     for (bay, seg), tools in cell_tools.items():
         rows = [_tool_row(t) for t in tools]
+        # A lot queues at its station family, and every tool in the family
+        # reports that same family queue (see _waiting_for). Summing per tool
+        # would count each waiting lot once per machine, so a bay's WIP is
+        # one queue per family present in it.
+        fam_q = {}
+        for r in rows:
+            q = r["waiting_count"] if r["waiting_count"] else r["queue"]
+            if q is None:
+                continue
+            fam = tool_group(r["id"])
+            fam_q[fam] = max(fam_q.get(fam, 0), q)
         queues = [r["queue"] for r in rows if r["queue"] is not None]
         cells.append({
             "bay": bay, "seg": seg,
@@ -1589,7 +1600,7 @@ def layout_state():
             "down": sum(1 for r in rows if not r["online"]),
             "running": sum(r["running_count"] for r in rows),
             "dispatches": sum(r["dispatches"] for r in rows),
-            "wip": sum(queues) if queues else 0,
+            "wip": sum(fam_q.values()),
             "queue_max": max(queues) if queues else None,
         })
 
@@ -1670,6 +1681,10 @@ def tools_index():
             "group": r["group"], "tools": [],
             "count": 0, "offline": 0, "dispatches": 0, "lots": 0,
             "queue_max": None,
+            # Lots waiting for this family right now. One number for the
+            # group, not a sum over its tools: a lot queues at the family and
+            # every tool in it reports that same queue (see _waiting_for).
+            "waiting": 0,
             # Type tags. `batches`: a tool of this type loads several lots at
             # once (seen in a decision, or waiting lots say so). `setups`:
             # decisions name a setup; `changeovers` counts the switches.
@@ -1682,6 +1697,7 @@ def tools_index():
         g["lots"] += r["lots"]
         if r["queue"] is not None:
             g["queue_max"] = max(g["queue_max"] or 0, r["queue"])
+        g["waiting"] = max(g["waiting"], r.get("waiting_count") or 0)
         if r.get("batch_max", 0) > 1:
             g["batches"] = True
         if r.get("setup") and r["setup"] != "-":
