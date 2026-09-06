@@ -211,7 +211,9 @@ export function AvatarFigure({ character = 'ada', mood = 'idle', size = 96 }) {
 // and specific to what is on screen: the open tool, the tab, the tools that
 // are actually down right now. Generic fallbacks fill any gaps.
 export function suggestionsFor({ tab, openTool, openProduct, offline = [], cohort } = {}) {
-  const out = []
+  // The two app questions lead on every page: the assistant knows the
+  // dashboard, and these are what a new engineer asks first.
+  const out = ['What can I do on this page?', 'What is this page telling me?']
   const down = offline[0]
   if (openTool) {
     out.push(`What is ${openTool} working on right now?`)
@@ -259,7 +261,7 @@ export function suggestionsFor({ tab, openTool, openProduct, offline = [], cohor
       out.push('Why are lots sitting unassigned?')
   }
   out.push('What happens if the busiest tool goes down?')
-  return [...new Set(out)].slice(0, 6)
+  return [...new Set(out)].slice(0, 8)
 }
 
 // The character plus its speech bubble. `mood` comes from the chat panel;
