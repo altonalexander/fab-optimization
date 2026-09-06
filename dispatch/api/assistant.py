@@ -267,14 +267,48 @@ class FabAssistant:
                 trace.append({"tool": name, "input": args})
 
         def get_fab_state() -> dict:
-            """Whole-fab live state: ready/in-flight lot counts, completed
-            total, KPIs, sim clock, per-tool online status, and the list of
-            tools currently offline. Use for "what is the fab doing" and
-            "which tools are down"."""
+            """Whole-fab live state, the same numbers as the header tiles:
+            sim day and clock, WIP (waiting + on a tool), throughput and
+            starts per day, cycle time, on-time delivery and tardiness, tool
+            utilization, optimized-decision share, and every tool currently
+            down with its reason. Use for "summarize the sim", "what is the
+            fab doing", "which tools are down"."""
             note("get_fab_state")
             snap = mirror.snapshot()
-            offline = [t for t, v in snap["tools"].items() if not v["online"]]
-            return _cap({**snap, "tools_offline": offline})
+            kpi = snap.get("kpi") or {}
+            sim = snap.get("sim") or {}
+            tl = snap.get("timeline") or {}
+            tools = snap.get("tools") or {}
+            down = sorted(
+                [{"tool": t, "reason": v.get("reason"),
+                  "down_hours": round((v.get("down_s") or 0) / 3600, 1)}
+                 for t, v in tools.items() if not v.get("online", True)],
+                key=lambda d: -d["down_hours"])
+            ready, flight = snap.get("ready", 0), snap.get("in_flight", 0)
+            dec, opt = kpi.get("dec") or 0, kpi.get("opt") or 0
+            # Curated on purpose: the raw snapshot is ~900 per-tool rows and
+            # event counters, which the model mistook for lot counts.
+            return {
+                "sim": {"day": tl.get("stream_day"), "clock_s": sim.get("t"),
+                        "speed_x": sim.get("speed"), "paused": sim.get("paused"),
+                        "run": tl.get("stream_run"),
+                        "snapshot_day": tl.get("snapshot_day")},
+                "wip": {"total": ready + flight, "waiting": ready, "on_a_tool": flight},
+                "kpi_trailing_day": {
+                    "throughput_lots_per_day": kpi.get("thr"),
+                    "starts_lots_per_day": kpi.get("starts"),
+                    "cycle_time_days": kpi.get("ct"),
+                    "on_time_delivery_pct": kpi.get("otd"),
+                    "late_lots_avg_days_late": kpi.get("tard"),
+                    "tool_utilization_pct": kpi.get("util"),
+                    "optimized_decisions_pct": round(100 * opt / dec, 1) if dec else 0,
+                    "decisions_per_day": dec,
+                    "note": "starts above throughput means WIP is building; "
+                            "optimized 0% means the baseline fifo rule is dispatching",
+                },
+                "completed_since_start": snap.get("completed"),
+                "tools": {"total": len(tools), "down_count": len(down), "down": down},
+            }
 
         def get_page_data(path: str) -> dict:
             """Read the data behind a dashboard page from the API's own GET
