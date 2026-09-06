@@ -26,6 +26,10 @@
 
 #include <string>
 
+#ifdef FAB_HAVE_ZMQ
+#include <zmq.h>   // system header: must stay outside namespace fab
+#endif
+
 namespace fab {
 
 // Endpoint conventions. inproc/ipc when co-located (single-digit us),
@@ -39,7 +43,6 @@ inline constexpr const char* kTelemetryTcp    = "tcp://amhs-adapter:5562";
 }
 
 #ifdef FAB_HAVE_ZMQ
-#include <zmq.h>
 
 class ZmqContext {
 public:
