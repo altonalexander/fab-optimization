@@ -478,15 +478,25 @@ bar is high on purpose: the dispatcher is already C++, so a Rust API would make
 this a three-language stack for a service whose job is to hold a ring buffer
 and serialise JSON. Rewrite it when a profile says so, not before.
 
-### Assistant (Claude on Vertex AI)
+### Assistant (Gemini agents on Vertex AI)
 
-An `assistant` tab in the dashboard answers questions about live state and runs
-what-ifs conversationally. Claude is served from **Google Vertex AI** via
-`AnthropicVertex`, so the model call stays inside your GCP project.
+An assistant rail in the dashboard answers questions about live state and runs
+what-ifs conversationally. It is built with the **Google Agent Development Kit
+(ADK)** on **Gemini Flash**, served from **Vertex AI**, so the model call stays
+inside your GCP project.
 
-**Grounding is the whole design.** The model is given four tools and is
-instructed that every number, tool ID, and lot ID it states must come from a
-tool result:
+**Shape.** One root `dispatch` agent talks to the engineer and routes each
+question to a specialist it calls as a tool: `state` (what is happening now)
+or `scenario` (what-if against the cloned registry). Each specialist owns the
+tools for its kind of question, so a live number and a simulated one never
+come from the same agent. Adding a specialist is one more `LlmAgent` in
+`api/assistant.py`. The runner is driven in-process per request, with an
+in-memory session rebuilt from the transcript the UI sends, so the API stays
+stateless.
+
+**Grounding is the whole design.** The specialists are given four tools and
+every agent is instructed that each number, tool ID, and lot ID it states must
+come from a tool result:
 
 | tool | does |
 |---|---|
@@ -506,13 +516,21 @@ engineer can see what the answer was built from.
 **Config**
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=your-project
-export VERTEX_REGION=us-east5
+# dev box: nothing to export once ADC carries the project
+gcloud config set project fab-optimization
+gcloud services enable aiplatform.googleapis.com
+gcloud auth application-default login
+scripts/dev-up.sh
+
+# containers
+export GOOGLE_CLOUD_PROJECT=fab-optimization
+export VERTEX_REGION=us-central1        # VERTEX_MODEL defaults to gemini-2.5-flash
 export GCP_SA_KEY=/path/to/sa.json     # >>> prefer Workload Identity in GKE
 make infra-up
 ```
 
-Without credentials the tab degrades to a clear "unavailable" message and the
+`GET /api/chat/status` reports the model and project the API resolved. Without
+credentials the rail degrades to a clear "unavailable" message and the
 rest of the dashboard is unaffected — verified.
 
 **Zone note.** The assistant lives in the API (zone 2↔3 boundary) and is the

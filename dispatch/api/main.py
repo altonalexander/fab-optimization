@@ -2541,7 +2541,8 @@ def sim_control_set():
 def chat_status():
     """Whether the assistant is configured, and which model backs it."""
     return jsonify({"available": assistant.available, "error": assistant.error,
-                    "model": os.getenv("VERTEX_MODEL", "claude-sonnet-4-5@20250929")})
+                    "model": os.getenv("VERTEX_MODEL", "gemini-2.5-flash"),
+                    "project": assistant.project})
 
 
 @app.post("/api/chat")

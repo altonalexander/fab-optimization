@@ -4,6 +4,6 @@ gunicorn==22.0.0
 gevent==24.2.1
 confluent-kafka==2.5.3
 PyYAML==6.0.2
-anthropic[vertex]==0.40.0
+google-adk==2.8.0
 google-auth==2.35.0
 psycopg[binary]==3.2.3

@@ -1,4 +1,5 @@
-# api/assistant.py — Claude on Google Vertex AI, grounded in live fab state.
+# api/assistant.py — Gemini agents (Google ADK) on Vertex AI, grounded in live
+# fab state.
 #
 # ZONE 3 boundary component. Same read-only rule as the rest of the API: the
 # assistant can READ live state and RUN SCENARIOS against a cloned registry.
@@ -7,30 +8,58 @@
 # Grounding strategy: the model is never asked to recall fab numbers. Every
 # figure it states comes from a tool result injected into the conversation. A
 # dispatch assistant that hallucinates a tool ID is worse than no assistant.
+#
+# Shape: one root "dispatch" agent that answers the engineer, routing to two
+# specialists it calls as tools -- `state` (what is happening now) and
+# `scenario` (what-if against the cloned registry). Each specialist owns the
+# tools for its question so the root never mixes a live number with a
+# simulated one. Adding a specialist (say, a KPI-history agent over Postgres)
+# is one more LlmAgent in AGENTS below; the routing is the root's job.
+#
+# Runs in-process: the ADK Runner is driven synchronously per request with an
+# in-memory session rebuilt from the transcript the UI sends. Nothing persists
+# server-side, which keeps the API stateless like every other endpoint.
 
+import asyncio
 import json
 import os
-import subprocess
+import uuid
 
-# Vertex AI hosts Claude models; the Anthropic SDK ships a Vertex client.
-#   pip install "anthropic[vertex]"
+# Credentials come from Application Default Credentials:
+#   pip install google-adk
 #   gcloud auth application-default login   (or a service account on the pod)
+# The project is GOOGLE_CLOUD_PROJECT when set, otherwise the ADC quota project
+# (what `gcloud config set project` stamped at login), so a dev box needs no
+# env at all once it has logged in.
 try:
-    from anthropic import AnthropicVertex
+    from google.adk.agents import LlmAgent
+    from google.adk.events import Event
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.adk.tools import AgentTool
+    from google.genai import types as gtypes
     _SDK = True
 except ImportError:
-    AnthropicVertex = None
     _SDK = False
 
-MODEL       = os.getenv("VERTEX_MODEL", "claude-sonnet-4-5@20250929")
-REGION      = os.getenv("VERTEX_REGION", "us-east5")
+MODEL       = os.getenv("VERTEX_MODEL", "gemini-2.5-flash")
+REGION      = os.getenv("VERTEX_REGION", "us-central1")
 PROJECT     = os.getenv("GOOGLE_CLOUD_PROJECT", "")
 MAX_TOKENS  = int(os.getenv("ASSISTANT_MAX_TOKENS", "1500"))
+APP_NAME    = "fab-dispatch"
 
-SYSTEM = """You are the dispatch assistant for a 300mm semiconductor fab.
-You help a fab engineer interpret live dispatch state and what-if scenarios.
 
-GROUNDING RULES — these are absolute:
+def _adc_project():
+    """Project recorded with the local ADC, or '' when there is none."""
+    try:
+        import google.auth
+        _, proj = google.auth.default()
+        return proj or ""
+    except Exception:                                   # noqa: BLE001
+        return ""
+
+
+GROUNDING = """GROUNDING RULES — these are absolute:
 - Every number, tool ID, lot ID, and recipe you state must come from a tool
   result in this conversation. Never recall or invent one.
 - If you don't have the data, call a tool. If a tool can't get it, say so
@@ -50,149 +79,228 @@ DOMAIN CONTEXT you may reason from:
   operational fast path (sub-millisecond, no solving — it reads a precomputed
   slate).
 
-STYLE: concise and direct. Lead with the answer. An engineer is reading this
-mid-shift. Prefer a short list over a paragraph. No preamble.
-
 You are READ-ONLY. You can inspect state and simulate scenarios against a
 cloned registry. You cannot change the running fab, and you should say so if
 asked to."""
 
-TOOLS = [
-    {
-        "name": "get_fab_state",
-        "description": "Current live fab state: ready/in-flight lot counts, "
-                       "completed total, throughput, and per-tool online status. "
-                       "Call this before answering anything about right now.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "get_recent_events",
-        "description": "Recent lot and tool events from the Kafka mirror. Use "
-                       "to explain what just happened or spot a pattern.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"limit": {"type": "integer",
-                                     "description": "how many, max 100"}},
-        },
-    },
-    {
-        "name": "run_scenario",
-        "description": "Run a what-if against a CLONED registry using the same "
-                       "C++ planner the dispatcher uses. Takes tools down and "
-                       "re-plans, returning a baseline-vs-scenario diff: which "
-                       "lots reroute, which become unassignable. Use this for "
-                       "any 'what if X goes down' question.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "tools_down": {
-                    "type": "array", "items": {"type": "string"},
-                    "description": "tool IDs to take offline, e.g. ['LITHO_03']",
-                },
-            },
-            "required": ["tools_down"],
-        },
-    },
-    {
-        "name": "explain_unassigned",
-        "description": "For the current ready pool, list lots the planner could "
-                       "not assign, with the reason for each.",
-        "input_schema": {"type": "object", "properties": {}},
-    },
-]
+ROOT_INSTRUCTION = """You are the dispatch assistant for a 300mm semiconductor
+fab. You help a fab engineer interpret live dispatch state and what-if
+scenarios.
+
+You have two specialists, exposed as tools:
+- `state`: anything about right now — WIP, which tools are up or down, the
+  bottleneck, what just happened, why lots are waiting.
+- `scenario`: any "what if" — a tool going down, re-planning, which lots would
+  reroute or become unassignable.
+Route each question to the specialist that owns it; a question can need both
+(e.g. "is LITHO_03 the bottleneck and what if it goes down?"). Pass the
+engineer's question through verbatim plus any tool IDs already mentioned in
+the conversation. Answer from what the specialists return; do not add figures
+of your own.
+
+STYLE: concise and direct. Lead with the answer. An engineer is reading this
+mid-shift. Prefer a short list over a paragraph. No preamble.
+
+""" + GROUNDING
+
+STATE_INSTRUCTION = """You report the fab's live state. Always call
+get_fab_state first; call get_recent_events when asked what happened or why.
+Reply with the facts the caller needs, tool IDs and numbers exactly as the
+tools returned them, in a few short lines.
+
+""" + GROUNDING
+
+SCENARIO_INSTRUCTION = """You run what-if scenarios against a CLONED registry
+using the same C++ planner the dispatcher uses. For "what if X goes down" call
+run_scenario with those tool IDs. For "why are lots unassigned" call
+explain_unassigned. Report the baseline-vs-scenario diff plainly: which lots
+reroute, which become unassignable, and the reasons the planner gave.
+
+""" + GROUNDING
+
+
+def _cap(obj, limit=20000):
+    """Bound what a tool hands back to the model so one long event list
+    cannot blow the context."""
+    s = json.dumps(obj)
+    return obj if len(s) <= limit else {"truncated": True, "data": s[:limit]}
 
 
 class FabAssistant:
-    """Wraps Claude-on-Vertex with tools bound to the live mirror."""
+    """Root dispatch agent plus specialists, bound to the live mirror."""
 
     def __init__(self, mirror, scenario_runner):
         self.mirror = mirror
         self.run_scenario = scenario_runner
-        self.client = None
+        self.runner = None
         self.error = None
+        self.project = PROJECT or _adc_project()
         if not _SDK:
-            self.error = "anthropic[vertex] not installed"
-        elif not PROJECT:
-            self.error = "GOOGLE_CLOUD_PROJECT not set"
+            self.error = "google-adk not installed"
+        elif not self.project:
+            self.error = ("no Google Cloud project: set GOOGLE_CLOUD_PROJECT or run "
+                          "`gcloud auth application-default login` with a project set")
         else:
+            # ADK reads the Vertex routing from the environment.
+            os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+            os.environ.setdefault("GOOGLE_CLOUD_PROJECT", self.project)
+            os.environ.setdefault("GOOGLE_CLOUD_LOCATION", REGION)
             try:
-                self.client = AnthropicVertex(region=REGION, project_id=PROJECT)
+                self.root = self._build_agents()
+                self.sessions = InMemorySessionService()
+                self.runner = Runner(app_name=APP_NAME, agent=self.root,
+                                     session_service=self.sessions)
             except Exception as e:                      # noqa: BLE001
-                self.error = f"vertex client init failed: {e}"
+                self.error = f"agent init failed: {e}"
 
     @property
     def available(self):
-        return self.client is not None
+        return self.runner is not None
 
-    # ---- tool implementations --------------------------------------------
+    # ---- tools ---------------------------------------------------------------
+    # Plain functions: ADK derives each declaration from the signature and
+    # docstring, which is what the model sees. Keep the docstrings honest.
 
-    def _exec_tool(self, name, args):
-        if name == "get_fab_state":
-            snap = self.mirror.snapshot()
+    def _tools(self):
+        mirror, planner = self.mirror, self.run_scenario
+
+        def get_fab_state() -> dict:
+            """Current live fab state: ready/in-flight lot counts, completed
+            total, throughput, and per-tool online status, plus the list of
+            tools currently offline. Call this before answering anything about
+            right now."""
+            snap = mirror.snapshot()
             offline = [t for t, v in snap["tools"].items() if not v["online"]]
-            return {**snap, "tools_offline": offline}
+            return _cap({**snap, "tools_offline": offline})
 
-        if name == "get_recent_events":
-            n = min(int(args.get("limit", 40)), 100)
-            with self.mirror.lock:
-                return {"events": list(self.mirror.events)[-n:]}
+        def get_recent_events(limit: int = 40) -> dict:
+            """Recent lot and tool events from the Kafka mirror, oldest first.
+            Use to explain what just happened or spot a pattern.
 
-        if name == "run_scenario":
-            downed = args.get("tools_down", [])
-            return self.run_scenario(
-                [{"tool_id": t, "online": False} for t in downed])
+            Args:
+                limit: how many events to return, at most 100.
+            """
+            n = max(1, min(int(limit or 40), 100))
+            with mirror.lock:
+                return _cap({"events": list(mirror.events)[-n:]})
 
-        if name == "explain_unassigned":
-            res = self.run_scenario([])
+        def run_scenario(tools_down: list[str]) -> dict:
+            """Run a what-if against a CLONED registry using the same C++
+            planner the dispatcher uses. Takes the given tools offline and
+            re-plans, returning a baseline-vs-scenario diff: which lots
+            reroute, which become unassignable.
+
+            Args:
+                tools_down: tool IDs to take offline, e.g. ["LITHO_03"].
+            """
+            return _cap(planner(
+                [{"tool_id": t, "online": False} for t in tools_down or []]))
+
+        def explain_unassigned() -> dict:
+            """For the current ready pool, list lots the planner could not
+            assign, with the reason for each."""
+            res = planner([])
             if "error" in res:
                 return res
-            return {"unassigned": res.get("scenario", res).get("unassigned", []),
-                    "assigned": res.get("scenario", res).get("assigned", 0)}
+            body = res.get("scenario", res)
+            return _cap({"unassigned": body.get("unassigned", []),
+                         "assigned": body.get("assigned", 0)})
 
-        return {"error": f"unknown tool {name}"}
+        return {"state": [get_fab_state, get_recent_events],
+                "scenario": [run_scenario, explain_unassigned]}
 
-    # ---- conversation -----------------------------------------------------
+    def _build_agents(self):
+        tools = self._tools()
+        cfg = gtypes.GenerateContentConfig(max_output_tokens=MAX_TOKENS,
+                                           temperature=0.2)
+        state = LlmAgent(
+            name="state", model=MODEL, generate_content_config=cfg,
+            description="Reports the fab's live state: WIP, tool status, "
+                        "recent events, the bottleneck, why lots are waiting.",
+            instruction=STATE_INSTRUCTION, tools=tools["state"],
+        )
+        scenario = LlmAgent(
+            name="scenario", model=MODEL, generate_content_config=cfg,
+            description="Runs what-if scenarios (tools down, re-plan) against "
+                        "a cloned registry and explains unassigned lots.",
+            instruction=SCENARIO_INSTRUCTION, tools=tools["scenario"],
+        )
+        # AgentTool rather than sub_agents: the root keeps the conversation and
+        # may consult both specialists for one question, instead of handing the
+        # whole turn over to one of them.
+        return LlmAgent(
+            name="dispatch", model=MODEL, generate_content_config=cfg,
+            description="Dispatch assistant for the fab engineer.",
+            instruction=ROOT_INSTRUCTION,
+            tools=[AgentTool(state), AgentTool(scenario)],
+        )
+
+    # ---- conversation --------------------------------------------------------
+
+    def _session_from(self, messages):
+        """A fresh session seeded with every turn but the last user one, so
+        the model sees the conversation the UI shows."""
+        user_id = "ui"
+        async def seed():
+            session = await self.sessions.create_session(
+                app_name=APP_NAME, user_id=user_id, session_id=uuid.uuid4().hex)
+            for m in messages[:-1]:
+                is_user = m["role"] == "user"
+                await self.sessions.append_event(session, Event(
+                    author="user" if is_user else self.root.name,
+                    invocation_id=uuid.uuid4().hex,
+                    content=gtypes.Content(
+                        role="user" if is_user else "model",
+                        parts=[gtypes.Part.from_text(text=m["content"])])))
+            return session
+        return user_id, asyncio.run(seed())
 
     def ask(self, messages):
         """
         messages: [{"role":"user"|"assistant","content":str}, ...]
         Returns {"reply": str, "tools_used": [...], "error": str|None}
-        Runs the tool-use loop to completion, then returns the final text.
+        Runs the agents to completion, then returns the final text.
         """
         if not self.available:
             return {"reply": None, "tools_used": [],
                     "error": self.error or "assistant unavailable"}
+        if not messages or messages[-1]["role"] != "user":
+            return {"reply": None, "tools_used": [],
+                    "error": "last message must be from the user"}
 
-        convo = [{"role": m["role"], "content": m["content"]} for m in messages]
-        used = []
-
-        # Bounded loop: a runaway tool cycle must not hang the request.
-        for _ in range(6):
+        user_id, session = self._session_from(messages)
+        used, reply = [], None
+        try:
+            events = self.runner.run(
+                user_id=user_id, session_id=session.id,
+                new_message=gtypes.Content(
+                    role="user",
+                    parts=[gtypes.Part.from_text(text=messages[-1]["content"])]))
+            for ev in events:
+                for fc in ev.get_function_calls():
+                    # Specialist calls are routing, not data; the UI trace
+                    # shows the data tools the specialists actually ran.
+                    if fc.name in ("state", "scenario"):
+                        continue
+                    used.append({"tool": fc.name, "input": dict(fc.args or {}),
+                                 "agent": ev.author})
+                if ev.error_message:
+                    return {"reply": None, "tools_used": used,
+                            "error": ev.error_message}
+                if ev.author == self.root.name and ev.is_final_response() and ev.content:
+                    text = "".join(p.text or "" for p in ev.content.parts or [])
+                    if text.strip():
+                        reply = text
+        except Exception as e:                           # noqa: BLE001
+            return {"reply": None, "tools_used": used, "error": str(e)}
+        finally:
             try:
-                resp = self.client.messages.create(
-                    model=MODEL, max_tokens=MAX_TOKENS,
-                    system=SYSTEM, tools=TOOLS, messages=convo,
-                )
-            except Exception as e:                       # noqa: BLE001
-                return {"reply": None, "tools_used": used, "error": str(e)}
+                self.sessions.delete_session_sync(
+                    app_name=APP_NAME, user_id=user_id, session_id=session.id)
+            except Exception:                            # noqa: BLE001
+                pass
 
-            if resp.stop_reason != "tool_use":
-                text = "".join(b.text for b in resp.content if b.type == "text")
-                return {"reply": text, "tools_used": used, "error": None}
-
-            convo.append({"role": "assistant", "content": resp.content})
-            results = []
-            for block in resp.content:
-                if block.type != "tool_use":
-                    continue
-                out = self._exec_tool(block.name, block.input or {})
-                used.append({"tool": block.name, "input": block.input})
-                results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(out)[:20000],   # cap context growth
-                })
-            convo.append({"role": "user", "content": results})
-
-        return {"reply": None, "tools_used": used,
-                "error": "tool loop exceeded 6 rounds"}
+        if reply is None:
+            return {"reply": None, "tools_used": used,
+                    "error": "the agent finished without a reply"}
+        return {"reply": reply, "tools_used": used, "error": None}

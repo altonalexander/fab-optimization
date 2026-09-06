@@ -252,8 +252,8 @@ services:
       # The assistant is the ONE component with egress, and only because it is
       # in zone 3. It reaches Vertex, never the fab.
       GOOGLE_CLOUD_PROJECT: "${GOOGLE_CLOUD_PROJECT:-}"
-      VERTEX_REGION: "${VERTEX_REGION:-us-east5}"
-      VERTEX_MODEL: "${VERTEX_MODEL:-claude-sonnet-4-5@20250929}"
+      VERTEX_REGION: "${VERTEX_REGION:-us-central1}"
+      VERTEX_MODEL: "${VERTEX_MODEL:-gemini-2.5-flash}"
       GOOGLE_APPLICATION_CREDENTIALS: "/var/secrets/gcp/sa.json"
     volumes:
       # Same tool master the dispatcher uses, and the zone policy the UI renders.

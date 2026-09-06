@@ -67,8 +67,10 @@ export default function ChatPanel() {
         <strong>Assistant unavailable</strong>
         <div className="muted">{status.error}</div>
         <div className="muted" style={{ marginTop: 8 }}>
-          Needs <code>anthropic[vertex]</code> and <code>GOOGLE_CLOUD_PROJECT</code>.
-          Claude is served from Vertex AI in <code>{status.model}</code>.
+          Needs <code>google-adk</code> and Google Cloud credentials
+          (<code>gcloud auth application-default login</code>, or
+          <code>GOOGLE_CLOUD_PROJECT</code>). Gemini is served from Vertex AI
+          as <code>{status.model}</code>{status.project ? <> in <code>{status.project}</code></> : null}.
         </div>
       </div>
     )
