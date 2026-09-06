@@ -1,7 +1,7 @@
 # Local (single-binary) and containerised (multi-zone) builds.
 CXX      ?= g++
 CXXFLAGS ?= -std=c++20 -O2 -pthread -Iinclude
-COMPOSE  := docker compose -f infra/docker-compose.yml
+COMPOSE  := docker compose -f infra/docker-compose.yml --profile all
 
 .PHONY: all local dispatcher adapter scenario hsms-sim slate test bench run api ui infra-up infra-down verify reach clean
 
