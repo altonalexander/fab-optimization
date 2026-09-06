@@ -364,12 +364,12 @@ export default function Avatar({ mood = 'idle', context, onAsk, busy }) {
 // Corner launcher. Lives in the bottom-right of the viewport while the rail is
 // closed: a round badge with the character and, beside it, a speech bubble
 // that types out a greeting and offers one question for the current page.
-// It appears a little while after the page loads rather than immediately, so
-// the engineer has settled on the page before something waves at them.
+// It appears just after first paint (not in the same frame as the page), so
+// the page lands first and the character arrives as a second beat.
 // Clicking the character opens the rail; clicking the question opens the rail
 // and asks it. The bubble can be dismissed for the session; the badge stays.
 // ---------------------------------------------------------------------------
-export const LAUNCHER_DELAY_MS = 20000
+export const LAUNCHER_DELAY_MS = 800
 
 export function AvatarLauncher({ context, onOpen, onAsk, delay = LAUNCHER_DELAY_MS }) {
   const desktop = useDesktop()
