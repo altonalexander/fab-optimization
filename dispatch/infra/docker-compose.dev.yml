@@ -53,3 +53,11 @@ services:
       KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,HOST://localhost:29092"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT"
       KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+  # Share the warm-up cache with dev-up.sh instead of a private volume, and
+  # run as the host user so the container can write new checkpoints there.
+  feed:
+    user: "${FEED_UID:-1000}:${FEED_GID:-1000}"   # your host uid:gid (id -u / id -g)
+    volumes:
+      - ../../bench/snapshots:/app/bench/snapshots
+      - sim-control:/var/run/fab-sim

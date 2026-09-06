@@ -1,0 +1,59 @@
+# ZONE 2 — MES/AMHS producer stand-in.
+#
+# Runs bench/tools/sim_feed.py: PySCFabSim driven as a paced event source,
+# publishing the same wire format the C++ path uses. In a real fab this
+# container does not exist -- the MES does. It lives in the data zone because
+# that is where a real MES feed would enter.
+#
+# Build context is the REPO ROOT (see docker-compose.yml): the feed needs
+# baselines/, bench/tools/, data/ and dispatch/libfabslate.so laid out exactly
+# as sim_runner.py expects them relative to each other.
+
+# ---- stage 1: libfabslate.so, the CP-SAT slate the feed dispatches from ----
+FROM ubuntu:24.04 AS slate
+ARG ORTOOLS_URL=https://github.com/google/or-tools/releases/download/v9.15/or-tools_amd64_ubuntu-24.04_cpp_v9.15.6755.tar.gz
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      g++ cmake make curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# OR-Tools is what makes `--slate-solver cpsat` real. Leave ORTOOLS_URL empty
+# to skip it: build-slate.sh then produces a greedy-only library and the feed
+# prints a warning that cpsat decisions are greedy wearing its name.
+RUN if [ -n "$ORTOOLS_URL" ]; then \
+      mkdir -p /opt && curl -fsSL "$ORTOOLS_URL" -o /tmp/ortools.tgz \
+      && tar xzf /tmp/ortools.tgz -C /opt && rm /tmp/ortools.tgz \
+      && mv /opt/or-tools_* /opt/or-tools; fi
+WORKDIR /src/dispatch
+COPY dispatch/include/ include/
+COPY dispatch/src/ src/
+COPY dispatch/CMakeLists.txt dispatch/build-slate.sh ./
+RUN ORTOOLS_ROOT=/opt/or-tools bash build-slate.sh
+
+# ---- stage 2: the feed ----
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libstdc++6 libgomp1 && rm -rf /var/lib/apt/lists/*
+# The simulator's requirements.txt is a pip freeze of an RL research env
+# (torch, wandb, opencv). The simulation core and the feed need only these.
+# Versions match baselines/pyscfabsim/.venv exactly: warm-up checkpoints are
+# cloudpickles of live simulator objects (pandas frames included), so a
+# checkpoint built by the dev feed must unpickle here and vice versa.
+RUN pip install --no-cache-dir \
+      numpy==1.26.4 pandas==3.0.5 matplotlib==3.11.1 cloudpickle==3.1.2 \
+      confluent-kafka==2.5.3 "psycopg[binary]==3.2.3" PyYAML==6.0.2
+WORKDIR /app
+COPY baselines/pyscfabsim/ baselines/pyscfabsim/
+COPY bench/tools/ bench/tools/
+COPY data/ data/
+COPY --from=slate /src/dispatch/libfabslate.so dispatch/libfabslate.so
+COPY --from=slate /opt/or-tools/lib/ /opt/or-tools/lib/
+COPY dispatch/legal/ /app/legal/
+ENV LD_LIBRARY_PATH=/opt/or-tools/lib \
+    PYTHONUNBUFFERED=1 \
+    SIM_CONTROL_FILE=/var/run/fab-sim/sim_control.json \
+    MPLCONFIGDIR=/tmp/matplotlib
+# Same uid as the API: the two share the playback-control volume, and both are
+# zone-2 data-plane processes.
+RUN useradd -r -u 10004 feed \
+    && mkdir -p bench/snapshots /var/run/fab-sim \
+    && chown -R feed:feed /app /var/run/fab-sim && chmod 1777 /var/run/fab-sim
+USER feed
+ENTRYPOINT ["python3", "bench/tools/sim_feed.py"]
