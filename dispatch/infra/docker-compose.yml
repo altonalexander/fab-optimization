@@ -309,6 +309,10 @@ services:
       - ${GCP_SA_KEY:-/dev/null}:/var/secrets/gcp/sa.json:ro
     depends_on:
       kafka: { condition: service_healthy }
+      # The mirror bootstraps from the compacted state topics at start. If it
+      # comes up before kafka-init has created them it starts cold and misses
+      # the feed's snapshot -- an empty dashboard until the API restarts.
+      kafka-init: { condition: service_completed_successfully }
     ports: []   # not published; the UI proxies to it
     deploy:
       resources:
