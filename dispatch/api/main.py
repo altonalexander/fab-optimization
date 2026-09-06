@@ -616,6 +616,16 @@ class FabMirror:
 
     def add_decision(self, d):
         self.note_timeline(d.get("run"), _as_float(d.get("day")), "stream")
+        # The feed's rationale rides along as base64 JSON (the wire format
+        # forbids ';' and '='). Decode once here; a bad blob is dropped, not
+        # fatal -- the decision row itself is still good.
+        w = d.get("why")
+        if isinstance(w, str):
+            try:
+                import base64
+                d["why"] = json.loads(base64.urlsafe_b64decode(w + "=" * (-len(w) % 4)))
+            except Exception:
+                d.pop("why", None)
         with self.lock:
             self.decisions.append({**d, "ts": time.time()})
             # Decisions carry the simulated clock as a day number. Advancing

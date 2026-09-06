@@ -51,6 +51,7 @@ scripts/smoke.sh, which has to run without Docker. Kafka is the path.
 so the window changes what is recorded, never what is simulated.
 """
 import argparse
+import base64
 import json
 import os
 import signal
@@ -726,6 +727,11 @@ class FeedPlugin(IPlugin):
         self._busy = {}             # tool -> lots on it now
         self._next_kpi_t = None
         self._decisions = []        # (t, optimized) per dispatch decision
+        # Rationale for each decision, attached to the DECISION event as
+        # `why` (base64 JSON). `explain` is the SlateRule when one is running,
+        # so token and reason codes can be read back; None for baseline rules.
+        self.explain = None
+        self.explain_n = 5          # runners-up recorded per decision
         # Where lot time goes: (t, queue_s, batch_wait_s, proc_s) per burndown
         # point, i.e. the segment that just ended. Summed over the trailing
         # day it says what share of cycle time is queueing vs holding for
@@ -1135,6 +1141,65 @@ class FeedPlugin(IPlugin):
             self._write(TOOL_TOPIC, envelope(
                 type='TOOL_STATUS', tool=self._name(m), online=1))
 
+    # -- why this lot -------------------------------------------------------
+    # Every rule here scores each waiting lot into lot.ptuple and takes the
+    # smallest, so the winner's tuple next to the runners-up' tuples IS the
+    # reason. Slot names depend on the rule; the slate adds a reason code and
+    # the token it planned. Recorded per decision, capped at explain_n
+    # alternatives, and shipped in the DECISION event as base64 JSON because
+    # the wire format forbids ';' and '=' in values.
+    TUPLE_KEYS = {
+        'fifo': ['gate', 'setup_s', '-prio', 'free_since', 'deadline'],
+        'lifo_org': ['gate', 'setup_s', '-prio', '-free_since', '-deadline'],
+        'lifo_anders': ['gate', 'setup_s', '-prio', '-free_since', 'deadline'],
+        'cr': ['gate', 'setup_s', '-prio', 'cr'],
+        'random': ['gate', 'setup_s', '-prio', 'random'],
+        'slate': ['gate', 'setup_s', '-prio', 'tier', 'rank_or_score'],
+    }
+
+    def _lot_brief(self, lot, now, machine):
+        step = lot.actual_step
+        t = getattr(lot, 'ptuple', None) or ()
+        d = {
+            'lot': self._lot_id(lot),
+            'step': getattr(step, 'step_name', None),
+            'prio': lot.priority,
+            'wait_s': round(now - lot.free_since) if lot.free_since is not None else None,
+            'slack_s': round(lot.deadline_at - now) if lot.deadline_at is not None else None,
+            'setup': getattr(step, 'setup_needed', None),
+            'setup_match': (getattr(step, 'setup_needed', None) in (None, '-', machine.current_setup)),
+            'tuple': [round(x, 3) if isinstance(x, float) else x for x in t],
+        }
+        try:
+            d['cr'] = round(lot.cr(now), 3)
+        except Exception:
+            pass
+        if self.explain is not None:
+            d['reason'] = self.explain.reason_for(lot)
+            tok = self.explain.token_of.get(lot.idx)
+            if tok:
+                d['token'] = {'tool': tok[0], 'alt': tok[1], 'rank': tok[2]}
+        return d
+
+    def _why(self, instance, machine, lots, src):
+        now = instance.current_time
+        rule = str(self.rule).split(':', 1)[0]
+        others = [l for l in machine.waiting_lots if getattr(l, 'ptuple', None)]
+        others.sort(key=lambda l: l.ptuple)
+        return {
+            'rule': src,
+            'keys': self.TUPLE_KEYS.get(rule, ['gate', 'setup_s', '-prio', '...']),
+            'tool_setup': machine.current_setup or '-',
+            'waiting': len(machine.waiting_lots),
+            'chosen': [self._lot_brief(l, now, machine) for l in lots],
+            'alternatives': [self._lot_brief(l, now, machine) for l in others[:self.explain_n]],
+        }
+
+    @staticmethod
+    def _pack(obj):
+        raw = json.dumps(obj, separators=(',', ':')).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip('=')
+
     def on_dispatch(self, instance, machine, lots, machine_end_time, lot_end_time):
         self._now = instance.current_time
         self._recover_due(instance.current_time)
@@ -1196,12 +1261,18 @@ class FeedPlugin(IPlugin):
         #
         # Both are emitted. `queue` keeps its meaning so older rows stay
         # interpretable; `qbefore` is the one to read.
+        why = None
+        if not tool.startswith('Delay_'):
+            try:
+                why = self._pack(self._why(instance, machine, lots, src))
+            except Exception as e:           # never let the explainer stop the feed
+                print(f'  why: {e!r}', file=sys.stderr)
         self._write(DECISION_TOPIC, envelope(
             tool=tool, lots=len(lots), queue=len(machine.waiting_lots),
             qbefore=len(machine.waiting_lots) + len(lots),
             day=round(instance.current_time / 86400, 4),
             run=self.run_id, src=src,
-            setup=machine.current_setup or '-'))
+            setup=machine.current_setup or '-', why=why))
 
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
@@ -1664,6 +1735,7 @@ def main():
             print('  WARNING: OR-Tools is not linked, so these are greedy '
                   'decisions wearing cpsat\'s name', file=sys.stderr)
         rule = slate
+        feed.explain = slate
         feed_before = before_dispatch
 
         def before_dispatch(inst):          # noqa: F811

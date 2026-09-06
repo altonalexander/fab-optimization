@@ -477,9 +477,75 @@ function ZoneInvariants({ zones }) {
   )
 }
 
+// Why this lot. The feed records, per decision, the winner's scoring tuple
+// next to the runners-up' tuples (every rule here sorts lots by a tuple and
+// takes the smallest), plus the slate's reason code and planned token.
+const fmtDur = (s) => {
+  if (s == null) return '—'
+  const a = Math.abs(s), sign = s < 0 ? '-' : ''
+  if (a < 3600) return `${sign}${Math.round(a / 60)} min`
+  if (a < 86400) return `${sign}${(a / 3600).toFixed(1)} h`
+  return `${sign}${(a / 86400).toFixed(1)} d`
+}
+const REASON_TEXT = {
+  'slate': (c) => `The optimizer's slate planned ${c.lot} for this tool${c.token ? ` (rank ${c.token.rank} in its plan)` : ''}.`,
+  'slate-alt': (c) => `This tool is the slate's failover for ${c.lot}${c.token ? ` (planned for ${c.token.tool})` : ''}; the primary was not free.`,
+  'slate-elsewhere': (c) => `${c.lot} was planned for another tool${c.token ? ` (${c.token.tool})` : ''}, but nothing better was waiting here, so it ran now.`,
+  'fallback': (c) => `No slate token covered this decision, so ${c.lot} won on the solver-consistent score: time cost over urgency.`,
+}
+const RULE_TEXT = {
+  fifo: 'FIFO: among lots that need no setup change, the one waiting longest.',
+  cr: 'Critical ratio: the lot with the least slack per remaining work.',
+  lifo_org: 'LIFO: the most recently arrived lot.',
+  lifo_anders: 'LIFO: the most recently arrived lot.',
+  random: 'Random pick among waiting lots.',
+}
+function DecisionWhy({ d }) {
+  const w = d.why
+  if (!w) return <div className="muted">No rationale recorded for this decision (older feed).</div>
+  const rule = String(w.rule || '').replace(/^rule:/, '')
+  const chosen = w.chosen || []
+  const alts = w.alternatives || []
+  const keys = w.keys || []
+  const headline = chosen.map(c =>
+    (c.reason && REASON_TEXT[c.reason]) ? REASON_TEXT[c.reason](c)
+      : (RULE_TEXT[rule.replace(/-fallback$/, '')] || `Decided by ${rule}.`) + ` Chosen: ${c.lot}.`)
+  const Row = ({ l, win }) => (
+    <tr className={win ? 'why-win' : ''}>
+      <td>{win ? '▶ ' : ''}<a className="link" href={linkTo('/lots', { cohort: String(l.lot).split(' ')[0] })}>{l.lot}</a></td>
+      <td className="muted">{l.step || '—'}</td>
+      <td>{l.prio}</td>
+      <td>{fmtDur(l.wait_s)}</td>
+      <td className={l.slack_s != null && l.slack_s < 0 ? 'danger' : ''}>{fmtDur(l.slack_s)}</td>
+      <td>{l.cr != null ? l.cr.toFixed(2) : '—'}</td>
+      <td>{l.setup_match ? <span className="chip chip-opt">same</span> : <span className="chip chip-bad">change</span>}</td>
+      <td>{l.reason ? <span className={l.reason.startsWith('slate') && l.reason !== 'slate-elsewhere' ? 'chip chip-opt' : 'chip'}>{l.reason}</span> : <span className="muted">—</span>}</td>
+      <td><code className="muted">{(l.tuple || []).join(' · ')}</code></td>
+    </tr>
+  )
+  return (
+    <div className="why">
+      {headline.map((h, i) => <p key={i} className="why-head">{h}</p>)}
+      <p className="muted why-sub">
+        {w.waiting} lot{w.waiting === 1 ? '' : 's'} left waiting after this pick · tool setup was <code>{w.tool_setup}</code> ·
+        lots are ordered by <code>{keys.join(' › ')}</code>, smallest first; the winner is the first row.
+      </p>
+      <table className="tbl why-tbl">
+        <thead><tr><th>lot</th><th>step</th><th>prio</th><th>waited</th><th>slack</th><th>CR</th><th>setup</th><th>reason</th><th>tuple</th></tr></thead>
+        <tbody>
+          {chosen.map((l, i) => <Row key={`c${i}`} l={l} win />)}
+          {alts.map((l, i) => <Row key={`a${i}`} l={l} />)}
+        </tbody>
+      </table>
+      {alts.length === 0 && <div className="muted">Nothing else was waiting: this was the only candidate.</div>}
+    </div>
+  )
+}
+
 function ToolDetail({ id, backHref }) {
   const [t, setT] = useState(null)
   const [err, setErr] = useState(null)
+  const [open, setOpen] = useState(null)   // key of the expanded decision row
 
   useEffect(() => {
     let live = true
@@ -534,11 +600,16 @@ function ToolDetail({ id, backHref }) {
               reads as an empty toolset when it only means the tool took the
               last lot. A rule is judged on what it chose from, so that is the
               column first. */}
-          <thead><tr><th>sim day</th><th>chose from</th><th>lots</th>
+          <thead><tr><th></th><th>sim day</th><th>chose from</th><th>lots</th>
                      <th>left</th><th>decided by</th><th>setup</th></tr></thead>
           <tbody>
-            {t.recent_decisions.map((d, i) => (
-              <tr key={i}>
+            {t.recent_decisions.map((d, i) => {
+              const k = `${d.day}-${d.ts}`
+              const isOpen = open === k
+              return [
+              <tr key={k} className={`why-row ${isOpen ? 'open' : ''}`} onClick={() => setOpen(isOpen ? null : k)}
+                  title="show what was chosen and why">
+                <td className="muted">{isOpen ? '▾' : '▸'}</td>
                 <td><code>{d.day ?? '—'}</code></td>
                 {/* Older rows predate qbefore; reconstruct it, since
                     reserve() removed exactly these lots from this queue. */}
@@ -557,8 +628,11 @@ function ToolDetail({ id, backHref }) {
                     : <span className="muted">—</span>}
                 </td>
                 <td className="muted">{d.setup || '—'}</td>
-              </tr>
-            ))}
+              </tr>,
+              isOpen && (
+                <tr key={`${k}-why`} className="why-detail"><td colSpan={7}><DecisionWhy d={d} /></td></tr>
+              )]
+            })}
           </tbody>
         </table>
       )}
