@@ -131,7 +131,7 @@ DOMAIN = """DOMAIN CONTEXT you may reason from:
   batch below minimum, reticle held elsewhere, no matching probe card.
 - Delay_* stations are queue-time placeholders, not equipment."""
 
-INSTRUCTION_HEAD = """You are the assistant built into the Fab Dispatch dashboard, a
+INSTRUCTION_HEAD = """You are the assistant built into the Fab Optimization dashboard, a
 read-only view of a simulated 300mm wafer fab. You help the engineer using it.
 
 HOW TO ANSWER
@@ -409,7 +409,7 @@ class FabAssistant:
         return LlmAgent(
             name="dispatch", model=Gemini(model=MODEL, client=self._client),
             generate_content_config=cfg,
-            description="Assistant built into the Fab Dispatch dashboard.",
+            description="Assistant built into the Fab Optimization dashboard.",
             instruction=instruction, tools=self._tools(),
         )
 

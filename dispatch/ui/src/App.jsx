@@ -997,7 +997,7 @@ export default function App() {
     <div className={assistantOpen ? 'app app-railed' : 'app'}>
       <header>
         <div>
-          <h1>Fab Dispatch</h1>
+          <h1>Fab Optimization</h1>
           <div className="sub">
             zone 3 · enterprise · read-only mirror ·{' '}
             {/* Served by the API, not the SPA, so it is a real navigation
