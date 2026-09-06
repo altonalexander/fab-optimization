@@ -21,6 +21,7 @@ tr.off{opacity:.45}.new{background:#ecfdf5;border:1px solid #86efac;border-radiu
 <div class="card">
   <div class="row">
     <div><label>Note (who it is for)</label><input id="note" size="34" placeholder="e.g. Intel visit, Sept 12"></div>
+    <div><label>Bind to email (optional)</label><input id="email" type="email" size="26" placeholder="makes the code that person"></div>
     <div><label>How many</label><input id="count" type="number" min="1" max="50" value="1" style="width:70px"></div>
     <button id="mint">Generate</button>
   </div>
@@ -46,7 +47,7 @@ async function load(){
       <td><button class="small" data-code="${c.code}" data-enable="${c.disabled?1:0}">${c.disabled?'enable':'disable'}</button></td></tr>`).join('')||'<tr><td colspan=9 class=muted>no codes yet</td></tr>'
   }catch(x){$('msg').textContent=x.message}}
 $('mint').onclick=async()=>{$('msg').textContent='';try{
-  const j=await api('/auth/admin/codes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({note:$('note').value,count:+$('count').value||1})})
+  const j=await api('/auth/admin/codes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({note:$('note').value,email:$('email').value,count:+$('count').value||1})})
   $('fresh').innerHTML='<div class=new>New: '+j.codes.map(c=>'<code>'+c+'</code>').join(' &nbsp; ')+'</div>';load()}catch(x){$('msg').textContent=x.message}}
 $('rows').onclick=async e=>{const b=e.target.closest('button[data-code]');if(!b)return;try{
   await api('/auth/admin/codes/'+b.dataset.code+'/disable',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enable:b.dataset.enable==='1'})});load()}catch(x){$('msg').textContent=x.message}}

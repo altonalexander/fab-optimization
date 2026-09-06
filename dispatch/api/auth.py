@@ -383,7 +383,13 @@ def admin_mint():
     except (TypeError, ValueError):
         return jsonify({"error": "count must be a number"}), 400
     note = (body.get("note") or "")[:200]
-    return jsonify({"codes": _mint(n, note, who)})
+    # Optional: bind the code to an email, so whoever uses it is identified
+    # as that person (and, for the admin domain, is an admin). This is how an
+    # admin can hand a colleague admin access without the email round trip.
+    email = (body.get("email") or "").strip().lower() or None
+    if email and ("@" not in email or len(email) > 200):
+        return jsonify({"error": "that does not look like an email address"}), 400
+    return jsonify({"codes": _mint(n, note, who, email=email), "email": email})
 
 
 @auth_bp.post("/auth/admin/codes/<code>/disable")
