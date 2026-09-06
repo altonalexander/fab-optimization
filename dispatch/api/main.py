@@ -330,8 +330,15 @@ class FabMirror:
         """
         run = ev.get("run")
         need_hist = None
+        reset_from = None
         with self.lock:
             if run and run != self.kpi_run:
+                # A run that ends (the feed reached --days and restarted from
+                # its warm-up checkpoint) shows up here as a new run key. Tell
+                # the dashboards, so the jump back to day 90 is explained
+                # rather than looking like a glitch.
+                if self.kpi_run is not None:
+                    reset_from = (self.kpi_run, self.stream_day)
                 self.kpi_run = run
                 self.kpi_hist = []
                 self.kpi_live = {}
@@ -360,6 +367,9 @@ class FabMirror:
                 self.kpi_live[t] = {k: _as_float(v, 0.0) for k, v in ev.items()
                                     if k not in ("type", "run")}
                 self._advance_sim(t)
+        if reset_from:
+            self._fanout({"kind": "reset", "from_run": reset_from[0], "to_run": run,
+                          "last_day": reset_from[1], "ts": time.time()})
         return need_hist
 
     def kpi_view(self):
@@ -731,7 +741,69 @@ def read_sim_control():
         "speed": _as_float(ctl.get("speed")),
         "paused": bool(ctl.get("paused")),
         "updated": ctl.get("updated"),
+        # Who last wrote it: "api" (someone's playback menu), "sim_feed" (a
+        # fresh feed announcing its --speed) or "idle" (the watchdog below).
+        "source": ctl.get("source"),
     }
+
+
+def write_sim_control(**changes):
+    """Merge `changes` into the control file the feed polls. Atomic write."""
+    try:
+        with open(SIM_CONTROL_FILE) as f:
+            ctl = json.load(f)
+    except (OSError, ValueError):
+        ctl = {"speed": None, "paused": False}
+    ctl.update(changes)
+    ctl["updated"] = time.time()
+    os.makedirs(os.path.dirname(os.path.abspath(SIM_CONTROL_FILE)), exist_ok=True)
+    tmp = SIM_CONTROL_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(ctl, f)
+    os.replace(tmp, SIM_CONTROL_FILE)   # atomic: the feed polls this file
+    return ctl
+
+
+# ---------------------------------------------------------------------------
+# Idle watchdog. A public demo should not burn CPU and Kafka retention while
+# nobody is looking: when no dashboard has held the SSE stream open for
+# IDLE_PAUSE_SECONDS the feed is paused, and the next viewer to connect
+# resumes it. Only a pause *this* watchdog made is undone -- a pause someone
+# chose from the playback menu stays until they change it.
+# ---------------------------------------------------------------------------
+IDLE_PAUSE_S = float(os.getenv("IDLE_PAUSE_SECONDS", "600"))
+IDLE_POLL_S = 10.0
+
+
+def idle_watchdog_loop():
+    idle_since = None
+    while True:
+        time.sleep(IDLE_POLL_S)
+        try:
+            if mirror.subscribers:
+                idle_since = None
+                continue
+            idle_since = idle_since or time.time()
+            if time.time() - idle_since < IDLE_PAUSE_S:
+                continue
+            ctl = read_sim_control()
+            if ctl["available"] and not ctl["paused"]:
+                write_sim_control(paused=True, source="idle")
+                print(f"[idle] no viewers for {IDLE_PAUSE_S:.0f}s; feed paused",
+                      file=sys.stderr, flush=True)
+        except Exception as e:                    # pragma: no cover
+            print(f"[idle] {e!r}", file=sys.stderr, flush=True)
+
+
+def resume_if_idle_paused():
+    """A viewer arrived: undo the watchdog's pause, and only that pause."""
+    try:
+        ctl = read_sim_control()
+        if ctl["available"] and ctl["paused"] and ctl.get("source") == "idle":
+            write_sim_control(paused=False, source="viewer")
+            print("[idle] viewer connected; feed resumed", file=sys.stderr, flush=True)
+    except Exception as e:                        # pragma: no cover
+        print(f"[idle] {e!r}", file=sys.stderr, flush=True)
 
 
 # Fab time over which the header's throughput is averaged. Four hours is a
@@ -2281,6 +2353,7 @@ def stream():
     """Server-Sent Events: live feed for the dashboard."""
     def gen():
         q = mirror.subscribe()
+        resume_if_idle_paused()
         try:
             yield f"data: {json.dumps({'kind':'hello'})}\n\n"
             last_beat = time.time()
@@ -2555,15 +2628,9 @@ def sim_control_set():
         ctl["speed"] = speed
     if "paused" in body:
         ctl["paused"] = bool(body["paused"])
-    ctl["updated"] = time.time()
-    ctl["source"] = "api"
-
     try:
-        os.makedirs(os.path.dirname(os.path.abspath(SIM_CONTROL_FILE)), exist_ok=True)
-        tmp = SIM_CONTROL_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(ctl, f)
-        os.replace(tmp, SIM_CONTROL_FILE)   # atomic: the feed polls this file
+        ctl = write_sim_control(speed=ctl.get("speed"), paused=bool(ctl.get("paused")),
+                                source="api")
     except OSError as e:
         return jsonify({"error": f"cannot write control file: {e}"}), 500
     return jsonify({"available": True, "speed": ctl.get("speed"),
@@ -2624,6 +2691,8 @@ def start_feeds():
     would interleave two sources into one mirror and make the state
     unattributable."""
     threading.Thread(target=availability_loop, daemon=True).start()
+    if IDLE_PAUSE_S > 0:
+        threading.Thread(target=idle_watchdog_loop, daemon=True).start()
     if FEED_FILE:
         threading.Thread(target=feed_file_loop, daemon=True).start()
     else:

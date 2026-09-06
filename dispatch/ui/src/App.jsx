@@ -31,6 +31,10 @@ function useLiveState() {
   const [feed, setFeed] = useState([])
   const [connected, setConnected] = useState(false)
   const [history, setHistory] = useState([])
+  // Set when the API reports the feed switched runs (it reached its day cap
+  // and restarted from the warm-up checkpoint). Rendered as a modal so the
+  // jump back to day 90 is explained; cleared by the viewer.
+  const [resetNotice, setResetNotice] = useState(null)
   // Measured link metrics, not modelled ones: every number below is derived
   // from messages that actually arrived on this browser's SSE connection.
   const [link, setLink] = useState({
@@ -54,6 +58,7 @@ function useLiveState() {
       es.onmessage = (e) => {
         const msg = JSON.parse(e.data)
         const now = Date.now()
+        if (msg.kind === 'reset') { setResetNotice(msg); return }
         if (msg.kind === 'state') {
           setState(msg.state)
           // The simulated clock rides on the frame it describes rather than
@@ -126,7 +131,7 @@ function useLiveState() {
     return () => es && es.close()
   }, [])
 
-  return { state, feed, connected, history, link }
+  return { state, feed, connected, history, link , resetNotice, dismissReset: () => setResetNotice(null) }
 }
 
 // `href` makes a tile a link to the view that explains it. A plain <a> rather
@@ -964,7 +969,7 @@ function SpeedControl({ connected }) {
 }
 
 export default function App() {
-  const { state, feed, connected, history, link } = useLiveState()
+  const { state, feed, connected, history, link, resetNotice, dismissReset } = useLiveState()
   const [zones, setZones] = useState(null)
   // The URL is the single source of truth for "where am I": tab, open tool and
   // every filter. Reload, back button, and a link pasted into chat all land on
@@ -995,6 +1000,20 @@ export default function App() {
 
   return (
     <div className={assistantOpen ? 'app app-railed' : 'app'}>
+      {resetNotice && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+          <div className="modal">
+            <h3 id="reset-title">Simulation reset</h3>
+            <p>
+              The fab reached day {resetNotice.last_day != null ? Math.floor(resetNotice.last_day) : 'cap'} and
+              the run was reset to day 90, the shared warm-up checkpoint. What
+              you are looking at now is a fresh run; the previous one is kept
+              under Results.
+            </p>
+            <button className="live" autoFocus onClick={dismissReset}>OK</button>
+          </div>
+        </div>
+      )}
       <header>
         <div>
           <h1>Fab Optimization</h1>

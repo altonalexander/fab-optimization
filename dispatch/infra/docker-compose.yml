@@ -299,6 +299,9 @@ services:
       ZONES_FILE: "/etc/fab-zones/zones.yaml"
       # Playback pacing handoff to the feed (POST /api/sim/control).
       SIM_CONTROL_FILE: "/var/run/fab-sim/sim_control.json"
+      # Pause the feed after this long with no dashboard connected; the next
+      # viewer resumes it. 0 disables.
+      IDLE_PAUSE_SECONDS: "${IDLE_PAUSE_SECONDS:-600}"
     volumes:
       - sim-control:/var/run/fab-sim
       # Same tool master the dispatcher uses, and the zone policy the UI renders.

@@ -615,6 +615,14 @@ Routes are stored at Cloudflare, so another `route` later (a second hostname,
 another service on the same box) takes effect without restarting anything.
 Basic auth is only meaningful behind the TLS the tunnel provides.
 
+**Demo lifecycle.** A public demo should not run flat out for nobody. With no
+dashboard connected for `IDLE_PAUSE_SECONDS` (default 600) the API pauses the
+feed; the next viewer to open the page resumes it. The feed runs to
+`FEED_DAYS` and then restarts from the day-90 warm-up checkpoint; every open
+dashboard gets a modal explaining the jump, and the previous run stays under
+Results. A checkpoint is per horizon, so the first start at a new `FEED_DAYS`
+re-simulates the warm-up once (~10 min).
+
 The password file is mounted into nginx, so the login covers the dashboard,
 every `/api` route and the SSE stream in one place; `/health` stays open for
 uptime checks. Locally (no override) the mount is absent and the site is
