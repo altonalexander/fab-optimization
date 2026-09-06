@@ -27,7 +27,8 @@ const TRY = /\n?\s*\*{0,2}Try asking:?\*{0,2}\s*[\u201c"]?([^\n"\u201d]+?)[\u201
 
 function Reply({ text, onAsk, busy }) {
   const m = TRY.exec(text || '')
-  if (!m) return <Md text={text} />
+  // A placeholder-looking line (angle brackets) is dropped, not offered.
+  if (!m || /[<>]/.test(m[1])) return <Md text={m ? text.slice(0, m.index) : text} />
   const body = text.slice(0, m.index)
   const q = m[1].trim()
   return (
