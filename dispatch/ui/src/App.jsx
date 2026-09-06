@@ -996,9 +996,11 @@ function PausedModal({ state, onResumed }) {
         <h3 id="paused-title">The fab is paused</h3>
         <p>
           This is a live simulation of a 300&nbsp;mm semiconductor fab: the SMT2020
-          testbed, about 1,300 tools and 2,000 lots in process, each lot following
-          a route of several hundred steps through lithography, etch, deposition,
-          implant and metrology bays.
+          testbed, 913 process tools and about 2,000 lots in process, each lot
+          following a route of several hundred steps through lithography, etch,
+          deposition, implant and metrology bays. (Tool counts elsewhere read
+          1,313: the dataset models transport and queue time as 400 placeholder
+          "Delay" tools, which have no place on the floor.)
         </p>
         <p>
           Every time a tool frees up, a dispatcher decides which waiting lot runs
