@@ -561,7 +561,7 @@ together. `smoke.sh` runs it first for that reason.
 
 ```bash
 cd dispatch
-make infra-up     # docker compose, four networks
+make infra-up     # docker compose, four networks, every service a container
 
 # or one zone at a time — profiles: equipment · realtime · data · enterprise
 cd infra && docker compose --profile data up -d
@@ -572,6 +572,42 @@ make reach        # reachability — proves the isolation is real
 make logs
 make infra-down
 ```
+
+This is a different pipeline from `dev-up.sh`, not just the same one in
+containers. In dev the API and UI are host processes and the producer is
+`sim_feed.py` in the simulator's venv. Here the producer is the `feed`
+container (`infra/Dockerfile.feed`): the same `sim_feed.py`, with
+`libfabslate.so` built against OR-Tools inside the image, living in the data
+zone where a real MES feed would enter. Its first start simulates the 90-day
+warm-up (~10 min of CPU) and caches the checkpoint in the `feed-cache`
+volume; every later start resumes in seconds. The `dispatcher` container
+(`fabdisp`) is a one-shot closed-loop benchmark: it prints its numbers and
+exits 0, which is expected — the dashboard's decisions come from the feed's
+slate, not from it.
+
+**Deploying it (homelab, public URL):**
+
+```bash
+cd dispatch/infra
+cp .env.example .env            # set POSTGRES_PASSWORD
+./make-htpasswd.sh <username>   # basic-auth login for the whole site
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+    --profile all up -d --build
+make -C .. verify               # passes clean: no dev override, no host ports
+```
+
+`docker-compose.prod.yml` binds the UI to `127.0.0.1:8080` and nothing else,
+so the only way in is the reverse proxy or tunnel on the same box. Put
+Cloudflare Tunnel (or Caddy/Traefik with a real certificate) in front of
+:8080 for `fab.<your-domain>`; basic auth is only meaningful behind that TLS.
+
+The password file is mounted into nginx, so the login covers the dashboard,
+every `/api` route and the SSE stream in one place; `/health` stays open for
+uptime checks. Locally (no override) the mount is absent and the site is
+open. The four POST routes are the reason the gate exists: `/api/scenario`
+and `/api/scenario/compare` run the C++ planner (CPU), `/api/sim/control`
+changes the playback speed for *everyone* watching, and `/api/chat` calls
+Claude on Vertex on your project's bill.
 
 **The dispatcher on its own:**
 
