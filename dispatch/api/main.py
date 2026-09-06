@@ -799,8 +799,16 @@ def idle_watchdog_loop():
             print(f"[idle] {e!r}", file=sys.stderr, flush=True)
 
 
+# Whether a viewer connecting should silently undo the watchdog's pause. Off
+# by default: the dashboard shows a paused fab with a "what is this" modal
+# and a Resume button instead, which doubles as the onboarding moment.
+AUTO_RESUME_ON_VIEWER = os.getenv("AUTO_RESUME_ON_VIEWER", "false").lower() == "true"
+
+
 def resume_if_idle_paused():
     """A viewer arrived: undo the watchdog's pause, and only that pause."""
+    if not AUTO_RESUME_ON_VIEWER:
+        return
     try:
         ctl = read_sim_control()
         if ctl["available"] and ctl["paused"] and ctl.get("source") == "idle":

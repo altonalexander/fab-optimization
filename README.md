@@ -619,7 +619,9 @@ Basic auth is only meaningful behind the TLS the tunnel provides.
 
 **Demo lifecycle.** A public demo should not run flat out for nobody. With no
 dashboard connected for `IDLE_PAUSE_SECONDS` (default 600) the API pauses the
-feed; the next viewer to open the page resumes it. The feed runs to
+feed. A paused fab greets the next viewer with a modal that explains the
+simulation and offers *Resume at 10× speed* (set `AUTO_RESUME_ON_VIEWER=true`
+to resume silently instead). The feed runs to
 `FEED_DAYS` and then restarts from the day-90 warm-up checkpoint; every open
 dashboard gets a modal explaining the jump, and the previous run stays under
 Results. A checkpoint is per horizon, so the first start at a new `FEED_DAYS`

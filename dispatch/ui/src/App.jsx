@@ -968,6 +968,64 @@ function SpeedControl({ connected }) {
   )
 }
 
+// Shown whenever the fab clock is stopped: after the idle watchdog paused the
+// feed (nobody was watching) or after someone paused it from the playback
+// menu. Doubles as the "what am I looking at" card for a first-time visitor.
+// Dismissing keeps it paused and stays dismissed until the clock runs again.
+function PausedModal({ state, onResumed }) {
+  const paused = !!(state && state.sim && state.sim.paused)
+  const [dismissed, setDismissed] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
+  useEffect(() => { if (!paused) setDismissed(false) }, [paused])
+  if (!paused || dismissed) return null
+  const resume = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const r = await fetch('/api/sim/control', { method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ paused: false, speed: 10 }) })
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `error ${r.status}`)
+      setDismissed(true); onResumed && onResumed()
+    } catch (e) { setErr(e.message); setBusy(false) }
+  }
+  const sim = state.sim || {}
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="paused-title">
+      <div className="modal modal-wide">
+        <h3 id="paused-title">The fab is paused</h3>
+        <p>
+          This is a live simulation of a 300&nbsp;mm semiconductor fab: the SMT2020
+          testbed, about 1,300 tools and 2,000 lots in process, each lot following
+          a route of several hundred steps through lithography, etch, deposition,
+          implant and metrology bays.
+        </p>
+        <p>
+          Every time a tool frees up, a dispatcher decides which waiting lot runs
+          next. Here that decision comes from a CP-SAT optimizer that plans a
+          "slate" for each tool family every simulated minute, and the dashboard
+          shows the consequences live: WIP and cycle time on <b>Live</b>, cohorts
+          burning down on <b>Lots</b>, each machine's queue and setups on
+          <b>Tools</b>, the cleanroom as a map on <b>Floor</b>, and the optimizer
+          compared against FIFO and critical-ratio rules on <b>Results</b>.
+        </p>
+        <p className="muted">
+          The clock is stopped{sim.day != null ? ` at day ${Math.floor(sim.day)}` : ''}
+          {' '}because nobody was watching, or someone paused it. Resume runs the fab
+          at 10× real time; the speed menu in the header changes that any time.
+        </p>
+        {err && <p className="modal-err">{err}</p>}
+        <div className="modal-actions">
+          <button className="live primary" autoFocus disabled={busy} onClick={resume}>
+            {busy ? 'Resuming…' : 'Resume at 10× speed'}
+          </button>
+          <button className="live" disabled={busy} onClick={() => setDismissed(true)}>Keep it paused</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const { state, feed, connected, history, link, resetNotice, dismissReset } = useLiveState()
   const [zones, setZones] = useState(null)
@@ -1000,6 +1058,7 @@ export default function App() {
 
   return (
     <div className={assistantOpen ? 'app app-railed' : 'app'}>
+      {!resetNotice && <PausedModal state={state} />}
       {resetNotice && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reset-title">
           <div className="modal">
