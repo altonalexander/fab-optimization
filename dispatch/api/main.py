@@ -1579,20 +1579,28 @@ def layout_state():
     with floorplan.lock:
         cell_tools = {k: list(v) for k, v in floorplan.cell_tools.items()}
 
+    # A lot queues at its station family, not at a machine, and every tool in
+    # the family reports that same family queue (see _waiting_for). Summing
+    # per tool counted each waiting lot once per machine, and giving each bay
+    # the whole family queue counted it once per bay the family spans. So a
+    # family's queue is shared out to bays in proportion to how many of its
+    # machines each bay holds: bays then add up to the fab's ready count.
+    fam_size = defaultdict(int)
+    for t in ids:
+        fam_size[tool_group(t)] += 1
+
     cells = []
     for (bay, seg), tools in cell_tools.items():
         rows = [_tool_row(t) for t in tools]
-        # A lot queues at its station family, and every tool in the family
-        # reports that same family queue (see _waiting_for). Summing per tool
-        # would count each waiting lot once per machine, so a bay's WIP is
-        # one queue per family present in it.
+        fam_here = defaultdict(int)
         fam_q = {}
         for r in rows:
-            q = r["waiting_count"] if r["waiting_count"] else r["queue"]
-            if q is None:
-                continue
             fam = tool_group(r["id"])
-            fam_q[fam] = max(fam_q.get(fam, 0), q)
+            fam_here[fam] += 1
+            q = r["waiting_count"] if r["waiting_count"] else r["queue"]
+            if q is not None:
+                fam_q[fam] = max(fam_q.get(fam, 0), q)
+        wip = sum(q * fam_here[f] / max(fam_size[f], 1) for f, q in fam_q.items())
         queues = [r["queue"] for r in rows if r["queue"] is not None]
         cells.append({
             "bay": bay, "seg": seg,
@@ -1600,7 +1608,7 @@ def layout_state():
             "down": sum(1 for r in rows if not r["online"]),
             "running": sum(r["running_count"] for r in rows),
             "dispatches": sum(r["dispatches"] for r in rows),
-            "wip": sum(fam_q.values()),
+            "wip": round(wip, 1),
             "queue_max": max(queues) if queues else None,
         })
 
