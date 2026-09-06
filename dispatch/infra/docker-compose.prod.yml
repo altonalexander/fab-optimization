@@ -28,7 +28,9 @@ services:
       PUBLIC_URL: "${PUBLIC_URL:-}"
       MAIL_FROM: "${MAIL_FROM:-fab-support@frontanalytics.com}"
       MAILGUN_API_KEY: "${MAILGUN_API_KEY:-}"
-      MAILGUN_DOMAIN: "${MAILGUN_DOMAIN:-}"
+      # Sending domain: per-app override first (the From address must be on
+      # a domain Mailgun has verified), else the shared default.
+      MAILGUN_DOMAIN: "${FAB_MAILGUN_DOMAIN:-${MAILGUN_DOMAIN:-}}"
       MAILGUN_API_BASE: "${MAILGUN_API_BASE:-https://api.mailgun.net}"
       SMTP_HOST: "${SMTP_HOST:-}"
       SMTP_PORT: "${SMTP_PORT:-587}"
