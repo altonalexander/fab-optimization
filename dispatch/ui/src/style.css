@@ -696,3 +696,11 @@ a.tf-run:hover .tf-run-in{box-shadow:inset 0 0 0 2px #93c5fd}
 .modal h3{margin:0 0 8px}
 .modal p{margin:0 0 16px;line-height:1.45}
 .modal button.live{padding:6px 14px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+
+/* The follow-up the assistant offers when it cannot answer: one chip under
+   the reply, styled like the launcher's question so it reads as a jump. */
+.try-ask{display:block;margin-top:8px;text-align:left;white-space:normal;
+  background:#fff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;
+  padding:6px 10px;font-size:12px;line-height:1.35;cursor:pointer}
+.try-ask:hover{border-color:#818cf8;background:#eef2ff}
+.try-ask:disabled{opacity:.5;cursor:default}

@@ -21,6 +21,26 @@ const TOOL_LABEL = {
   explain_unassigned: 'checked held lots',
 }
 
+// A reply that ends with "Try asking: ..." (what the assistant appends when
+// it cannot answer) gets that line turned into a chip that asks it.
+const TRY = /\n?\s*\*{0,2}Try asking:?\*{0,2}\s*[\u201c"]?([^\n"\u201d]+?)[\u201d"]?\s*$/i
+
+function Reply({ text, onAsk, busy }) {
+  const m = TRY.exec(text || '')
+  if (!m) return <Md text={text} />
+  const body = text.slice(0, m.index)
+  const q = m[1].trim()
+  return (
+    <>
+      <Md text={body} />
+      <button type="button" className="chip chip-btn try-ask" disabled={busy}
+              onClick={() => onAsk(q)} title="Ask this instead">
+        Try asking: {q}
+      </button>
+    </>
+  )
+}
+
 export default function ChatPanel({ context, pending, onPendingSent }) {
   const [status, setStatus] = useState(null)
   const desktop = useDesktop()
@@ -141,7 +161,9 @@ export default function ChatPanel({ context, pending, onPendingSent }) {
               </div>
             )}
             <div className={m.failed ? 'bubble bubble-err' : 'bubble'}>
-              {m.role === 'assistant' && !m.failed ? <Md text={m.content} /> : m.content}
+              {m.role === 'assistant' && !m.failed
+                ? <Reply text={m.content} onAsk={send} busy={busy} />
+                : m.content}
             </div>
           </div>
         ))}
