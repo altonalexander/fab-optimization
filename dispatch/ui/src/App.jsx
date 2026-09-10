@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
 import { AvatarLauncher } from './Avatar.jsx'
 import FloorMap from './FloorMap.jsx'
@@ -12,6 +12,14 @@ import StreamChart from './StreamChart.jsx'
 import KpiPanel, { KPIS, Info, valueOf, WipSinceDay0 } from './KpiPanel.jsx'
 import ResultsPage from './ResultsPage.jsx'
 import { spanFor, fmtSpan, fmtSimTime } from './stream_geom.js'
+import { isSceneFamily, sceneKind, decisionForLot } from './etch_geom.js'
+
+// three.js only reaches the browser on a dry-etch tool page: the scene is a
+// separate chunk, so every other view pays nothing for it.
+const EtchScene = lazy(() => import('./EtchScene.jsx'))
+// A decision can be replayed in the scene when the feed recorded who was chosen.
+const canReplay = d => !!(d && d.why && d.why.chosen && d.why.chosen.length)
+const decisionKey = d => d ? `${d.day}|${d.ts}|${d.tool || ''}` : ''
 
 // ---------------------------------------------------------------------------
 // ZONE 3 — enterprise. This app is READ-ONLY by construction: it talks only to
@@ -500,7 +508,7 @@ const RULE_TEXT = {
   lifo_anders: 'LIFO: the most recently arrived lot.',
   random: 'Random pick among waiting lots.',
 }
-function DecisionWhy({ d }) {
+function DecisionWhy({ d, cohorts }) {
   const w = d.why
   if (!w) return <div className="muted">No rationale recorded for this decision (older feed).</div>
   const rule = String(w.rule || '').replace(/^rule:/, '')
@@ -510,9 +518,15 @@ function DecisionWhy({ d }) {
   const headline = chosen.map(c =>
     (c.reason && REASON_TEXT[c.reason]) ? REASON_TEXT[c.reason](c)
       : (RULE_TEXT[rule.replace(/-fallback$/, '')] || `Decided by ${rule}.`) + ` Chosen: ${c.lot}.`)
-  const Row = ({ l, win }) => (
+  // A lot links to its cohort's burndown -- the lots view is keyed by cohort,
+  // not by lot -- so the link needs the cohort the mirror knows for it.
+  const Row = ({ l, win }) => {
+    const c = cohorts && cohorts[l.lot]
+    return (
     <tr className={win ? 'why-win' : ''}>
-      <td>{win ? '▶ ' : ''}<a className="link" href={linkTo('/lots', { cohort: String(l.lot).split(' ')[0] })}>{l.lot}</a></td>
+      <td>{win ? '▶ ' : ''}{c
+        ? <a className="link" href={linkTo('/lots', { cohort: c })} title={`cohort ${c}`}>{l.lot}</a>
+        : <code title="cohort not known to the mirror yet">{l.lot}</code>}</td>
       <td className="muted">{l.step || '—'}</td>
       <td>{l.prio}</td>
       <td>{fmtDur(l.wait_s)}</td>
@@ -522,7 +536,8 @@ function DecisionWhy({ d }) {
       <td>{l.reason ? <span className={l.reason.startsWith('slate') && l.reason !== 'slate-elsewhere' ? 'chip chip-opt' : 'chip'}>{l.reason}</span> : <span className="muted">—</span>}</td>
       <td><code className="muted">{(l.tuple || []).join(' · ')}</code></td>
     </tr>
-  )
+    )
+  }
   return (
     <div className="why">
       {headline.map((h, i) => <p key={i} className="why-head">{h}</p>)}
@@ -542,10 +557,37 @@ function DecisionWhy({ d }) {
   )
 }
 
-function ToolDetail({ id, backHref }) {
+function ToolDetail({ id, backHref, query }) {
   const [t, setT] = useState(null)
   const [err, setErr] = useState(null)
   const [open, setOpen] = useState(null)   // key of the expanded decision row
+  // The decision being replayed in the 3D scene, picked from the table below
+  // (null = the scene follows the live feed). Reset when the tool changes.
+  const [playback, setPlayback] = useState(null)
+  // The lot the scene's camera follows (from ?lot=, or a click on a FOUP).
+  const [track, setTrack] = useState(null)
+  const wantRef = useRef('')
+  useEffect(() => { setPlayback(null); setTrack(null); wantRef.current = '' }, [id])
+
+  // /tools/<id>?lot=<lot>&mode=live|playback, from a lot's journey: open on
+  // that lot -- tracking it live when it is on the tool, otherwise replaying
+  // the decision that sent it here. Applied once per (tool, lot, mode) so the
+  // 2 s poll does not keep re-entering the mode after the viewer leaves it.
+  const wantLot = query?.lot || null, wantMode = query?.mode || null
+  useEffect(() => {
+    if (!t || !wantLot) return
+    const key = `${id}|${wantLot}|${wantMode || ''}`
+    if (wantRef.current === key) return
+    wantRef.current = key
+    const running = (t.running || []).includes(wantLot)
+    const d = decisionForLot(t.recent_decisions, wantLot)
+    const replay = wantMode === 'playback' ? d : (wantMode !== 'live' && !running ? d : null)
+    setPlayback(replay || null)
+    setTrack(wantLot)
+  }, [t, id, wantLot, wantMode])
+  const lotNote = t && wantLot && wantMode === 'playback' && !decisionForLot(t.recent_decisions, wantLot)
+    ? `No recorded decision names ${wantLot} on this tool (older than the ${t.recent_decisions?.length ?? 0} kept, or made before the explainer), so the scene stays live.`
+    : null
 
   useEffect(() => {
     let live = true
@@ -583,6 +625,55 @@ function ToolDetail({ id, backHref }) {
         <Stat label="changeovers" value={t.changeovers} sub={t.setup || 'no setup'} />
       </div>
 
+      {/* Dry-etch and CMP tools get the bay in three dimensions: the lots waiting on
+          the track-side shelves, the lots on the load ports, and -- when a
+          decision lands -- the vehicle that carries the chosen one over. It
+          runs on the fab clock, so it is only watchable at 1x; that is the
+          point, and the scene's clock chip says so. Keyed by id so a
+          different tool gets a fresh scene rather than inheriting lots. */}
+      {isSceneFamily(t.group) && (
+        <>
+          <h4>Dispatch, in the bay</h4>
+          <p className="muted" style={{ marginTop: -4 }}>
+            The same queue and load ports as the flow strip below, drawn as the
+            bay: waiting lots on the shelves, the lot on the tool, and the
+            overhead vehicle that fetches the one the dispatcher picked.
+            {sceneKind(t.group) === 'cmp'
+              ? <> A CMP polisher runs two lots at once; its maintenance is
+                  piece-based (SMT2020's stand-in for pad life), and each
+                  candidate's <b>next</b> step shows where it goes afterwards
+                  and how long the queue there is. </>
+              : sceneKind(t.group) === 'litho'
+                ? <> A litho track carries one setup per layer: lots needing the
+                    layer it is on run without a changeover, a lot of another
+                    layer costs one (the <b>setup</b> column and the recorded
+                    setup time), and the track shows the change as a state of
+                    its own before processing. SMT2020 has no reticles, so
+                    none are drawn. </>
+              : sceneKind(t.group) === 'furnace'
+                ? <> A furnace runs a batch: the dispatcher holds the tool idle
+                    until enough lots of the <b>same product at the same
+                    step</b> have gathered, then sends them all at once, one
+                    vehicle after another, onto six ports. Waiting lots in the
+                    batch that is forming are tinted amber. </>
+                : <> An etch tool's story is recipe and setup match, priority
+                    and where each candidate goes <b>next</b>. </>}
+            Two
+            modes: <b>live twin</b> follows the feed on the fab clock (at 1x
+            playback it is the bay in real time; the chip offers 1x), and
+            <b> playback</b> replays a recorded decision at one fab second per
+            second whatever the feed is doing &mdash; pick <b>▶ watch</b> on a
+            row under Recent decisions. The panel on the right shows the
+            candidates the rule chose from, and why the winner won.
+          </p>
+          {lotNote && <p className="muted lot-note">{lotNote}</p>}
+          <Suspense fallback={<div className="muted">loading the 3D scene…</div>}>
+            <EtchScene key={t.id} t={t} playback={playback} onPlayback={setPlayback}
+                       track={track} onTrack={setTrack} />
+          </Suspense>
+        </>
+      )}
+
       {/* Queue -> tool -> out. The queue is the station family's (a lot
           waits for a family, not a machine); the box and its countdown are
           this tool's own. */}
@@ -601,13 +692,15 @@ function ToolDetail({ id, backHref }) {
               last lot. A rule is judged on what it chose from, so that is the
               column first. */}
           <thead><tr><th></th><th>sim day</th><th>chose from</th><th>lots</th>
-                     <th>left</th><th>decided by</th><th>setup</th></tr></thead>
+                     <th>left</th><th>decided by</th><th>setup</th>
+                     {isSceneFamily(t.group) && <th title="replay this decision in the 3D scene above">replay</th>}</tr></thead>
           <tbody>
             {t.recent_decisions.map((d, i) => {
               const k = `${d.day}-${d.ts}`
               const isOpen = open === k
+              const playing = playback && decisionKey(playback) === decisionKey(d)
               return [
-              <tr key={k} className={`why-row ${isOpen ? 'open' : ''}`} onClick={() => setOpen(isOpen ? null : k)}
+              <tr key={k} className={`why-row ${isOpen ? 'open' : ''}${playing ? ' play-on' : ''}`} onClick={() => setOpen(isOpen ? null : k)}
                   title="show what was chosen and why">
                 <td className="muted">{isOpen ? '▾' : '▸'}</td>
                 <td><code>{d.day ?? '—'}</code></td>
@@ -628,9 +721,26 @@ function ToolDetail({ id, backHref }) {
                     : <span className="muted">—</span>}
                 </td>
                 <td className="muted">{d.setup || '—'}</td>
+                {/* Replay in the scene: the previous lot leaves, these
+                    candidates sit on the shelves, the winner is fetched. */}
+                {isSceneFamily(t.group) && (
+                  <td>
+                    {canReplay(d)
+                      ? <button type="button" className={playing ? 'play-btn on' : 'play-btn'}
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  setPlayback(playing ? null : d)
+                                  if (!playing) document.querySelector('.etch')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                                }}
+                                title={playing ? 'stop the replay and go back to the live feed' : 'replay this decision in the scene above'}>
+                          {playing ? '■ live' : '▶ watch'}
+                        </button>
+                      : <span className="muted" title="no rationale recorded, nothing to replay">—</span>}
+                  </td>
+                )}
               </tr>,
               isOpen && (
-                <tr key={`${k}-why`} className="why-detail"><td colSpan={7}><DecisionWhy d={d} /></td></tr>
+                <tr key={`${k}-why`} className="why-detail"><td colSpan={isSceneFamily(t.group) ? 8 : 7}><DecisionWhy d={d} cohorts={t.cohorts} /></td></tr>
               )]
             })}
           </tbody>
@@ -716,6 +826,7 @@ function ToolIndex({ query, setQuery, toolHref }) {
               {/* What this type asks of a dispatcher: whether its tools load
                   several lots at once, and whether they switch setups. */}
               {g.batches && <span className="chip chip-batch" title="tools of this type load several lots at once">batches</span>}
+              {isSceneFamily(g.group) && <span className="chip chip-3d" title="tool pages of this type draw the bay in 3D: waiting lots, load ports and the vehicle that delivers the dispatched lot">3D</span>}
               {g.setups && (
                 <span className="chip chip-setup"
                       title={g.changeovers ? `${g.changeovers.toLocaleString()} changeovers seen` : 'runs with a setup; no changeover seen yet'}>
@@ -1287,7 +1398,7 @@ export default function App() {
       {tab === 'tools' && (
         <section>
           {openTool
-            ? <ToolDetail id={openTool} backHref={linkTo('/tools')} />
+            ? <ToolDetail id={openTool} backHref={linkTo('/tools')} query={query} />
             : <><h3>Tools</h3>
                 <ToolIndex query={query} setQuery={setQuery}
                            toolHref={id => linkTo(['tools', id])} /></>}

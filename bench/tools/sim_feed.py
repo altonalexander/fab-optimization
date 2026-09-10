@@ -265,6 +265,27 @@ def save_checkpoint(path, instance, feed, days):
         instance.plugins = plugins
 
 
+def scale_starts(instance, scale):
+    """Compress the remaining release schedule by `scale` (compare.py has
+    the same function; kept identical so a stored benchmark row and a live
+    run at the same scale are the same experiment). Each unreleased lot's
+    time-to-release is divided by `scale` and its due date moves by the same
+    amount; released lots and WIP are untouched."""
+    if not scale or abs(scale - 1.0) < 1e-9:
+        return 0
+    now = instance.current_time
+    n = 0
+    for lot in instance.dispatchable_lots:
+        if lot.release_at <= now:
+            continue
+        new_rel = now + (lot.release_at - now) / scale
+        lot.deadline_at -= lot.release_at - new_rel
+        lot.release_at = new_rel
+        n += 1
+    instance.dispatchable_lots.sort(key=lambda k: k.release_at)
+    return n
+
+
 def load_checkpoint(path, feed):
     """Restore a checkpoint and attach `feed` as its only plugin.
 
@@ -1196,6 +1217,22 @@ class FeedPlugin(IPlugin):
         }
 
     @staticmethod
+    def _pm_pieces(machine):
+        """(pieces until the next piece-based PM, that PM's interval) for the
+        shortest-interval calendar on the machine -- SMT2020's stand-in for
+        consumable wear (a CMP pad, a chamber clean). None when the machine's
+        PM is time-based only."""
+        per = getattr(machine, 'piece_per_maintenance', None) or []
+        left = getattr(machine, 'pieces_until_maintenance', None) or []
+        if not per or len(per) != len(left):
+            return None
+        i = min(range(len(per)), key=lambda k: per[k])
+        try:
+            return max(0.0, float(left[i])), float(per[i])
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _pack(obj):
         raw = json.dumps(obj, separators=(',', ':')).encode()
         return base64.urlsafe_b64encode(raw).decode().rstrip('=')
@@ -1267,12 +1304,17 @@ class FeedPlugin(IPlugin):
                 why = self._pack(self._why(instance, machine, lots, src))
             except Exception as e:           # never let the explainer stop the feed
                 print(f'  why: {e!r}', file=sys.stderr)
+        # Wear rides along with the decision: pieces until the next piece-based
+        # PM and that PM's interval, so a tool page can show how far into a
+        # pad (or chamber) life the tool is when it was chosen.
+        pm = self._pm_pieces(machine)
         self._write(DECISION_TOPIC, envelope(
             tool=tool, lots=len(lots), queue=len(machine.waiting_lots),
             qbefore=len(machine.waiting_lots) + len(lots),
             day=round(instance.current_time / 86400, 4),
             run=self.run_id, src=src,
-            setup=machine.current_setup or '-', why=why))
+            setup=machine.current_setup or '-', why=why,
+            pm_left=round(pm[0]) if pm else None, pm_int=round(pm[1]) if pm else None))
 
     def on_lot_done(self, instance, lot):
         self._now = instance.current_time
@@ -1463,6 +1505,15 @@ def main():
                    help='slate rebuild cadence, SIMULATED seconds')
     p.add_argument('--slate-budget', type=float, default=0.005,
                    help='per-family solve budget, seconds')
+    p.add_argument('--slate-fallback', default='cr', choices=['score', 'cr'],
+                   help='how the slate scores a lot it holds no token for')
+    p.add_argument('--starts-scale', type=float, default=1.0,
+                   help='release the remaining lots this many times faster than '
+                        'order.txt schedules them, after the warm-up checkpoint '
+                        '(1.03 = 3%% more starts; ADR 0012). Due dates move with '
+                        'the releases. The run is stored as <rule>@<scale>x.')
+    p.add_argument('--slate-horizon', type=float, default=900.0,
+                   help='plan lots arriving within this many fab-seconds too (ADR 0010); 0 = queue only')
     p.add_argument('--speed', type=float, default=600.0,
                    help='sim-seconds per wall-second; 0 = unpaced')
     p.add_argument('--tool-prefix', default=None,
@@ -1619,7 +1670,14 @@ def main():
         if warm_rule != a.dispatcher:
             notes = (f'warm-up under {warm_rule} to day {a.warmup_days:g}'
                      + (f'; {a.notes}' if a.notes else ''))
-        feed.store.begin(feed.run_id, a, notes=notes)
+        # A start rate is part of the experiment: the store's dispatcher
+        # column carries it so rows at different rates are never confused.
+        store_args = a
+        if a.starts_scale and abs(a.starts_scale - 1.0) > 1e-9:
+            import copy
+            store_args = copy.copy(a)
+            store_args.dispatcher = f'{a.dispatcher}@{a.starts_scale:.2f}x'
+        feed.store.begin(feed.run_id, store_args, notes=notes)
     # A feed is normally ended with SIGTERM (dev-up.sh --stop, or a kill).
     # Turn that into the Ctrl-C path so the run store still gets a status
     # instead of a row that says "running" forever.
@@ -1632,6 +1690,9 @@ def main():
         t0 = time.time()
         instance = load_checkpoint(ckpt, feed)
         if instance is not None:
+            n = scale_starts(instance, a.starts_scale)
+            if n:
+                print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
             run_to = sim_runner.SECONDS_PER_DAY * a.days
             warmed = True
             feed.from_s = None
@@ -1729,7 +1790,8 @@ def main():
         pressure = rule.split(':', 1)[1] if ':' in rule else 'full'
         slate = slate_rule.SlateRule(
             instance, solver=a.slate_solver, cycle_s=a.slate_cycle,
-            budget_s=a.slate_budget, pressure=pressure)
+            budget_s=a.slate_budget, pressure=pressure, fallback=a.slate_fallback,
+            horizon_s=a.slate_horizon)
         print(f'  {slate.banner()}', file=sys.stderr)
         if not slate.planner.solver_available:
             print('  WARNING: OR-Tools is not linked, so these are greedy '

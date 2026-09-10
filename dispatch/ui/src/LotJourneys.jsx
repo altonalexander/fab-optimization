@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { linkTo } from './router.js'
 import { widths, famLabel, fmtProc, statusOf, isDelay } from './journey_geom.js'
 import { remaining, progress, fmtCountdown } from './toolflow_geom.js'
+import { isSceneFamily } from './etch_geom.js'
 
 // Each lot of the cohort as a short supply chain: the two steps it has just
 // left, the step it is at, and the two ahead, with box width proportional to
@@ -58,9 +59,17 @@ function Journey({ lot, clock, wall }) {
           // A prescribed wait is not a tool: nothing to see on a tool page,
           // so the box is a plain label that says it is a wait.
           const delay = isDelay(s.fam)
+          // The tool page opens on this lot: live and tracking it when it is on
+          // the tool now, replaying the dispatch that sent it there for a step
+          // it has left (the mirror names the tool from the lot's own history).
           const href = delay ? null
-            : cur && j.tool ? linkTo(['tools', j.tool])
+            : cur && j.tool ? linkTo(['tools', j.tool], { lot: lot.lot, mode: 'live' })
+            : past && s.tool ? linkTo(['tools', s.tool], { lot: lot.lot, mode: 'playback' })
             : linkTo('/tools', { type: s.fam })
+          // The page the link opens is the tool's, so the 3D marker follows the
+          // tool's family, not the step's (the two can disagree while the
+          // mirror's step index catches up with the stream).
+          const scene = isSceneFamily(cur && j.tool ? j.tool : past && s.tool ? s.tool : s.fam)
           const cls = 'jstep' + (cur ? ' jstep-cur' : past ? ' jstep-past' : ' jstep-next')
                     + (cur && j.tool ? ' jstep-on' : '') + (delay ? ' jstep-delay' : '')
           const title = delay
@@ -68,6 +77,8 @@ function Journey({ lot, clock, wall }) {
             : `${s.step} · ${s.fam} · ${fmtProc(s.proc_s)} nominal`
               + (s.bmax > 1 ? ` · batch up to ${s.bmax}` : '')
               + (s.setup ? ` · setup ${s.setup}` : '')
+              + (cur && j.tool ? ` · on ${j.tool} now${scene ? ' — open the bay in 3D, tracking this lot' : ''}`
+                 : past && s.tool ? ` · ran on ${s.tool}${scene ? ' — replay its dispatch in 3D, tracking this lot' : ''}` : '')
           const Box = href ? 'a' : 'span'
           return (
             <span key={s.i} className="jseg" style={{ flexGrow: w[i], flexBasis: 0 }}>
@@ -84,7 +95,10 @@ function Journey({ lot, clock, wall }) {
                       : <>{j.tool}{left != null && <b> · {fmtCountdown(left)} left</b>}</>
                     : cur && status === 'waiting'
                       ? 'waiting for a tool'
-                      : fmtProc(s.proc_s)}
+                      : past && s.tool
+                        ? <>{s.tool}{scene && <b className="jstep-3d"> ▶ replay</b>}</>
+                        : fmtProc(s.proc_s)}
+                  {cur && j.tool && !delay && scene && <b className="jstep-3d"> ▶ 3D</b>}
                 </span>
                 {(s.bmax > 1 || s.setup) && (
                   <span className="jstep-tags">

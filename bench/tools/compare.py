@@ -156,7 +156,7 @@ def make_rule(spec, instance, args):
         return slate_rule.SlateRule(
             instance, solver=args.solver, cycle_s=args.cycle,
             budget_s=args.budget, pressure=pressure, threads=args.threads,
-            lazy=not args.no_lazy)
+            lazy=not args.no_lazy, fallback=args.slate_fallback, horizon_s=args.slate_horizon)
     return spec          # a plain name; sim_runner resolves it
 
 
@@ -206,6 +206,45 @@ def load_warm(args, sampler):
     return instance, SECONDS_PER_DAY * args.days
 
 
+def scale_starts(instance, scale):
+    """Compress the remaining release schedule by `scale`.
+
+    SMT2020 releases every part on a constant interval from order.txt and the
+    simulator builds every future lot up front, so a release policy has to be
+    applied to the lots still to come: each unreleased lot's time-to-release
+    is divided by `scale`, and its due date moves by the same amount, so the
+    lot is judged against the same lead time it was given. Released lots and
+    WIP are untouched: the same fab, fed faster from here on.
+    """
+    if not scale or abs(scale - 1.0) < 1e-9:
+        return 0
+    now = instance.current_time
+    n = 0
+    for lot in instance.dispatchable_lots:
+        if lot.release_at <= now:
+            continue
+        new_rel = now + (lot.release_at - now) / scale
+        lot.deadline_at -= lot.release_at - new_rel
+        lot.release_at = new_rel
+        n += 1
+    instance.dispatchable_lots.sort(key=lambda k: k.release_at)
+    print(f'  starts x{scale:g}: {n} future releases compressed', flush=True)
+    return n
+
+
+def family_queues(instance, top=10):
+    """Final queue per station family, longest first: where a run ended up
+    backed up. A start rate past the knee shows here before it shows in the
+    fab-wide numbers."""
+    q = {}
+    for m in instance.machines:
+        fam = getattr(m, 'family', None)
+        if not fam or str(fam).startswith('Delay'):
+            continue
+        q[fam] = max(q.get(fam, 0), len(getattr(m, 'waiting_lots', ()) or ()))
+    return sorted(q.items(), key=lambda kv: -kv[1])[:top]
+
+
 def run_one(spec, args):
     from events import ResetEvent
 
@@ -234,6 +273,7 @@ def run_one(spec, args):
     if use_reset:
         instance.add_event(ResetEvent(RESET_AT))
 
+    scale_starts(instance, getattr(args, 'starts_scale', 1.0))
     rule = make_rule(spec, instance, args)
     banner = rule.banner() if hasattr(rule, 'banner') else f'  rule: {spec}'
     print(f'\n=== {spec} ===', flush=True)
@@ -266,6 +306,16 @@ def run_one(spec, args):
     row = {'rule': spec, 'wall_s': round(wall, 1),
            'decisions': fp.n, 'fingerprint': fp.hexdigest()}
     row.update(kpis(instance, warm_from))
+    # Tool utilization over the window, by the feed's definition (hourly
+    # samples, real tools busy / real tools): the number the Results page
+    # draws, so a row here and the live run agree.
+    util = [r['util'] for r in sampler.rows if not r.get('warmup') and r.get('util') is not None]
+    row['util_pct'] = round(sum(util) / len(util), 2) if util else None
+    row['starts_scale'] = getattr(args, 'starts_scale', 1.0)
+    row['final_queues'] = family_queues(instance)
+    if util:
+        last = [r for r in sampler.rows if not r.get('warmup')]
+        row['wip_first'] = last[0].get('wip'); row['wip_last'] = last[-1].get('wip')
     if hasattr(rule, 'stats'):
         row['detail'] = rule.stats()
     row['interrupted'] = interrupted
@@ -273,6 +323,7 @@ def run_one(spec, args):
     print(f"  {row['throughput']} lots, "
           f"CT {row['cycle_time_days']}d, "
           f"on-time {row['on_time_pct']}%, "
+          f"util {row['util_pct']}%, "
           f"wall {row['wall_s']}s", flush=True)
     return row
 
@@ -280,14 +331,16 @@ def run_one(spec, args):
 def table(rows):
     w = max((len(r['rule']) for r in rows), default=6)
     head = (f"  {'rule':<{w}}  {'cycle time':>11}  {'throughput':>10}  "
-            f"{'on-time %':>9}  {'tardiness':>11}  {'coverage':>8}")
+            f"{'on-time %':>9}  {'tardiness':>11}  {'util %':>7}  {'coverage':>8}")
     out = ['', head, '  ' + '-' * (len(head) - 2)]
     for r in rows:
         cov = r.get('detail', {}).get('coverage')
         cov_s = f'{cov*100:.1f}%' if isinstance(cov, float) else '-'
+        u = r.get('util_pct')
+        u_s = f'{u:.1f}' if isinstance(u, (int, float)) else '-'
         out.append(f"  {r['rule']:<{w}}  {r['cycle_time_days']:>11.3f}  "
                    f"{r['throughput']:>10}  {r['on_time_pct']:>9.2f}  "
-                   f"{r['tardiness_lot_days']:>11.1f}  {cov_s:>8}")
+                   f"{r['tardiness_lot_days']:>11.1f}  {u_s:>7}  {cov_s:>8}")
     return '\n'.join(out)
 
 
@@ -365,6 +418,14 @@ def main():
                         'it well inside 5ms, and the rest of the budget goes on '
                         'proving optimality nobody collects.')
     p.add_argument('--threads', type=int, default=1)
+    p.add_argument('--slate-fallback', default='cr', choices=['score', 'cr'],
+                   help='how the slate scores a lot it holds no token for')
+    p.add_argument('--slate-horizon', type=float, default=900.0,
+                   help='plan lots arriving within this many fab-seconds too (ADR 0010); 0 = queue only')
+    p.add_argument('--starts-scale', type=float, default=1.0,
+                   help='release the remaining lots this many times faster than '
+                        'order.txt schedules them (1.1 = 10%% more starts). '
+                        'Due dates move with the releases, so on-time stays fair.')
     p.add_argument('--no-lazy', action='store_true',
                    help='re-solve every family every cycle')
     p.add_argument('--warmup-days', type=float, default=0.0,

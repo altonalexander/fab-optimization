@@ -172,6 +172,10 @@ class FabMirror:
         # otherwise be repeated on every point.
         self.burndown = deque(maxlen=BURNDOWN_MAX)
         self.lot_meta = {}
+        # lot -> the tools it has started on, newest last: {tool, step, t, end}.
+        # What lets a lot's journey name the tool that ran a past step, and
+        # so link that step to the tool page's replay of the dispatch.
+        self.lot_tools = defaultdict(lambda: deque(maxlen=16))
         self.burndown_run = None   # which simulation run the ring belongs to
         # Where warm-up ends and the live stream begins. Published by the feed
         # rather than inferred, because the chart draws the two sides
@@ -205,6 +209,8 @@ class FabMirror:
                 else:
                     self.in_flight_meta.pop(lot, None)
                 if ev.get("tool"):
+                    self.lot_tools[lot].append({"tool": ev["tool"], "step": ev.get("recipe"),
+                                                "t": start, "end": end})
                     self.tool_stats[ev["tool"]]["started"] += 1
                     # A tool that just started a lot is up, whatever the last
                     # status event claimed.
@@ -405,6 +411,7 @@ class FabMirror:
             self.burndown_run = run
             self.burndown.clear()
             self.lot_meta.clear()
+            self.lot_tools.clear()
             self.sim_t = None
             self.sim_t_at = None
 
@@ -478,6 +485,7 @@ class FabMirror:
                 self.burndown_run = run
                 self.burndown.clear()
                 self.lot_meta.clear()
+                self.lot_tools.clear()
                 self.sim_t = None
                 self.sim_t_at = None
         elif self.burndown_run is not None:
@@ -539,6 +547,7 @@ class FabMirror:
             done = [k for k, m in self.lot_meta.items() if m.get("state") == "done"]
             for k in done[:2000]:
                 self.lot_meta.pop(k, None)
+                self.lot_tools.pop(k, None)
 
     def burndown_view(self, cohorts=None, max_lots=400, want_points=False,
                       lots=None):
@@ -638,6 +647,11 @@ class FabMirror:
             tool = d.get("tool")
             if tool:
                 s = self.tool_stats[tool]
+                # Wear, when the feed sends it: pieces until the next
+                # piece-based PM and that PM's interval (see sim_feed).
+                if _as_float(d.get("pm_int")) is not None:
+                    s["pm_left"] = _as_float(d.get("pm_left"))
+                    s["pm_int"] = _as_float(d.get("pm_int"))
                 s["dispatches"] += 1
                 s["lots"] += int(d.get("lots") or 0)
                 s["batch_max"] = max(s.get("batch_max", 0), int(d.get("lots") or 0))
@@ -1582,6 +1596,10 @@ def _tool_row(tool_id):
         "setup": s.get("setup"),
         "changeovers": s.get("changeovers", 0),
         "batch_max": s.get("batch_max", 0),
+        # Pieces until the next piece-based PM and that PM's interval, from the
+        # last decision on this tool; absent for time-based PM.
+        "pm_left": s.get("pm_left"),
+        "pm_int": s.get("pm_int"),
         "last_day": s.get("last_day"),
         "last_ts": s.get("last_ts"),
         "running": running[:25],
@@ -1830,6 +1848,30 @@ def tool_detail(tool_id):
     row = _tool_row(tool_id)
     row["recent_decisions"] = recent
     row["recent_events"] = events
+    # Cohorts for the lots the decisions name, so a lot in a rationale links
+    # to its cohort's burndown the way the lots on the ports do.
+    named = set()
+    for d in recent:
+        w = d.get("why")
+        if isinstance(w, dict):
+            for c in (w.get("chosen") or []) + (w.get("alternatives") or []):
+                if c.get("lot"):
+                    named.add(c["lot"])
+    with mirror.lock:
+        for l in named - set(row["cohorts"]):
+            c = (mirror.lot_meta.get(l) or {}).get("cohort") \
+                or (mirror.lots_ready.get(l) or {}).get("cohort")
+            if c and c != "?":
+                row["cohorts"][l] = c
+    # Where each named or waiting lot goes next, and the queue waiting there.
+    row["next"] = _next_steps(named | set(row["waiting"]) | set(row["running"]))
+    # The whole family queue (the shelves show the first dozen), and the step
+    # each lot is at with its batch limits: a furnace page groups its queue by
+    # product and step with this, and a batch counts lots the shelves cannot.
+    with mirror.lock:
+        queue_all = _waiting_for(tool_id)[:200]
+    row["queue_lots"] = queue_all
+    row["steps"] = _lot_steps(named | set(queue_all) | set(row["running"]))
     # Pacing, so the page can advance the countdown between polls at the
     # rate the clock is actually moving (and hold it while paused).
     ctl = read_sim_control()
@@ -2281,11 +2323,92 @@ def _route_table(part):
                         "proc_s": round(t, 1),
                         "setup": g("SETUP") or "",
                         "bmax": _as_int(g("BATCHMX")) or 1,
+                        # Batch limits in pieces in the file; the UI divides
+                        # by the 25-wafer lot where it needs lots.
+                        "bmin": _as_int(g("BATCHMN")) or None,
                     })
     except OSError:
         rows = []
     _route_tables[part] = rows
     return rows
+
+
+def _step_index(m, table):
+    """Index of the lot's current step in its route table (len(table) when
+    done), or None without a table. Steps left is the simulator's own count;
+    it then snaps to the nearest step whose name matches the one the stream
+    named, because rework splices steps back in."""
+    n = len(table)
+    if not n:
+        return None
+    left = m.get("left")
+    state = m.get("state", "active")
+    if state == "done" or (left is not None and left <= 0):
+        return n
+    idx = n - int(left) if left is not None else 0
+    idx = max(0, min(n - 1, idx))
+    name = m.get("step")
+    if name and table[idx]["step"] != name:
+        near = [j for j in range(max(0, idx - 8), min(n, idx + 9))
+                if table[j]["step"] == name]
+        if near:
+            idx = min(near, key=lambda j: abs(j - idx))
+    return idx
+
+
+def _next_steps(lots):
+    """For each lot, the family its NEXT route step needs and how many lots
+    are queued for that family now -- the downstream a dispatcher could weigh.
+    From the burndown metadata and the route table; a lot the mirror cannot
+    place is left out rather than guessed at."""
+    with mirror.lock:
+        metas = {l: dict(mirror.lot_meta[l]) for l in lots if l in mirror.lot_meta}
+        queue = {}
+        for ev in mirror.lots_ready.values():
+            f = ev.get("fam") or ""
+            queue[f] = queue.get(f, 0) + 1
+    out = {}
+    for lot, m in metas.items():
+        table = _route_table(m.get("part") or "")
+        idx = _step_index(m, table)
+        if idx is None or idx + 1 >= len(table):
+            continue
+        nxt = table[idx + 1]
+        out[lot] = {"fam": nxt["fam"], "step": nxt["step"], "waiting": queue.get(nxt["fam"], 0)}
+    return out
+
+
+def _lot_steps(lots):
+    """Per lot: the step it is at or waiting for, its family, product and the
+    step's batch limits in LOTS -- what a furnace needs to say which waiting
+    lots could share a batch. From the ready record when the lot is queued
+    (the feed stamps recipe, part, bmin, bmax), else from the burndown
+    metadata and the route table for a lot on a tool."""
+    out = {}
+    with mirror.lock:
+        ready = {l: dict(mirror.lots_ready[l]) for l in lots if l in mirror.lots_ready}
+        # A ready record restored from a snapshot may carry no step name;
+        # those lots are placed from their burndown metadata instead.
+        metas = {l: dict(mirror.lot_meta[l]) for l in lots
+                 if l in mirror.lot_meta and (l not in ready or not ready[l].get("recipe"))}
+        ready = {l: ev for l, ev in ready.items() if ev.get("recipe")}
+    per_lot = 25
+    to_lots = lambda pieces: (max(1, round(pieces / per_lot)) if pieces else None)
+    for lot, ev in ready.items():
+        # The feed stamps the simulator's batch limits, already in lots.
+        out[lot] = {"step": ev.get("recipe") or None, "fam": ev.get("fam") or None,
+                    "part": ev.get("part") or None, "setup": (ev.get("setup") or "").strip() or None,
+                    "bmin": _as_int(ev.get("bmin")) or None, "bmax": _as_int(ev.get("bmax")) or None}
+    for lot, m in metas.items():
+        table = _route_table(m.get("part") or "")
+        idx = _step_index(m, table)
+        if idx is None or idx >= len(table):
+            continue
+        st = table[idx]
+        out[lot] = {"step": st["step"], "fam": st["fam"], "part": m.get("part"),
+                    "setup": (st.get("setup") or "").strip() or None,
+                    "bmin": to_lots(st.get("bmin")), "bmax": to_lots(st.get("bmax"))}
+    return out
 
 
 def _journey(lot, m):
@@ -2299,21 +2422,9 @@ def _journey(lot, m):
     """
     table = _route_table(m.get("part") or "")
     n = len(table)
-    if not n:
+    idx = _step_index(m, table)
+    if idx is None:
         return None
-    left = m.get("left")
-    state = m.get("state", "active")
-    if state == "done" or (left is not None and left <= 0):
-        idx = n
-    else:
-        idx = n - int(left) if left is not None else 0
-        idx = max(0, min(n - 1, idx))
-        name = m.get("step")
-        if name and table[idx]["step"] != name:
-            near = [j for j in range(max(0, idx - 8), min(n, idx + 9))
-                    if table[j]["step"] == name]
-            if near:
-                idx = min(near, key=lambda j: abs(j - idx))
     steps = []
     for pos in range(-2, 3):
         j = idx + pos
@@ -2323,10 +2434,26 @@ def _journey(lot, m):
         tool = mirror.in_flight.get(lot)
         run = dict(mirror.in_flight_meta.get(lot, {}))
         waiting = lot in mirror.lots_ready
+        hist = list(mirror.lot_tools.get(lot, ()))
+    # Which tool ran each step the lot has left: the newest start on record
+    # for that step name (rework revisits a step, and the latest visit is the
+    # one a replay should show). Only what the stream said; no guessing.
+    for s in steps:
+        if s["pos"] < 0:
+            for h in reversed(hist):
+                if h.get("tool") and h.get("step") == s["step"]:
+                    s["tool"] = h["tool"]
+                    s["t"] = h.get("t")
+                    break
+        elif s["pos"] == 0 and tool:
+            s["tool"] = tool
     return {
         "idx": idx, "n": n, "steps": steps,
         "tool": tool, "t": run.get("t"), "end": run.get("end"),
         "waiting": bool(waiting) and not tool,
+        # The lot's last few tools, newest last, for anything that wants the
+        # trail rather than the window.
+        "visited": [{"tool": h.get("tool"), "step": h.get("step"), "t": h.get("t")} for h in hist[-6:]],
     }
 
 
