@@ -58,6 +58,7 @@ ORIG_CWD = os.getcwd()
 import sim_runner  # noqa: E402  (bootstraps sys.path and cwd for the baseline)
 from sim_runner import REPO, RESET_AT, SECONDS_PER_DAY  # noqa: E402
 
+import overlay as overlay_mod  # noqa: E402  (ADR 0013 tool qualification)
 import slate_rule  # noqa: E402
 
 
@@ -168,11 +169,13 @@ def warm_checkpoint(args):
     streams from.
     """
     import sim_feed
+    ov = args.overlay_obj
     ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
-                            args.warmup_days, args.batch_strat, args.days)
+                            args.warmup_days, args.batch_strat, args.days, ov)
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
-              f'{args.warmup_days:g} (horizon >= {args.days}d); building it',
+              f'{args.warmup_days:g} (horizon >= {args.days}d'
+              + (f', overlay {ov.name}' if ov else '') + '); building it',
               flush=True)
         import subprocess
         cmd = [sys.executable, os.path.join(HERE, 'sim_feed.py'),
@@ -181,11 +184,11 @@ def warm_checkpoint(args):
                '--dispatcher', args.warmup_dispatcher,
                '--warmup-days', str(args.warmup_days),
                '--checkpoint-only', '--no-store', '--speed', '0',
-               '--out', os.devnull]
+               '--out', os.devnull] + (['--overlay', ov.name] if ov else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
-                                args.warmup_days, args.batch_strat, args.days)
+                                args.warmup_days, args.batch_strat, args.days, ov)
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
@@ -198,7 +201,7 @@ def load_warm(args, sampler):
     exactly as they are for the feed."""
     import sim_feed
     ck = warm_checkpoint(args)
-    instance = sim_feed.load_checkpoint(ck, sampler)
+    instance = sim_feed.load_checkpoint(ck, sampler, args.overlay_obj)
     if instance is None:
         sys.exit(f'  checkpoint {ck} unreadable')
     print(f'  resumed {os.path.relpath(ck, REPO)} at day '
@@ -256,6 +259,8 @@ def run_one(spec, args):
     else:
         instance, run_to = sim_runner.build(
             args.dataset, args.days, args.seed, [sampler], args.batch_strat)
+        if args.overlay_obj is not None:
+            args.overlay_obj.bind(instance)
 
     # Warm-up. Two schemes exist in this repo and they are not the same thing:
     #
@@ -312,6 +317,7 @@ def run_one(spec, args):
     util = [r['util'] for r in sampler.rows if not r.get('warmup') and r.get('util') is not None]
     row['util_pct'] = round(sum(util) / len(util), 2) if util else None
     row['starts_scale'] = getattr(args, 'starts_scale', 1.0)
+    row.update(overlay_mod.stamp(args.overlay_obj))
     row['final_queues'] = family_queues(instance)
     if util:
         last = [r for r in sampler.rows if not r.get('warmup')]
@@ -374,8 +380,12 @@ def merge(paths, out):
     """Rules run as separate processes (they are independent by construction)
     land in one file, and the gate is checked over the union."""
     base, rows = None, []
+    # `overlay` and `overlay_hash` are comparability keys, not decoration:
+    # merging a pristine row with a dedicated one produces a table whose rows
+    # ran on different fabs, which is the one thing this harness exists to
+    # stop (ADR 0013 §3.5).
     keys = ('dataset', 'days', 'seed', 'batch_strat', 'warmup_days',
-            'cycle_s', 'budget_s')
+            'cycle_s', 'budget_s', 'overlay', 'overlay_hash')
     for path in paths:
         with open(path) as f:
             d = json.load(f)
@@ -390,7 +400,10 @@ def merge(paths, out):
     seen = set()
     rows = [r for r in rows if not (r['rule'] in seen or seen.add(r['rule']))]
     print(f"  {base['dataset']}  {base['days']} days  seed={base['seed']}  "
-          f"batch={base['batch_strat']}  warmup={base.get('warmup_days') or 0:g}d")
+          f"batch={base['batch_strat']}  warmup={base.get('warmup_days') or 0:g}d"
+          f"  starts={base.get('starts_scale', 1.0) or 1.0:g}x"
+          f"  overlay={base.get('overlay') or 'none (pristine)'}"
+          + (f" ({base['overlay_hash']})" if base.get('overlay_hash') else ''))
     print(table(rows))
     verdict = check_validation(rows)
     if verdict:
@@ -422,6 +435,10 @@ def main():
                    help='how the slate scores a lot it holds no token for')
     p.add_argument('--slate-horizon', type=float, default=900.0,
                    help='plan lots arriving within this many fab-seconds too (ADR 0010); 0 = queue only')
+    p.add_argument('--overlay', default=None,
+                   help='tool qualification overlay under data/smt2020/overlays/ '
+                        '(ADR 0013). Keys the warm-up checkpoint and is stamped '
+                        'on every row. Omit for the pristine fab.')
     p.add_argument('--starts-scale', type=float, default=1.0,
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them (1.1 = 10%% more starts). '
@@ -441,6 +458,7 @@ def main():
     a = p.parse_args()
     a.dataset = sim_runner.normalize_dataset(a.dataset)
     a.dispatcher = None   # unused; --rules drives this tool
+    a.overlay_obj = overlay_mod.load(a.overlay)
 
     if a.out:
         a.out = os.path.join(ORIG_CWD, a.out)
@@ -449,7 +467,11 @@ def main():
         return
 
     print(f'  {a.dataset}  {a.days} days  seed={a.seed}  batch={a.batch_strat}'
-          + (f'  warmup={a.warmup_days:g}d' if a.warmup_days else ''))
+          + (f'  warmup={a.warmup_days:g}d' if a.warmup_days else '')
+          + (f'  starts={a.starts_scale:g}x' if a.starts_scale != 1.0 else '')
+          + (f'  overlay={a.overlay_obj.name} ({a.overlay_obj.hash}, '
+             f'{len(a.overlay_obj.table)} pairs)' if a.overlay_obj
+             else '  overlay=none (pristine)'))
     if a.days <= 365 and not a.warmup_days:
         print('  NOTE: <=365 days and no --warmup-days, so the numbers include '
               'the fill-up\n        transient and are not comparable to warmed '
@@ -465,6 +487,8 @@ def main():
     payload = {
         'dataset': a.dataset, 'days': a.days, 'seed': a.seed,
         'batch_strat': a.batch_strat, 'solver': a.solver,
+        **overlay_mod.stamp(a.overlay_obj),
+        'starts_scale': a.starts_scale,
         'warmup_days': a.warmup_days,
         'warmup_dispatcher': a.warmup_dispatcher if a.warmup_days else None,
         'cycle_s': a.cycle, 'budget_s': a.budget,
@@ -473,7 +497,8 @@ def main():
     out = a.out or os.path.join(
         REPO, 'bench', 'results',
         f'compare_{a.dataset}_seed{a.seed}_{a.days}d'
-        + (f'_w{a.warmup_days:g}' if a.warmup_days else '') + '.json')
+        + (f'_w{a.warmup_days:g}' if a.warmup_days else '')
+        + (f'_{a.overlay_obj.name}' if a.overlay_obj else '') + '.json')
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, 'w') as f:
         json.dump(payload, f, indent=2)

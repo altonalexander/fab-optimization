@@ -66,6 +66,8 @@ import uuid
 import sim_runner  # noqa: E402
 from sim_runner import REPO  # noqa: E402
 
+import overlay as overlay_mod  # noqa: E402  (ADR 0013 tool qualification)
+
 from plugins.interface import IPlugin  # noqa: E402
 
 DEFAULT_BROKERS = 'localhost:29092'   # the dev-override host listener
@@ -157,8 +159,9 @@ def envelope(**kv):
     return ';'.join(f'{k}={v}' for k, v in kv.items() if v is not None)
 
 
-def cache_path(dataset, seed, dispatcher, day, batch_strat):
-    name = f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}_day{day:g}.json'
+def cache_path(dataset, seed, dispatcher, day, batch_strat, overlay=None):
+    name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}_day{day:g}'
+            f'{overlay_mod.key(overlay)}.json')
     return os.path.join(CACHE_DIR, name)
 
 
@@ -212,16 +215,26 @@ CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
                     '_release_log')
 
 
-def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days):
+def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
+    """Where the shared warm-up checkpoint for this configuration lives.
+
+    The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
+    without the qualification matrix has different WIP, different tool setups
+    and different breakdowns pending from one warmed with it -- so resuming a
+    pristine checkpoint under an overlay would compare two fabs and call the
+    difference a dispatching result, which is the ADR 0012 §4.5 failure with a
+    new cause. The pristine fab contributes an empty fragment, so every
+    existing checkpoint filename is unchanged.
+    """
     name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}'
-            f'_day{day:g}_h{int(days)}.ckpt')
+            f'_day{day:g}{overlay_mod.key(overlay)}_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
-def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days):
+def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
-    pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0) \
+    pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay) \
         .replace('_h0.ckpt', '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
@@ -286,11 +299,17 @@ def scale_starts(instance, scale):
     return n
 
 
-def load_checkpoint(path, feed):
+def load_checkpoint(path, feed, overlay=None):
     """Restore a checkpoint and attach `feed` as its only plugin.
 
     Returns the instance, or None if the file is unreadable (in which case
     the caller re-simulates; a stale cache must never be fatal).
+
+    `overlay` is re-BOUND rather than trusted from the pickle: the matrix maps
+    machine names to the indices of one live instance, and a checkpoint is
+    only ever resumed under the overlay its filename is keyed by, so binding
+    here is what guarantees the resumed fab and the overlay on the row are
+    the same one.
     """
     try:
         import cloudpickle
@@ -317,6 +336,10 @@ def load_checkpoint(path, feed):
         for k, v in books.items():
             setattr(feed, k, v)
         instance.plugins = [feed]
+        if overlay is not None:
+            overlay.bind(instance)
+        else:
+            instance.overlay = None
         return instance
     except Exception as e:
         print(f'  checkpoint unreadable ({e}); will re-simulate', file=sys.stderr)
@@ -1507,6 +1530,11 @@ def main():
                    help='per-family solve budget, seconds')
     p.add_argument('--slate-fallback', default='cr', choices=['score', 'cr'],
                    help='how the slate scores a lot it holds no token for')
+    p.add_argument('--overlay', default=None,
+                   help='tool qualification overlay under data/smt2020/overlays/ '
+                        '(ADR 0013). Keys the warm-up checkpoint and is stamped '
+                        'on the run, so an overlay row is never laid over a '
+                        'pristine one unlabelled. Omit for the pristine fab.')
     p.add_argument('--starts-scale', type=float, default=1.0,
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them, after the warm-up checkpoint '
@@ -1562,6 +1590,10 @@ def main():
     a = p.parse_args()
 
     a.dataset = sim_runner.normalize_dataset(a.dataset)
+    ov = overlay_mod.load(a.overlay)
+    if ov is not None:
+        print(f'  overlay {ov.name} ({ov.hash}): {len(ov.table)} qualified '
+              f'(family, part) pairs', file=sys.stderr)
     warm_rule = a.warmup_dispatcher or a.dispatcher
     if warm_rule != a.dispatcher and a.warmup_days is None:
         p.error('--warmup-dispatcher needs --warmup-days')
@@ -1603,7 +1635,7 @@ def main():
     report_every = (warm_s / 10) if warm_s else 0
     next_report = report_every
     cpath = cache_path(a.dataset, a.seed, a.dispatcher,
-                       a.warmup_days or 0, a.batch_strat)
+                       a.warmup_days or 0, a.batch_strat, ov)
 
     if a.snapshot_only:
         if a.warmup_days is None:
@@ -1629,7 +1661,7 @@ def main():
     # paid once per (dataset, seed, dispatcher, batching, day) rather than on
     # every start. --rebuild forces the slow path.
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
-        a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days)
+        a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days, ov)
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1641,11 +1673,11 @@ def main():
                '--batch-strat', a.batch_strat, '--days', str(a.days),
                '--dispatcher', warm_rule, '--warmup-days', str(a.warmup_days),
                '--checkpoint-only', '--no-store', '--speed', '0',
-               '--out', os.devnull]
+               '--out', os.devnull] + (['--overlay', a.overlay] if a.overlay else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
-                         a.batch_strat, a.days)
+                         a.batch_strat, a.days, ov)
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1688,7 +1720,7 @@ def main():
     instance = None
     if ckpt is not None:
         t0 = time.time()
-        instance = load_checkpoint(ckpt, feed)
+        instance = load_checkpoint(ckpt, feed, ov)
         if instance is not None:
             n = scale_starts(instance, a.starts_scale)
             if n:
@@ -1711,6 +1743,10 @@ def main():
     if instance is None:
         instance, run_to = sim_runner.build(
             a.dataset, a.days, a.seed, [feed], a.batch_strat)
+        # Bound BEFORE the first decision point, so the warm-up this run
+        # checkpoints was itself simulated under the matrix.
+        if ov is not None:
+            ov.bind(instance)
 
     def before_dispatch(instance):
         nonlocal warmed, next_report
@@ -1751,7 +1787,7 @@ def main():
                                kpi=feed._kpi)
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
-                              a.batch_strat, a.days)
+                              a.batch_strat, a.days, ov)
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)
