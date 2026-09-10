@@ -22,6 +22,46 @@ import pickle
 
 class Instance:
 
+    # Tool qualification overlay (fab-optimization deviation 8, ADR 0013).
+    # A CLASS attribute, not an instance one, so a checkpoint pickled before
+    # the overlay existed unpickles into an instance that still answers
+    # `eligible` -- the pristine rows resume from exactly such a file.
+    # Set by bench/tools/overlay.py's Overlay.bind(); None is the pristine fab.
+    overlay = None
+
+    def eligible(self, lot, machine):
+        """Can `machine` run `lot` at the step it is waiting for?
+
+        The single place the question is asked. Two things narrow a family:
+
+          * **lot-to-lens dedication** (`SVESTN`/`FORSTEP`) -- upstream, and
+            lot state: once a lot has run a dedicated step on a tool it must
+            return to that same tool. This is the check that used to be
+            written out four times, in both dispatch managers, the greedy
+            alternative-machine search and the dedication branch.
+          * **tool qualification** -- an overlay (ADR 0013), and master data
+            on the tool: a recipe is qualified on a subset of the family.
+            Absent an overlay this half is not consulted at all, which is
+            why the pristine fingerprints are unchanged by the refactor.
+        """
+        di = lot.actual_step.order
+        if di in lot.dedications and machine.idx != lot.dedications[di]:
+            return False
+        return self.qualified(lot, machine)
+
+    def qualified(self, lot, machine):
+        """The overlay half of `eligible`, alone.
+
+        Split out for the one caller that must not have the dedication half:
+        `greedy.py`'s dedication branch keys `lot.dedications` by the NEXT
+        step (`actual_step.idx + 1`) where `eligible` keys it by the current
+        one (`actual_step.order`), and those are different numbers. Routing
+        it through the full predicate would change the pristine answer, which
+        is the thing the refactor has to leave alone.
+        """
+        ov = self.overlay
+        return True if ov is None else ov.allows(machine, lot)
+
     def __init__(self, machines: List[Machine], routes: Dict[str, Route], lots: List[Lot],
                  setups: Dict[Tuple, int], setup_min_run: Dict[str, int], breakdowns: List[BreakdownEvent],
                  lot_for_machine, plugins):

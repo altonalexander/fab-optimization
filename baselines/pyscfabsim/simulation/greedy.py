@@ -37,7 +37,9 @@ def dispatching_combined_permachine(ptuple_fcn, machine, time, setups):
 def find_alternative_machine(instance, lots, machine):
     m: Machine
     for m in instance.family_machines[machine.family]: #hier wird eine Maschine gesucht, wo das Setup dem Los-Setup entspricht
-        if m in instance.usable_machines and m.current_setup == lots[0].actual_step.setup_needed:  
+        if (m in instance.usable_machines
+                and m.current_setup == lots[0].actual_step.setup_needed
+                and all(instance.eligible(l, m) for l in lots)):
             machine = m
             break
     return machine
@@ -118,8 +120,15 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
                 if lot.actual_step.idx + 1 == d:
                     machine_dict = {m.idx: m for m in instance.usable_machines}
                     machine_idx = lot.dedications[d]
-                    machine = machine_dict.get(machine_idx)
-                    if machine:
+                    # Bound to a candidate rather than to `machine` itself:
+                    # upstream overwrote `machine` before testing it, so a
+                    # dedicated tool that was not usable left `machine` None
+                    # and the min_runs check below raised. Under an overlay
+                    # the same would happen to an unqualified one. The chosen
+                    # tool now changes only when the swap is actually taken.
+                    cand = machine_dict.get(machine_idx)
+                    if cand is not None and instance.qualified(lot, cand):
+                        machine = cand
                         lot.dedications.pop(d)
                         break
         # Das hier ist exterm wichtig, dass die LSSU-Regel eingehalten wird. 

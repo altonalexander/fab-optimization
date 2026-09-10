@@ -9,8 +9,7 @@ class LotForMachineDispatchManager:
     @staticmethod
     def free_up_lots(self, lot):
         for machine in self.family_machines[lot.actual_step.family]:
-            di = lot.actual_step.order
-            if di not in lot.dedications or machine.idx == lot.dedications[di]:
+            if self.eligible(lot, machine):
                 machine.waiting_lots.append(lot)
                 lot.waiting_machines.append(machine)
                 if self.free_machines[machine.idx]:

@@ -19,8 +19,7 @@ class MachineForLotDispatchManager:
 
     @staticmethod
     def assign_lot_if_dedication_ok(self, lot, machine):
-        di = lot.actual_step.order
-        if di not in lot.dedications or machine.idx == lot.dedications[di]:
+        if self.eligible(lot, machine):
             if machine not in lot.waiting_machines:
                 lot.waiting_machines.append(machine)
             if lot not in machine.waiting_lots:
