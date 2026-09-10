@@ -302,6 +302,9 @@ services:
       # Pause the feed after this long with no dashboard connected; the next
       # viewer resumes it. 0 disables.
       IDLE_PAUSE_SECONDS: "${IDLE_PAUSE_SECONDS:-600}"
+      # false: a paused fab stays paused until a viewer clicks Resume in the
+      # dashboard's modal (which also explains the sim). true: resume silently.
+      AUTO_RESUME_ON_VIEWER: "${AUTO_RESUME_ON_VIEWER:-false}"
     volumes:
       - sim-control:/var/run/fab-sim
       # Same tool master the dispatcher uses, and the zone policy the UI renders.

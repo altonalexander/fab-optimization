@@ -1,0 +1,27 @@
+  SMT2020_LVHM  210 days  seed=0  batch=Demand  warmup=90d
+  no fifo checkpoint for day 90 (horizon >= 210d); building it
+  feeding /dev/null  (SMT2020_LVHM, 210d, fifo, speed=0)
+  warming up to day 90 (unpaced, silent) — about 9 min of CPU
+    warm-up day    9.0 / 90  (10.0%)    2.1 min elapsed  ~19 min left
+    warm-up day   18.0 / 90  (20.0%)    4.2 min elapsed  ~17 min left
+    warm-up day   27.0 / 90  (30.0%)    6.3 min elapsed  ~15 min left
+    warm-up day   36.0 / 90  (40.0%)    8.3 min elapsed  ~12 min left
+    warm-up day   45.0 / 90  (50.0%)   10.3 min elapsed  ~10 min left
+    warm-up day   54.0 / 90  (60.0%)   12.3 min elapsed  ~8 min left
+    warm-up day   63.0 / 90  (70.0%)   14.3 min elapsed  ~6 min left
+    warm-up day   72.0 / 90  (80.0%)   16.2 min elapsed  ~4 min left
+    warm-up day   81.0 / 90  (90.0%)   18.1 min elapsed  ~2 min left
+  simulator checkpointed to bench/snapshots/SMT2020_LVHM_seed0_fifo_Demand_day90_h210.ckpt in 0.6s -- later starts resume from here
+  checkpoint written; --checkpoint-only, stopping here
+  resumed bench/snapshots/SMT2020_LVHM_seed0_fifo_Demand_day90_h210.ckpt at day 90
+  starts x1.03: 6890 future releases compressed
+
+=== slate ===
+  slate: solver=cpsat pressure=full cycle=60s
+  6806 lots, CT 37.186d, on-time 88.63%, util 80.64%, wall 14680.7s
+
+  rule    cycle time  throughput  on-time %    tardiness   util %  coverage
+  -------------------------------------------------------------------------
+  slate       37.186        6806      88.63        267.1     80.6     50.1%
+
+  wrote /home/alton/code/fab-optimization/bench/results/starts120/slate_x1.03.json

@@ -30,6 +30,7 @@ scripts/             dev-up.sh and friends
 
 Start with [`docs/adr/0000`](docs/adr/0000-motivation-scope-and-boundaries.md)
 for what this project is for and, more usefully, what it is not.
+What comes next, and in what order, is [`docs/NEXT.md`](docs/NEXT.md).
 
 If the dispatcher and the simulator are fed different SMT2020 loads, every
 number comparing them is meaningless, and nothing in either program would tell
@@ -284,6 +285,73 @@ across those setups and decides both which lot goes next and, implicitly,
 when the tool pays for a changeover. This is the sequencing problem a
 per-cycle assignment is blind to (see `docs/adr/0002`), visible one
 decision at a time.
+
+### Tool — the bay in three dimensions (dry etch, CMP, furnace, litho)
+On a dry-etch tool (`/tools/DE_FE_86_206`, any `DE_*` family), a CMP
+polisher (`Planar_*`), a diffusion furnace (`Diffusion_*`) or a litho cell
+(`LithoTrack_*`, `Litho_FE_*`, `Litho_BE_*`) the tool page also draws the
+bay: the lots waiting for the family on track-side shelves,
+the lot on each load port with its time left, and the one-way overhead
+loop with three hoist vehicles. When a decision lands, the panel on the
+right lists the candidates the rule chose from — priority, wait, slack,
+setup match — scans them, locks the winner, and connects
+**lot → vehicle → tool · port**; the winner's rail route lights up and a
+vehicle fetches it. When the FOUP nearest the port by rail is not the one
+chosen, its route is ghosted in red, which is the point of the picture:
+the dispatcher ranks the lot, not the distance. The strip beneath reads the
+machine state (`IDLE → LOT SELECTED → RESERVED → FOUP IN TRANSIT →
+LOADING → PROCESSING`). Two modes. **Live twin** follows the feed on the
+fab clock — a delivery is twenty-odd fab seconds, so it is only watchable
+at **1x** playback (the scene's clock chip offers it); at 20x it is a
+flick, and paused it stands still, like every other view here. **Playback**
+replays one recorded decision at one fab second per second whatever the
+feed is doing: pick **▶ watch** on a row under Recent decisions, and the
+scene (amber-framed while it runs) shows the previous lot leaving, those
+candidates on the shelves, the choice, and the delivery. The scene and the
+lots view link both ways: a lot in a decision's rationale links to its
+cohort, and a lot's journey links each step it has left to a replay of the
+dispatch on the tool that ran it (`/tools/<tool>?lot=<lot>&mode=playback`),
+and its current step to the live bay (`mode=live`); opened that way, or by
+clicking a FOUP, the camera locks onto the lot instead of the tool.
+CMP is the second scene and reuses all of this with a different focal tool
+(three platens under a carousel that turn while a lot is on the tool, a
+post-clean module, a slurry cabinet) and two more dispatch dimensions the
+data actually has: **pad life**, drawn from SMT2020's piece-based PM
+calendar (the feed publishes pieces until the next PM with each decision,
+so the panel shows "n of 3,500 wafers since PM"), and **next ↓**, the
+family each candidate's next route step needs and the queue waiting there
+now — the downstream a fab-wide dispatcher weighs and a queue rule does
+not. Setups are hidden where a family has none (CMP), and a tool down for
+PM or a breakdown says so on the tool and in the panel.
+The furnace is the third scene and the one where the right decision can be
+to wait. SMT2020 furnaces batch 3–6 lots of the same product at the same
+step (BATCHMN/BATCHMX in the route, in pieces), so the queue on the shelves
+is grouped by product and step; while nothing runs and no group has reached
+its minimum, the state strip reads **WAITING FOR BATCH** and the lots of the
+largest forming group are tinted amber. When the decision lands it names
+every lot of the batch: they lock together in the panel, then leave the
+shelves one vehicle at a time (three vehicles, so the fourth FOUP waits for
+the first to come back), onto six ports, and the tubes glow while the batch
+runs. Alternatives in the panel show their step, which is usually why they
+were not in the batch.
+Litho is the fourth scene: a coat/develop track with the scanner behind it.
+SMT2020 gives the track families one setup per layer (`SU015_1`,
+`SU036_1`, … in the route) and a changeover time between setups, so every
+FOUP's lid carries the colour of the setup it needs and the track wears a
+band of the setup it is on. A lot that needs another layer's setup costs a
+changeover, drawn as a **SETUP CHANGE** state between loading and
+processing for exactly the seconds the decision record priced it at
+(`setup_s` in the ranking tuple), after which the band takes the new
+colour. The rules rank setup cost ahead of queue age, and the panel says so
+when a lot that waited longer lost to one already on the layer. SMT2020
+has no reticles, so none are modelled or drawn; the scanner families have
+no setups, so their pages show the cell without the band.
+SMT2020 has no AMHS (transport is a `Delay_*` step), so ports, shelves and
+vehicles are a visualisation of the decision, not a second simulation; the
+layout is the same synthetic one the floor map uses, and the neighbouring
+tools are the real occupants of the tool's cell. Model in
+`dispatch/ui/src/etch_geom.js` (tested), rendering in `EtchScene.jsx`
+(three.js, loaded only on those pages).
 
 ### Floor — the cleanroom as a map
 ![floor](docs/screenshots/floor.png)
@@ -589,12 +657,14 @@ slate, not from it.
 
 ```bash
 cd dispatch/infra
-cp .env.example .env            # set POSTGRES_PASSWORD
-./make-htpasswd.sh <username>   # basic-auth login for the whole site
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-    --profile all up -d --build
+cp .env.example .env            # POSTGRES_PASSWORD, PUBLIC_URL (per-app settings)
+./deploy.sh                     # compose up --build under the shared secrets
 make -C .. verify               # passes clean: no dev override, no host ports
 ```
+
+`deploy.sh` injects secrets that several apps on the box share (Mailgun for
+now) from the homelab SOPS store with `sops exec-env`, so they are never
+written in plaintext; per-app values stay in `.env`.
 
 `docker-compose.prod.yml` binds the UI to `127.0.0.1:8080` and nothing else,
 so the only way in is the reverse proxy or tunnel on the same box. The
@@ -617,19 +687,30 @@ Basic auth is only meaningful behind the TLS the tunnel provides.
 
 **Demo lifecycle.** A public demo should not run flat out for nobody. With no
 dashboard connected for `IDLE_PAUSE_SECONDS` (default 600) the API pauses the
-feed; the next viewer to open the page resumes it. The feed runs to
+feed. A paused fab greets the next viewer with a modal that explains the
+simulation and offers *Resume at 10× speed* (set `AUTO_RESUME_ON_VIEWER=true`
+to resume silently instead). The feed runs to
 `FEED_DAYS` and then restarts from the day-90 warm-up checkpoint; every open
 dashboard gets a modal explaining the jump, and the previous run stays under
 Results. A checkpoint is per horizon, so the first start at a new `FEED_DAYS`
 re-simulates the warm-up once (~10 min).
 
-The password file is mounted into nginx, so the login covers the dashboard,
-every `/api` route and the SSE stream in one place; `/health` stays open for
-uptime checks. Locally (no override) the mount is absent and the site is
-open. The four POST routes are the reason the gate exists: `/api/scenario`
-and `/api/scenario/compare` run the C++ planner (CPU), `/api/sim/control`
-changes the playback speed for *everyone* watching, and `/api/chat` calls
-Claude on Vertex on your project's bill.
+**Access gate.** nginx asks the API (`auth_request`) on every request, so one
+gate covers the dashboard, every `/api` route and the SSE stream; `/health`
+stays open for uptime checks. Visitors sign in at `/login` with a six-character
+**access code**, or ask for a **magic link**: they enter an email, the API
+mints a code tied to that email and mails it (from `MAIL_FROM` via Mailgun, `MAILGUN_*`)
+with a one-click link. Codes are shareable on purpose; every use is recorded.
+Sign-ins from `@AUTH_ADMIN_DOMAIN` (frontanalytics.com) get `/admin`: mint
+codes with a note, see who used what and when, disable a code. State lives in
+the fab Postgres (`access_codes`, `sessions`). The first code has to come from
+somewhere: `dispatch/infra/mint-code.sh` mints one from the box itself.
+
+The gate exists because of the POST routes: `/api/scenario` and
+`/api/scenario/compare` run the C++ planner (CPU), `/api/sim/control` changes
+the playback speed for *everyone* watching, and `/api/chat` calls Gemini on
+Vertex on your project's bill. In dev (`dev-up.sh`, no nginx) nothing enforces
+it.
 
 **The dispatcher on its own:**
 

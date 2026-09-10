@@ -1,0 +1,13 @@
+  SMT2020_LVHM  150 days  seed=0  batch=Demand  warmup=90d
+  resumed bench/snapshots/SMT2020_LVHM_seed0_fifo_Demand_day90_h180.ckpt at day 90
+  starts x1.15: 5160 future releases compressed
+
+=== slate ===
+  slate: solver=cpsat pressure=full cycle=60s
+  3464 lots, CT 36.2813d, on-time 96.62%, util 81.29%, wall 8339.2s
+
+  rule    cycle time  throughput  on-time %    tardiness   util %  coverage
+  -------------------------------------------------------------------------
+  slate       36.281        3464      96.62         70.1     81.3     54.4%
+
+  wrote /home/alton/code/fab-optimization/bench/results/starts/slate_x1.15.json

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Access codes · Fab Optimization</title>
+<style>
+:root{--bg:#f7f8fa;--fg:#111827;--mut:#6b7280;--line:#e5e7eb;--card:#fff;--acc:#1d4ed8}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1000px;margin:0 auto;padding:24px 18px}
+h1{font-size:18px;margin:0}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.top .who{color:var(--mut);font-size:12px}.top a{color:var(--acc);font-size:12px;margin-left:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-top:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:end}.row label{font-size:12px;color:var(--mut);display:block}
+input{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px}
+button{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--acc);background:var(--acc);color:#fff;cursor:pointer}
+button.small{padding:3px 8px;font-size:12px;background:#fff;color:var(--acc)}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:6px 8px;border-top:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:500;font-size:12px}code{font:600 14px ui-monospace,Menlo,monospace;letter-spacing:.12em}
+tr.off{opacity:.45}.new{background:#ecfdf5;border:1px solid #86efac;border-radius:8px;padding:8px 10px;margin-top:10px;font-size:13px}
+.msg{color:#b91c1c;font-size:13px;margin-top:8px}.muted{color:var(--mut)}
+</style></head><body><div class="wrap">
+<div class="top"><h1>Access codes</h1><div class="who" id="who"></div></div>
+<div class="card">
+  <div class="row">
+    <div><label>Note (who it is for)</label><input id="note" size="34" placeholder="e.g. Intel visit, Sept 12"></div>
+    <div><label>Bind to email (optional)</label><input id="email" type="email" size="26" placeholder="makes the code that person"></div>
+    <div><label>How many</label><input id="count" type="number" min="1" max="50" value="1" style="width:70px"></div>
+    <button id="mint">Generate</button>
+  </div>
+  <div id="fresh"></div><div class="msg" id="msg"></div>
+</div>
+<div class="card">
+  <table><thead><tr><th>Code</th><th>Note / email</th><th>Created</th><th>By</th><th>Uses</th><th>First used</th><th>Last used</th><th>Live</th><th></th></tr></thead>
+  <tbody id="rows"><tr><td colspan="9" class="muted">loading…</td></tr></tbody></table>
+</div>
+</div>
+<script>
+const $=id=>document.getElementById(id), fmt=s=>s?new Date(s).toLocaleString():'—'
+async function api(url,opt){const r=await fetch(url,opt);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('error '+r.status));return j}
+async function load(){
+  try{const me=await api('/auth/me');
+    if(!me.authenticated){location.replace('/login?next=/admin');return}
+    $('who').innerHTML=(me.email||'code '+me.code)+(me.admin?'':' · not an admin')+' <a href="/">dashboard</a><a href="/auth/logout">sign out</a>'
+    if(!me.admin){$('rows').innerHTML='<tr><td colspan=9 class=muted>Admin access is for @frontanalytics.com sign-ins. Ask for a magic link to your work email.</td></tr>';$('mint').disabled=true;return}
+    const d=await api('/auth/admin/codes')
+    $('rows').innerHTML=d.codes.map(c=>`<tr class="${c.disabled?'off':''}"><td><code>${c.code}</code></td>
+      <td>${c.note||''}${c.email?'<div class=muted>'+c.email+'</div>':''}</td><td>${fmt(c.created_at)}</td><td>${c.created_by||''}</td>
+      <td>${c.use_count}</td><td>${fmt(c.first_used_at)}</td><td>${fmt(c.last_used_at)}</td><td>${c.live_sessions}</td>
+      <td><button class="small" data-code="${c.code}" data-enable="${c.disabled?1:0}">${c.disabled?'enable':'disable'}</button></td></tr>`).join('')||'<tr><td colspan=9 class=muted>no codes yet</td></tr>'
+  }catch(x){$('msg').textContent=x.message}}
+$('mint').onclick=async()=>{$('msg').textContent='';try{
+  const j=await api('/auth/admin/codes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({note:$('note').value,email:$('email').value,count:+$('count').value||1})})
+  $('fresh').innerHTML='<div class=new>New: '+j.codes.map(c=>'<code>'+c+'</code>').join(' &nbsp; ')+'</div>';load()}catch(x){$('msg').textContent=x.message}}
+$('rows').onclick=async e=>{const b=e.target.closest('button[data-code]');if(!b)return;try{
+  await api('/auth/admin/codes/'+b.dataset.code+'/disable',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({enable:b.dataset.enable==='1'})});load()}catch(x){$('msg').textContent=x.message}}
+load()
+</script></body></html>

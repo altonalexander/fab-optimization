@@ -14,7 +14,8 @@
 #   scripts/dev-up.sh --status show what is listening
 #
 # FEED_DAYS / FEED_WARMUP / FEED_SPEED / FEED_RULE / FEED_WARMUP_RULE override
-# the feed defaults (180d, 90d warm-up, 20x, fifo, warm-up under fifo)
+# the feed defaults (180d, 90d warm-up, 20x, slate with cr fallback and a 900 s
+#   look-ahead -- ADR 0012; warm-up under fifo)
 # (180 days, 90-day warm-up, 20x realtime). The warm-up is simulated once and
 # checkpointed to bench/snapshots/; later starts resume from it in seconds.
 #
@@ -276,7 +277,7 @@ SIM_PY="$REPO/baselines/pyscfabsim/.venv/bin/python3"
 # histories). fifo is the checkpoint that is normally already cached.
 FEED_CMD=("$SIM_PY" "$REPO/bench/tools/sim_feed.py"
           --days "${FEED_DAYS:-180}" --warmup-days "${FEED_WARMUP:-90}"
-          --dispatcher "${FEED_RULE:-fifo}"
+          --dispatcher "${FEED_RULE:-slate}"
           --warmup-dispatcher "${FEED_WARMUP_RULE:-fifo}"
           --speed "${FEED_SPEED:-20}")
 if (( WANT_FEED )); then

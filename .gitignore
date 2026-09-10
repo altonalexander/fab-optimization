@@ -56,5 +56,6 @@ bench/.sim_control.json
 .env
 **/.env
 
-# dashboard basic-auth credentials (dispatch/infra/auth/htpasswd)
-dispatch/infra/auth/htpasswd
+
+# per-deployment GCP service-account key (dispatch/infra/secrets/)
+dispatch/infra/secrets/

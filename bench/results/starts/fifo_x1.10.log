@@ -1,0 +1,13 @@
+  SMT2020_LVHM  150 days  seed=0  batch=Demand  warmup=90d
+  resumed bench/snapshots/SMT2020_LVHM_seed0_fifo_Demand_day90_h180.ckpt at day 90
+  starts x1.1: 5160 future releases compressed
+
+=== fifo ===
+  rule: fifo
+  3388 lots, CT 36.1352d, on-time 93.21%, util 80.15%, wall 2291.2s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %  coverage
+  ------------------------------------------------------------------------
+  fifo       36.135        3388      93.21        222.9     80.2         -
+
+  wrote /home/alton/code/fab-optimization/bench/results/starts/fifo_x1.10.json

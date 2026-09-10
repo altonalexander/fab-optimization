@@ -19,15 +19,24 @@ services:
     ports: !override
       - "${UI_BIND:-127.0.0.1}:${UI_PORT:-8080}:80"
     restart: unless-stopped
-    # HTTP basic auth for the whole site. Create the password file once:
-    #   ./make-htpasswd.sh <username>
-    volumes:
-      - ./auth:/etc/nginx/auth:ro
 
   api:
     restart: unless-stopped
     environment:
       PGPASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      # Access gate (api/auth.py): magic-link mail + where links point.
+      PUBLIC_URL: "${PUBLIC_URL:-}"
+      MAIL_FROM: "${MAIL_FROM:-fab-support@frontanalytics.com}"
+      MAILGUN_API_KEY: "${MAILGUN_API_KEY:-}"
+      # Sending domain: per-app override first (the From address must be on
+      # a domain Mailgun has verified), else the shared default.
+      MAILGUN_DOMAIN: "${FAB_MAILGUN_DOMAIN:-${MAILGUN_DOMAIN:-}}"
+      MAILGUN_API_BASE: "${MAILGUN_API_BASE:-https://api.mailgun.net}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      AUTH_ADMIN_DOMAIN: "${AUTH_ADMIN_DOMAIN:-frontanalytics.com}"
 
   feed:
     restart: unless-stopped

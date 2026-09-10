@@ -40,6 +40,7 @@ that mostly fell back is visible rather than silently reported as "slate".
 import sys
 
 from dispatching.dispatcher import Dispatchers  # noqa: E402
+from events import LotDoneEvent, MachineDoneEvent  # noqa: E402
 
 import fabslate
 
@@ -62,12 +63,29 @@ class SlateRule:
     # pressure tiers -- the ablation ladder docs/adr/0009 asks for, so each
     # information tier is a row in the results table rather than one
     # undifferentiated "slate" number.
-    TIERS = ('none', 'due', 'full')
+    TIERS = ('none', 'due', 'full', 'flow')
+    FALLBACKS = ('score', 'cr')
 
     def __init__(self, instance, solver='cpsat', cycle_s=60.0, budget_s=0.005,
-                 pressure='full', threads=1, lazy=True, lib_path=None):
+                 pressure='full', threads=1, lazy=True, lib_path=None,
+                 fallback='cr', horizon_s=900.0):
         if pressure not in self.TIERS:
             raise ValueError(f'pressure must be one of {self.TIERS}')
+        if fallback not in self.FALLBACKS:
+            raise ValueError(f'fallback must be one of {self.FALLBACKS}')
+        # What scores a lot the slate holds no token for (~half of all
+        # decision points at 47% coverage): 'score' is the linearized solver
+        # cost, continuous with the plan; 'cr' is critical ratio, the rule
+        # that wins under load. Tokened lots still rank ahead of either.
+        self.fallback = fallback
+        # Look-ahead (docs/adr/0010): lots that will REACH a family within
+        # this many seconds -- finishing a step now, or sitting in a route
+        # delay -- are planned alongside the lots already waiting, so a tool
+        # that frees between rebuilds finds a token for what has arrived
+        # since. 0 = plan only the queue. No holds: a tool never waits for a
+        # planned lot that is not there yet, it walks its ranking to the
+        # first lot that is.
+        self.horizon_s = float(horizon_s or 0.0)
         self.instance = instance
         self.cycle_s = float(cycle_s)
         self.budget_s = float(budget_s)
@@ -164,11 +182,13 @@ class SlateRule:
 
         lots = self._ready_lots(inst)
         self._family_wip = _family_counts(lots)
+        upcoming = self._upcoming_lots(inst, t)      # [(lot, step, arrival_s)]
+        up_fams = {st.family for _, st, _ in upcoming}
         # Families whose TOOL state moved are dirty too, not just those whose
         # queue moved. A machine that changed setup re-prices every changeover
         # in its family, so a slate built before it is stale even though the
         # waiting lots are identical.
-        tool_dirty = self._sync_tools()
+        tool_dirty = self._sync_tools(t)
 
         # Only families whose composition moved are re-solved, and -- the part
         # that matters for wall clock -- only THEIR lots are marshalled. The
@@ -181,10 +201,12 @@ class SlateRule:
         dirty = self._dirty_families(lots) if self.lazy else None
         if dirty is not None:
             dirty |= tool_dirty
+            dirty |= up_fams          # an arrival within the horizon re-prices its family
         if dirty is None:
-            solve_lots = lots
+            solve_lots = [(l, l.actual_step, 0.0) for l in lots] + upcoming
         elif dirty:
-            solve_lots = [l for l in lots if l.actual_step.family in dirty]
+            solve_lots = [(l, l.actual_step, 0.0) for l in lots if l.actual_step.family in dirty] \
+                + [u for u in upcoming if u[1].family in dirty]
         else:
             solve_lots = []
 
@@ -192,7 +214,7 @@ class SlateRule:
                  'solve_time_s': 0.0, 'objective': 0.0, 'status': 'skipped',
                  'detail': 'no dirty family'}
         if solve_lots:
-            payload = [self._lot_dict(l, t) for l in solve_lots]
+            payload = [self._lot_dict(l, t, st, arr) for l, st, arr in solve_lots]
             tokens, stats = self.planner.plan(
                 payload, budget_s=self.budget_s, threads=self.threads)
 
@@ -201,15 +223,15 @@ class SlateRule:
             else:
                 # Drop stale tokens for the families being re-solved; every
                 # other family keeps what it had.
-                for lot in solve_lots:
+                for lot, _st, _arr in solve_lots:
                     self.token_of.pop(lot.idx, None)
             for lot_index, tool_id, alternate, rank, _exp in tokens:
-                lot = solve_lots[lot_index]
+                lot = solve_lots[lot_index][0]
                 self.token_of[lot.idx] = (tool_id, alternate, rank)
 
         # A lot that has left the ready pool must not keep a token, or a stale
         # entry would answer for a lot that is already running.
-        live = {l.idx for l in lots}
+        live = {l.idx for l in lots} | {l.idx for l, _st, _arr in upcoming}
         if len(self.token_of) > len(live):
             self.token_of = {k: v for k, v in self.token_of.items() if k in live}
 
@@ -222,20 +244,32 @@ class SlateRule:
         self.solve_time_s += stats['solve_time_s']
         self.last_stats = stats
 
-    def _sync_tools(self):
-        """Push only the tool state that moved; return the families it touched."""
+    def _sync_tools(self, t=None):
+        """Push only the tool state that moved; return the families it touched.
+
+        With a look-ahead horizon a tool counts as available only if it is
+        free now or frees within the horizon (its MachineDoneEvent is known):
+        tokens then go to tools that will actually ask, instead of one lot
+        being reserved for every tool in the family, hours-busy ones
+        included. Without a horizon every tool is available, as before.
+        """
         changed = 0
         touched = set()
         for i, m in enumerate(self._machines):
+            avail = True
+            if self.horizon_s > 0 and t is not None and m.events:
+                done = [ev.timestamp for ev in m.events if isinstance(ev, MachineDoneEvent)]
+                if done and min(done) - t > self.horizon_s:
+                    avail = False
             cur = (m.current_setup or '',
                    int(m.min_runs_left or 0) if m.min_runs_left is not None else 0,
-                   m.min_runs_setup or '')
+                   m.min_runs_setup or '', avail)
             if self._tool_state.get(i) == cur:
                 continue
             self._tool_state[i] = cur
             self.planner.set_tool_state(
                 i, current_setup=cur[0], min_runs_left=cur[1],
-                min_runs_setup=cur[2])
+                min_runs_setup=cur[2], online=cur[3])
             touched.add(m.family)
             changed += 1
         if changed:
@@ -254,6 +288,39 @@ class SlateRule:
                 if lot.actual_step is not None:
                     seen[lot.idx] = lot
         return list(seen.values())
+
+    def _upcoming_lots(self, inst, t):
+        """Lots not yet waiting that a family will see within the horizon.
+
+        Every lot on a tool is a LotDoneEvent with a known time, so its arrival
+        at the next family is known; a route delay step (a timed hold, ADR
+        0008) is seen through, so a lot finishing metrology and sitting in a
+        2 h hold is planned for the family after it. Returns (lot, step,
+        seconds until arrival).
+        """
+        if self.horizon_s <= 0:
+            return []
+        out = []
+        limit = t + self.horizon_s
+        for ev in inst.events.arr:
+            if ev.timestamp > limit:
+                break
+            if not isinstance(ev, LotDoneEvent):
+                continue
+            for lot in ev.lots:
+                steps = lot.remaining_steps
+                if not steps:
+                    continue
+                arrive, k = ev.timestamp, 0
+                nxt = steps[0]
+                while nxt is not None and str(nxt.family).startswith('Delay'):
+                    arrive += nxt.processing_time.avg()
+                    k += 1
+                    nxt = steps[k] if k < len(steps) else None
+                if nxt is None or arrive > limit:
+                    continue
+                out.append((lot, nxt, max(0.0, arrive - t)))
+        return out
 
     def _dirty_families(self, lots):
         """Families whose queue moved since the last cycle.
@@ -283,8 +350,11 @@ class SlateRule:
         return dirty
 
     # -- the pressure layer -------------------------------------------------
-    def _lot_dict(self, lot, t):
-        step = lot.actual_step
+    def _lot_dict(self, lot, t, step=None, arrival_s=0.0):
+        step = step or lot.actual_step
+        # A lot still on its way is worth less to this family than one on the
+        # shelf, by how far away it is: five minutes out halves its claim.
+        u = self._urgency(lot, t, step) / (1.0 + arrival_s / 300.0)
         return {
             'lot_id': str(lot.idx),
             'family': step.family,
@@ -294,14 +364,14 @@ class SlateRule:
             'batch_min': int(step.batch_min or 1),
             'batch_max': int(step.batch_max or 1),
             'wafers': int(lot.pieces or 25),
-            'priority': self._urgency(lot, t),
+            'priority': u,
             'qtime_slack_s': QTIME_INERT,
             'step_process_s': step.processing_time.avg(),
             'due_s': lot.deadline_at,
             'waiting_s': max(0.0, t - (lot.free_since or t)),
         }
 
-    def _urgency(self, lot, t):
+    def _urgency(self, lot, t, step=None):
         """Collapse everything Python knows into the scalar C++ consumes.
 
         fabdisp's Lot::priority is documented as coming "from the tactical
@@ -314,38 +384,59 @@ class SlateRule:
             return u
 
         # Tier 1 -- due-date pressure. cr < 1 means the lot cannot make its due
-        # date even with zero further queueing, so the curve is steep below 1
-        # and flat above 2 where a lot has slack to spare.
+        # date even with zero further queueing. Above 1 the curve is gentle
+        # and flat past 2 where a lot has slack to spare; below 1 it follows
+        # the critical ratio's own slope, uncapped (bounded only numerically):
+        # a lot twice as late is twice as urgent, which is the ordering that
+        # held on-time under load where the old x3 cap did not (ADR 0012 s3).
         cr = lot.cr(t)
         u *= 1.0 + max(0.0, 2.0 - cr)
+        if cr < 1.0:
+            u *= min(50.0, 1.0 / max(cr, 0.02))
 
         # Ageing, so a lot cannot be starved indefinitely by a stream of more
         # urgent work. Deliberately weak: one week of queueing doubles it.
         u *= 1.0 + min(1.0, max(0.0, t - (lot.free_since or t)) / 604800.0)
 
-        if self.pressure != 'full':
+        if self.pressure not in ('full', 'flow'):
             return u
+        flow = self.pressure == 'flow'
 
         # Tier 2 -- downstream congestion. None of fifo/cr/lifo look past the
         # current step. Pulling a lot into an already-congested next family
         # just moves the queue; feeding a starving one keeps a bottleneck fed.
-        nxt = lot.remaining_steps[0] if lot.remaining_steps else None
+        rem = lot.remaining_steps
+        if step is None or step is lot.actual_step:
+            nxt = rem[0] if rem else None
+        else:
+            # planned ahead: the step after `step` in the lot's remaining route
+            try:
+                k = rem.index(step)
+                nxt = rem[k + 1] if k + 1 < len(rem) else None
+            except ValueError:
+                nxt = None
         if nxt is not None:
             ahead = self._family_wip.get(nxt.family, 0)
             capacity = max(1, len(self.instance.family_machines.get(nxt.family, ())))
             load = ahead / capacity
             # load 0 (starving downstream) -> 1.25x, load >= 5 -> 0.8x.
-            u *= max(0.8, 1.25 - 0.09 * min(load, 5.0))
+            # 'flow' leans harder on it: 1.5x for a starving next family,
+            # 0.7x for a flooded one -- keep bottlenecks fed, stop pushing
+            # into queues that only move the wait.
+            if flow:
+                u *= max(0.7, 1.5 - 0.16 * min(load, 5.0))
+            else:
+                u *= max(0.8, 1.25 - 0.09 * min(load, 5.0))
 
         # Batch formation: a lot whose step batches and whose cohort is already
         # near the minimum is worth more, because dispatching it lets a furnace
         # fire instead of sitting half full. greedy.py already maximises batch
         # size within a tie; this makes the batch visible BEFORE the tie.
-        step = lot.actual_step
+        step = step or lot.actual_step
         if step.batch_max and step.batch_max > 1:
             cohort = self._family_wip.get(step.family, 0)
             if cohort >= (step.batch_min or 1):
-                u *= 1.1
+                u *= 1.3 if flow else 1.1
         return u
 
     # -- the decision point -------------------------------------------------
@@ -364,9 +455,11 @@ class SlateRule:
         if machine.idx != self._cur_machine:
             self._cur_machine = machine.idx
             self.decisions += 1
-            covered = str(machine.idx) in self.by_tool
+            held = self.by_tool.get(str(machine.idx))
+            covered = bool(held) and any(l.idx in held for l in machine.waiting_lots)
             if covered:
                 self.decisions_covered += 1
+            self._fallback_src = f'rule:slate-fallback-{self.fallback}' if self.fallback != 'score' else 'rule:slate-fallback'
 
             # Stamp WHO decided, using the protocol sim_feed already defines:
             #
@@ -385,7 +478,7 @@ class SlateRule:
             # is served by the fallback score, so it is stamped back into the
             # 'rule:' namespace and is honestly NOT optimised.
             self.instance.dispatch_source = (
-                'slate' if covered else 'rule:slate-fallback')
+                'slate' if covered else self._fallback_src)
 
         # Slots 0 and 1: verbatim from the upstream rules. See the tuple
         # contract at the top of this module.
@@ -411,7 +504,8 @@ class SlateRule:
             # continuous across the coverage boundary rather than snapping
             # to FIFO.
             lot.ptuple = (gate, setup, -lot.priority, 3,
-                          self._score(lot, time, machine, setup))
+                          lot.cr(time) if self.fallback == 'cr'
+                          else self._score(lot, time, machine, setup))
         return lot.ptuple
 
     def _score(self, lot, time, machine, setup):

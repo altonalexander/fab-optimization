@@ -1,0 +1,12 @@
+  SMT2020_LVHM  100 days  seed=0  batch=Demand  warmup=90d
+  resumed bench/snapshots/SMT2020_LVHM_seed0_fifo_Demand_day90_h180.ckpt at day 90
+
+=== slate:flow ===
+  slate: solver=greedy pressure=flow cycle=60s
+  578 lots, CT 36.0199d, on-time 98.79%, util 79.1%, wall 365.2s
+
+  rule         cycle time  throughput  on-time %    tardiness   util %  coverage
+  ------------------------------------------------------------------------------
+  slate:flow       36.020         578      98.79          3.6     79.1     48.8%
+
+  wrote /home/alton/code/fab-optimization/bench/results/exp/greedy.json

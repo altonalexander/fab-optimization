@@ -65,11 +65,11 @@ index.products[2].cohorts_tracked = 2
 
 const idxHtml = renderToStaticMarkup(
   React.createElement(RouteIndexView,
-                      { data: index, hrefFor: id => `#/routes/${id}` }))
+                      { data: index, hrefFor: id => `/routes/${id}` }))
 
 // Every product is its own address -- the whole point of the rewrite.
 for (const [product] of products) {
-  assert.ok(idxHtml.includes(`href="#/routes/${product}"`), `link for ${product}`)
+  assert.ok(idxHtml.includes(`href="/routes/${product}"`), `link for ${product}`)
 }
 assert.equal((idxHtml.match(/class="route-card"/g) || []).length, 10)
 assert.ok(idxHtml.includes('SMT2020_LVHM'))
@@ -99,16 +99,16 @@ const detail = Object.assign(summary(['part_3', '3']), {
 
 const detHtml = renderToStaticMarkup(
   React.createElement(RouteProductView, {
-    data: detail, order: doc.areas, zones: ZONES, backHref: '#/routes',
-    cohortHref: c => `#/lots?cohort=${encodeURIComponent(c)}`,
+    data: detail, order: doc.areas, zones: ZONES, backHref: '/routes',
+    cohortHref: c => `/lots?cohort=${encodeURIComponent(c)}`,
   }))
 
 assert.ok(detHtml.includes('part_3'), 'names the product')
 assert.ok(detHtml.includes(String(r3.n_steps)), 'shows the step count')
-assert.ok(detHtml.includes('href="#/routes"'), 'links back to the index')
+assert.ok(detHtml.includes('href="/routes"'), 'links back to the index')
 // The cross-link the lots view needs: cohort -> its burndown, by URL.
-assert.ok(detHtml.includes('href="#/lots?cohort=part_3-d0"'), 'cohort link')
-assert.ok(detHtml.includes('href="#/lots?cohort=part_3-d1"'), 'cohort link')
+assert.ok(detHtml.includes('href="/lots?cohort=part_3-d0"'), 'cohort link')
+assert.ok(detHtml.includes('href="/lots?cohort=part_3-d1"'), 'cohort link')
 assert.ok(detHtml.includes('Showing 2 of 3'), 'says the sample is a sample')
 // --- the lane map -----------------------------------------------------------
 // One lane per area this route visits, in zone order, and one block per visit.
@@ -165,8 +165,8 @@ assert.equal((detHtml.match(/<tr><td class="num">\d+<\/td>/g) || []).length,
 const noFeed = renderToStaticMarkup(
   React.createElement(RouteProductView, {
     data: { ...detail, cohorts: [], total_cohorts: 0 },
-    order: doc.areas, zones: ZONES, backHref: '#/routes',
-    cohortHref: c => `#/lots?cohort=${c}`,
+    order: doc.areas, zones: ZONES, backHref: '/routes',
+    cohortHref: c => `/lots?cohort=${c}`,
   }))
 assert.ok(noFeed.includes('No lots of part_3 are being tracked'))
 assert.ok(noFeed.includes('lane-map'), 'the route still renders without a feed')
@@ -187,7 +187,7 @@ const other = renderToStaticMarkup(
       area_visits: doc.routes['7'].area_visits, transitions: [], cohorts: [],
       total_cohorts: 0,
     }),
-    order: doc.areas, zones: ZONES, backHref: '#/routes', cohortHref: c => c,
+    order: doc.areas, zones: ZONES, backHref: '/routes', cohortHref: c => c,
   }))
 for (const a of ['Wet_Etch', 'Litho']) {
   const c1 = detHtml.slice(hueIn(detHtml, a)).match(/background:(#[0-9a-f]{6})/)[1]
@@ -200,7 +200,7 @@ for (const a of ['Wet_Etch', 'Litho']) {
 const noZones = renderToStaticMarkup(
   React.createElement(RouteProductView, {
     data: { ...detail, cohorts: [], total_cohorts: 0 }, order: doc.areas,
-    zones: [], backHref: '#/routes', cohortHref: c => c,
+    zones: [], backHref: '/routes', cohortHref: c => c,
   }))
 for (const a of lanes) {
   assert.ok(noZones.includes(`>${a}</text>`), `${a} survives a missing grouping`)

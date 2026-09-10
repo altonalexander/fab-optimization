@@ -80,7 +80,7 @@ export default function ChatPanel({ context, pending, onPendingSent }) {
         // current view rides along so the assistant can explain this page.
         body: JSON.stringify({
           messages: next.map(m => ({ role: m.role, content: m.content })),
-          context: { ...(context || {}), url: window.location.hash },
+          context: { ...(context || {}), url: window.location.pathname + window.location.search },
         }),
       })
       const j = await r.json()
