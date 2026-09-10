@@ -137,7 +137,38 @@ class SlateRule:
 
     def _register_tools(self):
         self._machines = list(self.instance.machines)
+        # Qualification is read from the SAME overlay object the instance is
+        # bound to (adr/0013 §2), not from a second parse of the table. If the
+        # solver and the simulator could disagree about the matrix, `slate`
+        # would plan tokens the simulator refuses to serve and the row would
+        # be measuring the fallback again -- the summary §4.4 failure. One
+        # object, two readers, is the same guarantee the dataset symlink gives.
+        self._ordinal = {}
+        for fam, machines in self.instance.family_machines.items():
+            for ordinal, m in enumerate(machines):
+                self._ordinal[m.idx] = (fam, ordinal)
         self.planner.set_tools([self._tool_dict(m) for m in self._machines])
+        ov = getattr(self.instance, 'overlay', None)
+        if ov is not None:
+            n = sum(1 for m in self._machines if self._qualified_parts(m))
+            print(f'  overlay {ov.name} ({ov.hash}): {n} of '
+                  f'{len(self._machines)} tools carry a qualified-part list',
+                  flush=True)
+
+    def _qualified_parts(self, m):
+        """The parts tool `m` may run, or () for "every part".
+
+        Empty is the pristine convention all the way down: an absent pair in
+        the overlay table, an empty `qualified_parts` on the wire, and an
+        empty recipe list on FamilyTool all mean unconstrained.
+        """
+        ov = getattr(self.instance, 'overlay', None)
+        if ov is None:
+            return ()
+        fam, ordinal = self._ordinal.get(m.idx, (None, None))
+        if fam is None:
+            return ()
+        return tuple(ov.parts_for(fam, ordinal))
 
     def _tool_dict(self, m):
         # Every machine is planned for, not just the ones free at this instant.
@@ -165,6 +196,7 @@ class SlateRule:
             'min_runs_left': int(m.min_runs_left or 0)
                              if m.min_runs_left is not None else 0,
             'min_runs_setup': m.min_runs_setup or '',
+            'qualified_parts': self._qualified_parts(m),
         }
 
     # -- the planning cycle -------------------------------------------------

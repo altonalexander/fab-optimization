@@ -88,7 +88,7 @@ KPI_SAMPLE_S = 3600        # one sample per simulated hour
 KPI_WINDOW_S = 86400       # throughput / cycle time / on-time over a trailing day
 TOOLS_FLUSH_S = 6 * 3600   # per-tool books to the run store this often
 KPI_FIELDS = ('t', 'wip', 'running', 'util', 'thr', 'ct', 'otd', 'tard',
-              'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd')
+              'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd', 'iq', 'iw')
 
 # Warm-up is ~3 minutes of CPU per 30 simulated days, so a snapshot is worth
 # keeping. Keyed by everything that changes the trajectory; a cache hit makes a
@@ -1065,6 +1065,7 @@ class FeedPlugin(IPlugin):
                 if not self._name(m).startswith('Delay_'))
         ntools = real or 1
         busy = sum(1 for t in self._busy if not t.startswith('Delay_'))
+        iq, iw = self._idle_with_wip(instance)
         return {
             't': round(t, 1),
             'wip': len(instance.active_lots),
@@ -1084,7 +1085,63 @@ class FeedPlugin(IPlugin):
             # d[4] is absent on tuples restored from a checkpoint that
             # predates the delay bucket.
             'wd': round(sum(d[4] for d in self._split_log if len(d) > 4) / 3600, 1),
+            # adr/0013 §3.5. Samples are hourly, so a count of tools here is
+            # tool-hours; summed over a window it is the family hours idle
+            # while work that could have used them waited.
+            'iq': iq,
+            'iw': iw,
         }
+
+    def _idle_with_wip(self, instance):
+        """Tools idle right now while WIP waited: (qualified, family-wide).
+
+        The KPI adr/0013 §3.5 asks for -- "family hours idle while qualified
+        WIP for it waited elsewhere in the family" -- and the ONE place it is
+        defined. summary §4.6 is the standing reason: a definition that exists
+        twice drifts, and two answers to one column header were published side
+        by side on the Results tab before anyone noticed.
+
+        How the ADR's wording maps onto this simulator. A waiting lot is
+        appended to the queue of EVERY tool it is eligible for
+        (`LotForMachineDispatchManager.free_up_lots`, gated by
+        `Instance.eligible`), so "qualified WIP waiting elsewhere in the
+        family" and "a lot in this idle tool's own queue" are the same set.
+        That is also why the qualification here is the overlay's, applied by
+        the same predicate the dispatch path uses, with no second lookup.
+
+        Tools currently in `usable_machines` are excluded: those are awaiting
+        a decision at this instant and will be served before the clock moves,
+        so counting them would measure the event loop rather than the fab. A
+        tool that is free, has qualified work queued and is NOT awaiting a
+        decision is one the rule was offered and declined -- a batch below its
+        minimum, a minimum-run owed to another setup -- or one the matrix
+        cut off from the work in front of it.
+
+        `iw` is the same count ignoring qualification: idle while the FAMILY
+        had any WIP. `iw - iq` is what the overlay costs on its own, so an
+        overlay row can show the dispatching loss and the matching loss apart
+        rather than as one number.
+
+        Note PySCFabSim has no idle-down state: a breakdown only delays the
+        events of a tool that is already processing (`Instance.handle_breakdown`),
+        so `free_machines[idx]` here means available and idle, not down.
+        """
+        fam_wip = {}
+        for fam, machines in instance.family_machines.items():
+            if str(fam).startswith('Delay'):
+                continue        # a pseudo-toolset, not capacity (adr/0008)
+            fam_wip[fam] = any(m.waiting_lots for m in machines)
+        free = instance.free_machines
+        usable = instance.usable_machines
+        iq = iw = 0
+        for m in instance.machines:
+            if m.family not in fam_wip or not free[m.idx] or m in usable:
+                continue
+            if m.waiting_lots:
+                iq += 1
+            if fam_wip[m.family]:
+                iw += 1
+        return iq, iw
 
     def _tick_kpi(self, instance):
         """Take every hourly sample the clock has passed since the last one."""

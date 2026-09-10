@@ -21,6 +21,7 @@ import os
 
 ID = 48
 NAME = 72
+PARTS = 256      # ';'-separated qualified parts; see CTool below
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -38,6 +39,10 @@ class CTool(ctypes.Structure):
         ('min_run_length', ctypes.c_int),
         ('min_runs_left',  ctypes.c_int),
         ('min_runs_setup', ctypes.c_char * ID),
+        # ';'-separated qualified parts (adr/0013). Master data: read by
+        # set_tools and ignored by update_tools, so the matrix crosses this
+        # boundary once per run. Empty means every part.
+        ('qualified_parts', ctypes.c_char * PARTS),
     ]
 
 
@@ -297,6 +302,8 @@ def _fill_tool(c, t):
     c.min_run_length = int(t.get('min_run_length', 0))
     c.min_runs_left = int(t.get('min_runs_left', 0))
     c.min_runs_setup = _b(t.get('min_runs_setup', ''), ID)
+    parts = t.get('qualified_parts') or ()
+    c.qualified_parts = _b(';'.join(parts), PARTS)
 
 
 def _fill_lot(c, l):

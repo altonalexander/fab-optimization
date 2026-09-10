@@ -318,10 +318,20 @@ def run_one(spec, args):
     row['util_pct'] = round(sum(util) / len(util), 2) if util else None
     row['starts_scale'] = getattr(args, 'starts_scale', 1.0)
     row.update(overlay_mod.stamp(args.overlay_obj))
+    # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
+    # per-sample tool counts over the reporting window gives tool-hours; the
+    # per-day figure is what the table prints, because rows of different
+    # lengths must stay comparable.
+    live = [r for r in sampler.rows if not r.get('warmup')]
+    if live:
+        days = max(1e-9, len(live) / 24.0)
+        row['idle_qualified_wip_tool_h_per_day'] = round(
+            sum(r.get('iq', 0) for r in live) / days, 1)
+        row['idle_family_wip_tool_h_per_day'] = round(
+            sum(r.get('iw', 0) for r in live) / days, 1)
     row['final_queues'] = family_queues(instance)
-    if util:
-        last = [r for r in sampler.rows if not r.get('warmup')]
-        row['wip_first'] = last[0].get('wip'); row['wip_last'] = last[-1].get('wip')
+    if live:
+        row['wip_first'] = live[0].get('wip'); row['wip_last'] = live[-1].get('wip')
     if hasattr(rule, 'stats'):
         row['detail'] = rule.stats()
     row['interrupted'] = interrupted
@@ -337,16 +347,22 @@ def run_one(spec, args):
 def table(rows):
     w = max((len(r['rule']) for r in rows), default=6)
     head = (f"  {'rule':<{w}}  {'cycle time':>11}  {'throughput':>10}  "
-            f"{'on-time %':>9}  {'tardiness':>11}  {'util %':>7}  {'coverage':>8}")
+            f"{'on-time %':>9}  {'tardiness':>11}  {'util %':>7}  {'coverage':>8}"
+            f"  {'idleQ t·h/d':>11}  {'idleF t·h/d':>11}")
     out = ['', head, '  ' + '-' * (len(head) - 2)]
     for r in rows:
         cov = r.get('detail', {}).get('coverage')
         cov_s = f'{cov*100:.1f}%' if isinstance(cov, float) else '-'
         u = r.get('util_pct')
         u_s = f'{u:.1f}' if isinstance(u, (int, float)) else '-'
+        iq = r.get('idle_qualified_wip_tool_h_per_day')
+        iw = r.get('idle_family_wip_tool_h_per_day')
+        iq_s = f'{iq:.1f}' if isinstance(iq, (int, float)) else '-'
+        iw_s = f'{iw:.1f}' if isinstance(iw, (int, float)) else '-'
         out.append(f"  {r['rule']:<{w}}  {r['cycle_time_days']:>11.3f}  "
                    f"{r['throughput']:>10}  {r['on_time_pct']:>9.2f}  "
-                   f"{r['tardiness_lot_days']:>11.1f}  {u_s:>7}  {cov_s:>8}")
+                   f"{r['tardiness_lot_days']:>11.1f}  {u_s:>7}  {cov_s:>8}"
+                   f"  {iq_s:>11}  {iw_s:>11}")
     return '\n'.join(out)
 
 

@@ -32,7 +32,12 @@ def main():
         if a.rule and row['rule'] != a.rule:
             continue
         scale = row.get('starts_scale', 1.0) or 1.0
-        label = f"{a.label or row['rule']}@{scale:.2f}x"
+        # Overlay in the LABEL, not only in the notes: the Results page draws
+        # rows by dispatcher, and a dedicated row laid over a pristine one
+        # unlabelled is the failure adr/0013 §3.5 names by name.
+        ovl = row.get('overlay') or doc.get('overlay')
+        label = (f"{a.label or row['rule']}@{scale:.2f}x"
+                 + (f"/{ovl}" if ovl else ''))
         args = types.SimpleNamespace(
             dataset=doc.get('dataset', 'SMT2020_LVHM'), seed=doc.get('seed', 0),
             dispatcher=label, batch_strat=doc.get('batch_strat', 'Demand'),
@@ -40,7 +45,13 @@ def main():
         key = f"bench:{row.get('fingerprint', label)}"
         notes = json.dumps({'source': os.path.relpath(a.json, os.path.dirname(HERE)), 'rule': row['rule'],
                             'starts_scale': scale, 'cycle_s': doc.get('cycle_s'),
-                            'solver': doc.get('solver'), 'coverage': (row.get('detail') or {}).get('coverage')})
+                            'solver': doc.get('solver'), 'coverage': (row.get('detail') or {}).get('coverage'),
+                            'overlay': ovl,
+                            'overlay_hash': row.get('overlay_hash') or doc.get('overlay_hash'),
+                            'idle_qualified_wip_tool_h_per_day':
+                                row.get('idle_qualified_wip_tool_h_per_day'),
+                            'idle_family_wip_tool_h_per_day':
+                                row.get('idle_family_wip_tool_h_per_day')})
         store = sim_feed.RunStore()
         store.begin(key, args, notes=notes)
         if store.conn is None:

@@ -78,11 +78,40 @@ is recoverable from upstream at the SHA above.
    `set -euo pipefail`, `cd "$(dirname "$0")"`, an explicit `.venv/bin/python`,
    offline `wandb` defaults, and the two `build_dashboard.py` invocations.
 
+8. **One `Instance.eligible(lot, machine)` predicate** (2026-09-10, ADR 0013
+   §3.3). Upstream narrows a station family only through the static
+   lot-to-lens dedication (`SVESTN`/`FORSTEP`) and writes that check out four
+   times: `dispatching/dm_lot_for_machine.py:13`,
+   `dispatching/dm_machine_for_lot.py:23`, and in `greedy.py` both the
+   dedication branch and `find_alternative_machine` (which did not check it at
+   all). They now call one predicate on the instance, whose default is exactly
+   the upstream check, so the pristine fab's dispatch fingerprints are
+   unchanged. A tool qualification overlay
+   (`data/smt2020/overlays/`, `bench/tools/overlay.py`) supplies the second
+   half through `Instance.overlay`; with no overlay it is not consulted.
+
+   The overlay half is also exposed alone as `qualified()`, for `greedy.py`'s
+   dedication branch: that branch keys `lot.dedications` by
+   `actual_step.idx + 1` where the predicate keys it by `actual_step.order`,
+   and those are different numbers, so routing it through the full predicate
+   would change the pristine answer.
+
+   Two upstream behaviours changed inside that branch, both on paths that
+   could only ever have raised: it bound its candidate to `machine` before
+   testing it, so a dedicated tool that was not in `usable_machines` left
+   `machine` as `None` and the `min_runs_left` check below died on an
+   `AttributeError`. It binds to a candidate now, and `machine` changes only
+   when the swap is taken. `find_alternative_machine` likewise now skips a
+   tool the lots are not eligible for, which upstream never checked.
+
+   This is the ONLY change to the simulator that ADR 0013 makes. Everything
+   else the overlay needs lives in `bench/tools/`.
+
 Also modified but not load-bearing: `.gitignore` (5 lines), and
 `chart_jobs.html` / `chart_tools.html`, which are regenerated run outputs rather
 than upstream source - `chart_jobs.html` is empty upstream.
 
-Deviations 3-7 are edits inside this vendored tree, which the policy above says
+Deviations 3-8 are edits inside this vendored tree, which the policy above says
 to avoid. They are here rather than in `dispatch/` or `bench/` because each one
 is a property of the baseline's own entry points — a default, an import path, an
 output path — that cannot be expressed from outside. Re-apply them when

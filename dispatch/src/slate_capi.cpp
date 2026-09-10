@@ -34,10 +34,29 @@ namespace {
 // rather than overrunning if a dataset ever exceeds them.
 constexpr int ID   = 48;
 constexpr int NAME = 72;
+// ';'-separated qualified parts (adr/0013). A list rather than a second array
+// keeps CTool trivially copyable with no pointer ownership crossing the
+// boundary, which is the property that lets ctypes pass it as a flat block.
+// LVHM has 10 parts of at most 8 characters, so 256 is roughly 3x headroom;
+// split_list truncates at the buffer rather than overrunning.
+constexpr int PARTS = 256;
 
 template <int N>
 std::string str_of(const char (&buf)[N]) {
     return std::string(buf, ::strnlen(buf, N));
+}
+
+template <int N>
+std::vector<std::string> split_list(const char (&buf)[N], char sep = ';') {
+    std::vector<std::string> out;
+    const std::string s = str_of(buf);
+    std::string cur;
+    for (char c : s) {
+        if (c == sep) { if (!cur.empty()) out.push_back(cur); cur.clear(); }
+        else cur += c;
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
 }
 
 } // namespace
@@ -54,6 +73,10 @@ struct CTool {
     int    min_run_length;      // policy: lots owed after a changeover
     int    min_runs_left;       // state: lots still owed (-1 = not in a run)
     char   min_runs_setup[ID];
+    // Master data, not state: read at set_tools and NOT at update_tools, so
+    // the matrix crosses this boundary once per run rather than once per
+    // planning cycle (adr/0013 §3.4). Empty means every part.
+    char   qualified_parts[PARTS];
 };
 
 struct CLot {
@@ -156,6 +179,7 @@ int fabslate_set_tools(void* handle, const CTool* tools, int n) {
         t->set_online(c.online != 0);
         t->set_current_setup(str_of(c.current_setup));
         if (c.min_runs_left > 0) t->set_min_runs(c.min_runs_left, str_of(c.min_runs_setup));
+        t->set_qualified_parts(split_list(c.qualified_parts));
         h->tool_order.push_back(str_of(c.tool_id));
         h->reg.add(std::move(t));
     }
@@ -179,6 +203,11 @@ int fabslate_update_tools(void* handle, const CTool* tools, int n) {
         t->set_current_setup(str_of(c.current_setup));
         t->set_min_runs(c.min_runs_left > 0 ? c.min_runs_left : 0,
                         str_of(c.min_runs_setup));
+        // qualified_parts is deliberately NOT refreshed here: it is master
+        // data (adr/0013 §3.4), and re-parsing ~1,300 lists on every one of
+        // ~1M planning cycles is the marshalling cost adr/0009 measured as
+        // the run's dominant one. Time-varying qualification -- a tool losing
+        // a recipe after PM -- would ride tool STATE, and is a v2.
     }
     return n;
 }

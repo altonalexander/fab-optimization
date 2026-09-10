@@ -125,6 +125,28 @@ public:
     // than driving one. Does not consume capacity.
     void set_current_setup(std::string s) { current_setup_ = std::move(s); }
 
+    // --- qualification (docs/adr/0013) --------------------------------------
+    // Which PARTS this tool may run. SMT2020 has no such column: every tool of
+    // a family is interchangeable, which is exactly why the assignment had
+    // nothing to assign (adr/0012 §3). An overlay supplies the matrix, and it
+    // arrives here the way every other tool class in machine_config.hpp
+    // already carries one -- MASTER DATA on the tool, set once, not a
+    // per-lot allowed-tools list on the wire (adr/0013 §2).
+    //
+    // EMPTY means fully qualified, the same convention as the other classes'
+    // recipe lists and as an absent pair in the overlay table. So a pristine
+    // run sets nothing and evaluate() is unchanged.
+    //
+    // Note this is keyed on Lot::product_id (PART), not Lot::recipe (the step
+    // DESC): qualification in 0013 is per (family, part). Per (family, part,
+    // step) is reticle-shaped and is deliberately a separate item.
+    void set_qualified_parts(std::vector<std::string> parts) {
+        qualified_parts_ = std::move(parts);
+    }
+    const std::vector<std::string>& qualified_parts() const noexcept {
+        return qualified_parts_;
+    }
+
     // --- eligibility --------------------------------------------------------
     Eligibility evaluate(const Lot& lot) const override {
         Eligibility e;
@@ -133,6 +155,15 @@ public:
         // that makes the assignment matrix block-diagonal, and hence the one
         // Planner decomposes on -- see docs/adr/0009.
         if (lot.family != family_)   { e.reason = Rejection::RecipeNotQualified; return e; }
+        // Qualification, when an overlay supplies one. Before the capacity
+        // check on purpose: a tool that cannot run this part at all is not
+        // "busy", and the distinction is what the planner's rejection counts
+        // are read for.
+        if (!qualified_parts_.empty() &&
+            !qualified(qualified_parts_, lot.product_id)) {
+            e.reason = Rejection::RecipeNotQualified;
+            return e;
+        }
         if (free_capacity() <= 0)    { e.reason = Rejection::NoCapacity; return e; }
 
         // Minimum-run gate. Hard, per the note above.
@@ -234,6 +265,7 @@ private:
     double             default_process_s_;
 
     std::string current_setup_;
+    std::vector<std::string> qualified_parts_;   // empty = every part
     int         min_run_length_ = 0;   // policy: lots owed after a changeover
     int         min_runs_left_  = 0;   // state: lots still owed
     std::string min_runs_setup_;

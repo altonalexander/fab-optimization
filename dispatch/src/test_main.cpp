@@ -749,6 +749,51 @@ void test_family_tool() {
     t::eq(ft.free_capacity(), 1, "release frees capacity");
 }
 
+// docs/adr/0013 §3.4. The check that stops the dedication rows measuring the
+// fallback again: if the solver never sees the matrix, `slate` scores every
+// lot with the same SPT-flavoured cost it always did, the row looks plausible,
+// and it is the summary §4.4 failure with a new cause.
+void test_qualification() {
+    t::suite("FamilyTool qualification (overlay)");
+    SetupMatrix sm;
+    FamilyTool ft("ET_1", "fab", "ETCH", &sm, 1, 1.0);
+
+    // Empty list = fully qualified. This is what a pristine run sends, and it
+    // is why the overlay is additive rather than a mode.
+    t::check(ft.qualified_parts().empty(), "no qualification by default");
+    t::check(bool(ft.evaluate(fam_lot("L1", "ETCH", "", "S1", "P9"))),
+             "an empty list qualifies every part");
+
+    ft.set_qualified_parts({"part_1", "part_4"});
+    t::check(bool(ft.evaluate(fam_lot("L1", "ETCH", "", "S1", "part_1"))),
+             "a qualified part is eligible");
+    t::check(bool(ft.evaluate(fam_lot("L2", "ETCH", "", "S1", "part_4"))),
+             "every listed part is eligible");
+    t::eq(int(ft.evaluate(fam_lot("L3", "ETCH", "", "S1", "part_2")).reason),
+          int(Rejection::RecipeNotQualified),
+          "an unqualified part is rejected with RecipeNotQualified");
+
+    // Keyed on PART, not on the step DESC. Per (family, part, step) is
+    // reticle-shaped and is a separate overlay on purpose (adr/0013 §4).
+    t::check(bool(ft.evaluate(fam_lot("L4", "ETCH", "", "SOME_OTHER_STEP", "part_1"))),
+             "qualification is per part, not per step");
+
+    // Rejected before the capacity check, so a tool that cannot run the part
+    // at all never reads as merely busy.
+    FamilyTool full("ET_2", "fab", "ETCH", &sm, 1, 1.0);
+    full.set_qualified_parts({"part_1"});
+    t::check(full.admit(fam_lot("L5", "ETCH", "", "S1", "part_1")), "admit a qualified part");
+    t::eq(int(full.evaluate(fam_lot("L6", "ETCH", "", "S1", "part_2")).reason),
+          int(Rejection::RecipeNotQualified),
+          "unqualified beats NoCapacity as the reason");
+
+    // And it is a HARD gate, like the minimum-run rule: the simulator's
+    // eligible() will not offer the pair at all, so a solver that merely
+    // penalised it would plan tokens that can never be served.
+    t::check(!full.admit(fam_lot("L7", "ETCH", "", "S1", "part_2")),
+             "admit refuses an unqualified part");
+}
+
 void test_min_run_length() {
     t::suite("FamilyTool minimum run length");
     SetupMatrix sm;
@@ -867,6 +912,7 @@ int main(int argc, char** argv) {
 
     test_setup_matrix();
     test_family_tool();
+    test_qualification();
     test_min_run_length();
     test_family_batching();
     test_per_family_decomposition();

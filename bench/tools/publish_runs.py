@@ -55,6 +55,11 @@ def run_key(payload, row):
         payload["batch_strat"], payload.get("cycle_s"),
         payload.get("budget_s"), payload.get("warmup_days") or 0,
         row["rule"],
+        # The overlay and the start rate are different FABS, not different
+        # views of one (adr/0013 §3.5, adr/0012 §2). Without them here a
+        # dedicated row would overwrite the pristine row it should sit beside.
+        row.get("overlay") or payload.get("overlay"),
+        row.get("starts_scale") or payload.get("starts_scale") or 1.0,
     ], sort_keys=True).encode())
     return h.hexdigest()
 
@@ -98,6 +103,8 @@ def publish(payload, path, dry_run=False):
                     "numbers are greedy's wearing another name")
 
             key = run_key(payload, row)
+            ovl = row.get("overlay") or payload.get("overlay")
+            scale = row.get("starts_scale") or payload.get("starts_scale") or 1.0
             notes = (f"compare.py {os.path.basename(path)}; "
                      f"decisions={row.get('decisions')}; "
                      f"fp={row.get('fingerprint')}")
@@ -105,6 +112,13 @@ def publish(payload, path, dry_run=False):
                 notes += f"; coverage={detail['coverage']}"
             if detail.get("cycle_s"):
                 notes += f"; slate_cycle_s={detail['cycle_s']}"
+            notes += (f"; overlay={ovl or 'none'}"
+                      f"; overlay_hash={row.get('overlay_hash') or '-'}"
+                      f"; starts_scale={scale:g}")
+            for k in ("idle_qualified_wip_tool_h_per_day",
+                      "idle_family_wip_tool_h_per_day"):
+                if row.get(k) is not None:
+                    notes += f"; {k}={row[k]}"
 
             if dry_run:
                 published.append((f"key:{key}", row["rule"],
@@ -121,7 +135,13 @@ def publish(payload, path, dry_run=False):
                 " status, finished_at)"
                 " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'finished', now())"
                 " RETURNING id",
-                (payload["dataset"], payload["seed"], row["rule"],
+                (payload["dataset"], payload["seed"],
+                 # The dispatcher column is what the Results page labels a
+                 # line with, so the fab a row describes rides in the label
+                 # rather than only in the notes nobody reads on a chart.
+                 row["rule"]
+                 + (f"@{scale:.2f}x" if abs(scale - 1.0) > 1e-9 else "")
+                 + (f"/{ovl}" if ovl else ""),
                  payload["batch_strat"], days, warmup_days, sha,
                  solver, linked, notes, key))
             run_id = cur.fetchone()[0]
