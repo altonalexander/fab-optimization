@@ -69,11 +69,24 @@ def normalize_dataset(name):
     return name if name.startswith('SMT2020_') else 'SMT2020_' + name
 
 
-def build(dataset, days, seed, plugins, batch_strat):
+def build(dataset, days, seed, plugins, batch_strat, build_days=None):
     """Load the dataset, seed the RNG, and construct the instance.
 
     Returns (instance, run_to). Seeding happens before FileInstance is built
     because the constructor draws from the same generator.
+
+    `build_days` separates how far the RELEASE SCHEDULE is materialised from
+    how far the simulation runs, and exists because `scale_starts` re-times a
+    FINITE list of pre-built lots (adr/0014). Raising a part's rate divides
+    its time-to-release, so a 3.3x ramp consumes 3.3 days of that part's
+    schedule per simulated day and runs the list dry part-way through the
+    window; parts scaled DOWN are pushed past the horizon and never arrive at
+    all. The fab then starves, which reads as a dispatching collapse: in the
+    first ramped run releases fell from 57/day to 8/day and WIP drained
+    1397 -> 320, with scanner utilisation at 21%, in BOTH arms.
+
+    So a ramped run must materialise `days * max(scale)` of schedule and still
+    stop at `days`. Defaults to `days`, which is every existing call.
     """
     from file_instance import FileInstance
     from randomizer import Randomizer
@@ -81,8 +94,9 @@ def build(dataset, days, seed, plugins, batch_strat):
 
     files = read_all('datasets/' + dataset)
     run_to = SECONDS_PER_DAY * days
+    build_to = SECONDS_PER_DAY * (build_days if build_days else days)
     Randomizer().random.seed(seed)
-    return FileInstance(files, run_to, True, plugins, None, batch_strat), run_to
+    return FileInstance(files, build_to, True, plugins, None, batch_strat), run_to
 
 
 def run(instance, run_to, dispatcher, before_dispatch=None,

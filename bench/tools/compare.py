@@ -62,6 +62,20 @@ import overlay as overlay_mod  # noqa: E402  (ADR 0013 tool qualification)
 import slate_rule  # noqa: E402
 
 
+def build_horizon_days(args):
+    """Days of RELEASE SCHEDULE a run needs materialised (adr/0014).
+
+    `scale_starts` re-times a finite list of pre-built lots, so a part run at
+    3.3x eats 3.3 days of its own schedule per simulated day. Materialise
+    `days * max(scale)` (plus a little slack) or the fab starves part-way
+    through the window and the row measures the starvation.
+    """
+    scales = [1.0, float(getattr(args, 'starts_scale', 1.0) or 1.0)]
+    scales += [float(v) for v in (getattr(args, 'starts_part_map', None)
+                                  or {}).values()]
+    return args.days * max(scales) * 1.05
+
+
 def kpis(instance, warm_from):
     """Cycle time, throughput, on-time % and tardiness from finished lots.
 
@@ -306,7 +320,8 @@ def run_one(spec, args):
         instance, run_to = load_warm(args, sampler)
     else:
         instance, run_to = sim_runner.build(
-            args.dataset, args.days, args.seed, [sampler], args.batch_strat)
+            args.dataset, args.days, args.seed, [sampler], args.batch_strat,
+            build_days=build_horizon_days(args))
         if args.overlay_obj is not None:
             args.overlay_obj.bind(instance)
 

@@ -302,6 +302,14 @@ def save_checkpoint(path, instance, feed, days):
         instance.plugins = plugins
 
 
+def build_horizon_days(args):
+    """Days of RELEASE SCHEDULE to materialise (adr/0014); see sim_runner."""
+    scales = [1.0, float(getattr(args, 'starts_scale', 1.0) or 1.0)]
+    scales += [float(v) for v in (getattr(args, 'starts_part_map', None)
+                                  or {}).values()]
+    return args.days * max(scales) * 1.05
+
+
 def scale_starts(instance, scale, parts=None):
     """Compress the remaining release schedule by `scale` (compare.py has
     the same function; kept identical so a stored benchmark row and a live
@@ -1909,7 +1917,8 @@ def main():
                   f'published', file=sys.stderr)
     if instance is None:
         instance, run_to = sim_runner.build(
-            a.dataset, a.days, a.seed, [feed], a.batch_strat)
+            a.dataset, a.days, a.seed, [feed], a.batch_strat,
+            build_days=build_horizon_days(a))
         # Bound BEFORE the first decision point, so the warm-up this run
         # checkpoints was itself simulated under the matrix.
         if ov is not None:
