@@ -88,7 +88,8 @@ KPI_SAMPLE_S = 3600        # one sample per simulated hour
 KPI_WINDOW_S = 86400       # throughput / cycle time / on-time over a trailing day
 TOOLS_FLUSH_S = 6 * 3600   # per-tool books to the run store this often
 KPI_FIELDS = ('t', 'wip', 'running', 'util', 'thr', 'ct', 'otd', 'tard',
-              'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd', 'iq', 'iw')
+              'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd', 'iq', 'iw',
+              'sutil', 'nscan')
 
 # Warm-up is ~3 minutes of CPU per 30 simulated days, so a snapshot is worth
 # keeping. Keyed by everything that changes the trajectory; a cache hit makes a
@@ -1065,12 +1066,20 @@ class FeedPlugin(IPlugin):
                 if not self._name(m).startswith('Delay_'))
         ntools = real or 1
         busy = sum(1 for t in self._busy if not t.startswith('Delay_'))
+        # Scanner-scoped utilisation (adr/0014). Fab-wide utilisation dilutes
+        # a litho constraint across 1,313 tools, ~80 of which are scanners; a
+        # mask that idles a scanner shows up here at 16x the weight. Reported
+        # on the pristine fab too, because the number only means something
+        # against the same number without masks.
+        nscan, sbusy = self._scanner_counts(instance)
         iq, iw = self._idle_with_wip(instance)
         return {
             't': round(t, 1),
             'wip': len(instance.active_lots),
             'running': len(self._on_tool),
             'util': round(100.0 * busy / ntools, 1),
+            'sutil': round(100.0 * sbusy / nscan, 1) if nscan else None,
+            'nscan': nscan,
             'thr': n,                                   # lots completed / day
             'ct': round(sum(cyc) / n / 86400, 3) if n else 0,      # days
             'otd': round(100.0 * (n - len(late)) / n, 1) if n else 0,
@@ -1091,6 +1100,40 @@ class FeedPlugin(IPlugin):
             'iq': iq,
             'iw': iw,
         }
+
+    def _scanner_counts(self, instance):
+        """(scanner tools in the fab, scanners busy now).
+
+        The family set is cached on first call: from the bound reticle
+        library when there is one, and otherwise read from the dataset's tool
+        master so the pristine baseline is the same set of tools.
+        """
+        fams = getattr(self, '_scan_fams', None)
+        if fams is None:
+            lib = getattr(instance, 'reticles', None)
+            if lib is not None and lib.scanner_families:
+                # Authoritative: the generator resolved these from STNGRP.
+                fams = set(lib.scanner_families)
+            else:
+                # Pristine baseline, where there is no library to ask and the
+                # instance carries no station group. On SMT2020 the scanners
+                # are exactly the families beginning `Litho_` once the `_REG`
+                # registration tools are removed: `LithoTrack_` and `LithoMet`
+                # do not match the prefix (no underscore after "Litho"), and
+                # `Litho_REG_*` sits in group `Litho_Met` and holds no mask.
+                fams = {f for f in instance.family_machines
+                        if f.startswith('Litho_')
+                        and not f.startswith('Litho_REG')}
+            self._scan_fams = fams
+            self._scan_n = sum(1 for m in instance.machines
+                               if m.family in fams)
+        if not self._scan_fams:
+            return 0, 0
+        # Tool names are '<family>_<idx>', so the family is everything before
+        # the last underscore.
+        busy = sum(1 for t in self._busy
+                   if t.rsplit('_', 1)[0] in self._scan_fams)
+        return self._scan_n, busy
 
     def _idle_with_wip(self, instance):
         """Tools idle right now while WIP waited: (qualified, family-wide).

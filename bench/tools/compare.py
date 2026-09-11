@@ -316,6 +316,13 @@ def run_one(spec, args):
     # draws, so a row here and the live run agree.
     util = [r['util'] for r in sampler.rows if not r.get('warmup') and r.get('util') is not None]
     row['util_pct'] = round(sum(util) / len(util), 2) if util else None
+    # Scanner-scoped utilisation (adr/0014). Fab-wide utilisation averages a
+    # litho constraint over 1,313 tools and hides it; the ~80 scanners are
+    # where a mask is either working or blocked, so this is where a reticle
+    # library shows up undiluted.
+    sut = [r['sutil'] for r in sampler.rows
+           if not r.get('warmup') and r.get('sutil') is not None]
+    row['scanner_util_pct'] = round(sum(sut) / len(sut), 2) if sut else None
     row['starts_scale'] = getattr(args, 'starts_scale', 1.0)
     row.update(overlay_mod.stamp(args.overlay_obj))
     # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
@@ -347,22 +354,24 @@ def run_one(spec, args):
 def table(rows):
     w = max((len(r['rule']) for r in rows), default=6)
     head = (f"  {'rule':<{w}}  {'cycle time':>11}  {'throughput':>10}  "
-            f"{'on-time %':>9}  {'tardiness':>11}  {'util %':>7}  {'coverage':>8}"
-            f"  {'idleQ t·h/d':>11}  {'idleF t·h/d':>11}")
+            f"{'on-time %':>9}  {'tardiness':>11}  {'util %':>7}  {'scan %':>7}"
+            f"  {'coverage':>8}  {'idleQ t·h/d':>11}  {'idleF t·h/d':>11}")
     out = ['', head, '  ' + '-' * (len(head) - 2)]
     for r in rows:
         cov = r.get('detail', {}).get('coverage')
         cov_s = f'{cov*100:.1f}%' if isinstance(cov, float) else '-'
         u = r.get('util_pct')
         u_s = f'{u:.1f}' if isinstance(u, (int, float)) else '-'
+        su = r.get('scanner_util_pct')
+        su_s = f'{su:.1f}' if isinstance(su, (int, float)) else '-'
         iq = r.get('idle_qualified_wip_tool_h_per_day')
         iw = r.get('idle_family_wip_tool_h_per_day')
         iq_s = f'{iq:.1f}' if isinstance(iq, (int, float)) else '-'
         iw_s = f'{iw:.1f}' if isinstance(iw, (int, float)) else '-'
         out.append(f"  {r['rule']:<{w}}  {r['cycle_time_days']:>11.3f}  "
                    f"{r['throughput']:>10}  {r['on_time_pct']:>9.2f}  "
-                   f"{r['tardiness_lot_days']:>11.1f}  {u_s:>7}  {cov_s:>8}"
-                   f"  {iq_s:>11}  {iw_s:>11}")
+                   f"{r['tardiness_lot_days']:>11.1f}  {u_s:>7}  {su_s:>7}"
+                   f"  {cov_s:>8}  {iq_s:>11}  {iw_s:>11}")
     return '\n'.join(out)
 
 

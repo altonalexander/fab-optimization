@@ -77,6 +77,9 @@ struct CTool {
     // the matrix crosses this boundary once per run rather than once per
     // planning cycle (adr/0013 §3.4). Empty means every part.
     char   qualified_parts[PARTS];
+    // Master data too (adr/0014 §3.4): whether a lot on this tool occupies a
+    // photomask. Read at set_tools only, like the qualified parts.
+    int    is_scanner;          // 0/1
 };
 
 struct CLot {
@@ -90,6 +93,10 @@ struct CLot {
     int    wafers;
     double priority;            // the tactical urgency vector, from Python
     double qtime_slack_s;
+    // The photomask this lot needs at THIS step, or "" for none (adr/0014).
+    // Lot state, not master data: it changes as the lot walks its route, so
+    // unlike qualified_parts it rides every plan call.
+    char   reticle[ID];
     double step_process_s;
     double due_s;
     double waiting_s;
@@ -180,6 +187,7 @@ int fabslate_set_tools(void* handle, const CTool* tools, int n) {
         t->set_current_setup(str_of(c.current_setup));
         if (c.min_runs_left > 0) t->set_min_runs(c.min_runs_left, str_of(c.min_runs_setup));
         t->set_qualified_parts(split_list(c.qualified_parts));
+        t->set_scanner(c.is_scanner != 0);
         h->tool_order.push_back(str_of(c.tool_id));
         h->reg.add(std::move(t));
     }
@@ -238,6 +246,7 @@ int fabslate_plan(void* handle,
         l.wafer_count    = c.wafers;
         l.priority       = c.priority;
         l.qtime_slack_s  = c.qtime_slack_s;
+        l.reticle        = str_of(c.reticle);
         l.step_process_s = c.step_process_s;
         l.due_s          = c.due_s;
         l.waiting_s      = c.waiting_s;

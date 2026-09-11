@@ -147,6 +147,10 @@ class SlateRule:
         for fam, machines in self.instance.family_machines.items():
             for ordinal, m in enumerate(machines):
                 self._ordinal[m.idx] = (fam, ordinal)
+        # Same single-object rule for the mask library (adr/0014 §3.4): the
+        # solver reads the reticle ids off the object the simulator enforces,
+        # so the two cannot disagree about which lot needs which mask.
+        self._reticles = getattr(self.instance, 'reticles', None)
         self.planner.set_tools([self._tool_dict(m) for m in self._machines])
         ov = getattr(self.instance, 'overlay', None)
         if ov is not None:
@@ -154,6 +158,13 @@ class SlateRule:
             print(f'  overlay {ov.name} ({ov.hash}): {n} of '
                   f'{len(self._machines)} tools carry a qualified-part list',
                   flush=True)
+        if self._reticles is not None:
+            ns = sum(1 for m in self._machines
+                     if m.family in self._reticles.scanner_families)
+            print(f'  reticles ({self._reticles.hash}): '
+                  f'{len(set(r for r, _ in self._reticles.table.values()))} '
+                  f'masks over {ns} scanners, '
+                  f'transport {self._reticles.transport_s:g}s', flush=True)
 
     def _qualified_parts(self, m):
         """The parts tool `m` may run, or () for "every part".
@@ -197,6 +208,8 @@ class SlateRule:
                              if m.min_runs_left is not None else 0,
             'min_runs_setup': m.min_runs_setup or '',
             'qualified_parts': self._qualified_parts(m),
+            'is_scanner': (self._reticles is not None
+                           and m.family in self._reticles.scanner_families),
         }
 
     # -- the planning cycle -------------------------------------------------
@@ -398,6 +411,13 @@ class SlateRule:
             'wafers': int(lot.pieces or 25),
             'priority': u,
             'qtime_slack_s': QTIME_INERT,
+            # The mask this lot needs at THIS step (adr/0014). '' whenever
+            # there is no library or the step is not a scanner step, which is
+            # the same "empty is unconstrained" convention the qualified-part
+            # list uses. solver.hpp groups the scanner assignments by it and
+            # forbids two of them at once.
+            'reticle': (self._reticles.lot_reticle(lot)
+                        if self._reticles is not None else ''),
             'step_process_s': step.processing_time.avg(),
             'due_s': lot.deadline_at,
             'waiting_s': max(0.0, t - (lot.free_since or t)),

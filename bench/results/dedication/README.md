@@ -87,14 +87,38 @@ Both passed before any row was run, and neither is optional (`bench/README.md`).
 
 ## Reading
 
-- **Dedication did not create the matching advantage, which is the result
-  this page was run to get.** ADR 0013's hypothesis predicts the slate − cr
-  gap *grows* with dedication. It does not. The gap is largest on the
-  **pristine** fab at 1.03× (+9.6%) and on the *least* dedicated overlay
-  (`all-80`, +12.8%), and smallest — negative, in fact — on the *most*
-  dedicated one (`all-70`: +2.4% at 1.00×, −1.3% at 1.03×). Ordered by how
-  much capacity each matrix removes, the separation runs backwards. Whatever
-  is producing the slate's edge here, it is not the qualification matrix.
+- **The throughput column is not throughput. It is WIP drain, exactly.**
+  Both rules receive the same lot releases, so over one window
+  `lots(slate) − lots(cr)` must equal `ΔWIP(cr) − ΔWIP(slate)` if neither
+  rule actually produced more. It does, identically: residual **0 lots in
+  six of eight cells** and ±3 in the other two (rounding on the WIP means,
+  which are five-day averages).
+
+  | fab | x | Δlots | WIP drain | residual |
+  |---|---:|---:|---:|---:|
+  | pristine | 1.00 | +72 | +69 | +3 |
+  | pristine | 1.03 | +153 | +153 | **0** |
+  | dedication-litho-70 | 1.00 | +30 | +32 | −2 |
+  | dedication-litho-70 | 1.03 | +59 | +59 | **0** |
+  | dedication-all-70 | 1.00 | +40 | +40 | **0** |
+  | dedication-all-70 | 1.03 | −21 | −21 | **0** |
+  | dedication-all-80 | 1.00 | +156 | +156 | **0** |
+  | dedication-all-80 | 1.03 | +200 | +200 | **0** |
+
+  Every "extra" lot the slate completed came out of work in progress, not
+  out of extra production. Over a window long enough for WIP to settle,
+  both rules must converge on the start rate. Do not quote these as
+  throughput results.
+
+- **There is no dedication signal, in either direction.** An earlier reading
+  of this page called the trend "backwards" because the gap is largest on
+  `all-80` and negative on `all-70`. That over-read it. The **pristine** fab
+  is the control — dedication is absent there by construction — and it shows
+  +9.6% at 1.03×, as large as any dedicated fab. When the control moves as
+  much as the treatments, the screen has no resolving power, and the
+  cell-to-cell spread (−1.3% to +12.8%, one seed) is the noise floor rather
+  than a trend to interpret. The correct statement is *no signal*, not
+  *reversed signal*.
 
 - **The purpose-built KPI goes the wrong way, in all eight cells.** `idleQ`
   was defined (§3.5) as the quantity a matching solver should reduce and a
@@ -117,6 +141,20 @@ Both passed before any row was run, and neither is optional (`bench/README.md`).
   of whether a matcher can beat one. This is a consequence of the 0.70–0.80
   fractions the floors forced, not of the mechanism.
 
+- **And the rows were run below the knee, which §3.6 should not have
+  specified.** `docs/NEXT.md` §1 established the knee between 1.00 and 1.05
+  starts, and that the rules only spread above it — at 1.15× the starts grid
+  has `fifo` at 89.0% on-time against `cr`'s 96.1%. At the 1.00×/1.03×
+  §3.6 asked for, total tardiness over 30 days is 1–33 lot-days across a
+  1,300-tool fab and every rule clears 98% on-time. There is nothing for any
+  dispatcher to optimise at this load, dedicated or not, so the experiment
+  could not have separated the rules whatever the matrix looked like.
+  Dedication needs *queues* to matter: a qualification constraint only costs
+  something when a lot has to wait for the specific tool it is qualified on.
+  Below the knee there is no wait. `load/` re-runs pristine, `all-70` and
+  `all-65` at 1.10× and 1.15× for this reason; read on-time and tardiness
+  from those rows, since throughput stays a WIP artifact at any load.
+
 - **The 30-day window cannot carry the throughput numbers, and they should
   not be quoted.** Cycle time is ~36 d, so a 30-day window mostly drains WIP
   that was already in the fab at day 90; small ordering differences push a
@@ -135,29 +173,46 @@ Both passed before any row was run, and neither is optional (`bench/README.md`).
 
 ## Verdict
 
-**ADR 0012's overturn condition is not met by these rows.** It named *an
-overlay fab where the assignment solver still adds nothing over a sort*; what
-these rows show is an overlay fab where the solver adds roughly what it
-already added on the pristine fab, with no trend in dedication strength and
-with the matching KPI pointing the other way. Dedication at 0.70–0.80 does
-not turn the per-family problem into one where assignment matters.
+**ADR 0012's overturn condition is neither met nor tested by these rows.**
+Not met, because nothing here shows the solver earning its keep on a
+dedicated fab. Not tested, because the experiment as specified could not
+have shown it either way: the only column that moved is a WIP artifact, and
+the load is below the knee, where no dispatcher has anything to optimise.
+Reporting this as "dedication does not help" would be reading a null
+instrument as a null effect.
 
-That leaves two branches, and the cheap one first:
+What the rows *do* establish, and it is not nothing:
 
-1. **The overlay is too weak — retest before concluding.** Regenerate with
-   `--skew` (ADR 0013 §3.2, built and off by default) and/or relax the
-   two-tool floor on the large families only, so the fractions can reach the
-   0.33–0.50 the ADR asked for where there is capacity to spare. If the
-   separation still does not track dedication on a genuinely hard matrix,
-   the hypothesis is dead rather than untested.
-2. **ADR 0013 §7's branch.** Reticles — exclusive across scanners, with a
+- The mechanism works end to end. Both gates pass, the solver receives the
+  matrix (863 of 1,313 tools carry a qualified-part list under the
+  all-scope overlays), and the pristine fingerprints are untouched.
+- On SMT2020 at the 1.03× operating point, **dedication cannot be made much
+  harder than this without deleting capacity** — 0.60 is refused, 0.65 is
+  the balanced frontier. That is a fact about the testbed that constrains
+  every future dedication experiment, and it was not known when §3.2 was
+  written.
+- The slate runs the fab at lower WIP and 1–2 d shorter cycle time than
+  `cr` at equal on-time, on the pristine fab as much as on the dedicated
+  ones. A restatement of ADR 0012's operating point, not new evidence.
+
+Order of work from here, cheapest decisive test first:
+
+1. **Load, not matrix** (`load/`, running). Re-run pristine / `all-70` /
+   `all-65` at 1.10× and 1.15×, where the starts grid shows the rules
+   actually spread, and read on-time and tardiness. Dedication can only bite
+   when lots queue for the specific tools they are qualified on; below the
+   knee they never wait. If pristine moves as much as the dedicated fabs
+   here too, the hypothesis is dead rather than untested.
+2. **The harder matrices at the frontier** — `dedication-all-65` (balanced)
+   and `dedication-skew-70` (the `--skew` variant §3.2 built and left off),
+   both written, at whatever load step 1 shows to be discriminating.
+3. **§3.6's 120-day confirmation**, which is what makes a throughput column
+   meaningful at all — WIP has to settle before completions measure
+   production. Seeds 0 and 1, plus the `slate:none / slate:due / slate:full`
+   pressure ablation.
+4. **ADR 0013 §7's branch.** Reticles — exclusive across scanners, with a
    transport delay — add a *shared* resource a sort key cannot reason about
    at all, which is a stronger claim than dedication makes.
-
-Not yet run from §3.6: the 120-day confirmation at 1.03× on the
-most-separating overlay (`dedication-all-80`), seeds 0 and 1, and the
-`slate:none / slate:due / slate:full` pressure ablation on it. The 120-day
-rows are the ones that decide whether the throughput column above survives.
 
 ## Reproducing
 

@@ -121,6 +121,16 @@ public:
     // --- The polymorphic surface ---------------------------------------------
     virtual std::string_view kind() const noexcept = 0;
 
+    // Does a lot on this tool occupy a photomask (adr/0014)?
+    //
+    // Asked instead of comparing kind() so that a FamilyTool standing in for a
+    // scanner can answer yes without impersonating LITHO_SCANNER everywhere
+    // else -- kind() also drives batch handling and the model's tool_kinds,
+    // and a tool that claimed the wrong one would change more than the mask.
+    virtual bool holds_reticle() const noexcept {
+        return kind() == std::string_view("LITHO_SCANNER");
+    }
+
     // Can this tool run this lot right now, and at what cost?
     virtual Eligibility evaluate(const Lot& lot) const = 0;
 
@@ -732,7 +742,7 @@ public:
                 m.tool_min_batch.push_back(0);
                 m.tool_max_batch.push_back(t->free_capacity());
             }
-            if (t->kind() == std::string_view("LITHO_SCANNER"))
+            if (t->holds_reticle())
                 m.scanner_tools.push_back(static_cast<int>(m.tool_ids.size() - 1));
         }
 

@@ -29,6 +29,12 @@ class Instance:
     # Set by bench/tools/overlay.py's Overlay.bind(); None is the pristine fab.
     overlay = None
 
+    # Reticle library (fab-optimization deviation 9, ADR 0014). A class
+    # attribute for the same reason as `overlay`: a checkpoint pickled before
+    # masks existed must still unpickle into an instance that dispatches.
+    # Set by bench/tools/reticles.py's Reticles.bind(); None is no masks.
+    reticles = None
+
     def eligible(self, lot, machine):
         """Can `machine` run `lot` at the step it is waiting for?
 
@@ -47,7 +53,25 @@ class Instance:
         di = lot.actual_step.order
         if di in lot.dedications and machine.idx != lot.dedications[di]:
             return False
-        return self.qualified(lot, machine)
+        if not self.qualified(lot, machine):
+            return False
+        return self.mask_free(lot, machine)
+
+    def mask_free(self, lot, machine):
+        """Is the photomask this lot needs available on `machine` right now?
+
+        The third narrowing, and the only one that is not static (ADR 0014):
+        qualification and dedication are properties of the pair, while a
+        reticle is a shared resource whose availability depends on what every
+        OTHER scanner is doing at this instant. That is the whole reason it is
+        a harder problem than ADR 0013's matrix -- and why it is asked here,
+        at the decision point, rather than precomputed.
+
+        `None` library short-circuits, so the pristine fab and every ADR 0013
+        overlay run take exactly the path they took before.
+        """
+        r = self.reticles
+        return True if r is None else r.allows(lot, machine, self.current_time)
 
     def qualified(self, lot, machine):
         """The overlay half of `eligible`, alone.
@@ -205,6 +229,15 @@ class Instance:
             #     lot.cqt_deadline = None
         # compute times for lot and machine
         lot_time, machine_time, setup_time = self.get_times(self.setups, lots, machine)
+        # Mount the photomask (ADR 0014). Moving one between scanners costs
+        # transport, which lands in the setup so it delays the lot and blocks
+        # the tool exactly as a setup change does. Every lot in a batch shares
+        # a (part, step) and therefore a reticle, so one claim covers them all.
+        reticle_key = None
+        if self.reticles is not None:
+            transport_s, reticle_key = self.reticles.claim(
+                lots[0], machine, self.current_time)
+            setup_time += transport_s
         # compute per-piece preventive maintenance requirement
         for i in range(len(machine.pieces_until_maintenance)):
             machine.pieces_until_maintenance[i] -= sum([l.pieces for l in lots])
@@ -237,6 +270,18 @@ class Instance:
         # add events
         machine_done = self.current_time + machine_time + setup_time
         lot_done = self.current_time + lot_time + setup_time
+        # The mask is unavailable to every other scanner until this one is
+        # done with it. This is the interval the solver forbids with
+        # AddAtMostOne over the scanners sharing a reticle.
+        #
+        # Released at LOT done, not machine done: the mask is in the scanner
+        # while the lot exposes, and can be pulled as soon as the lot leaves.
+        # machine_done also carries preventive maintenance and any breakdown
+        # folded in above, and holding a mask through a tool's PM would block
+        # every other scanner for a reason that has nothing to do with the
+        # mask.
+        if self.reticles is not None:
+            self.reticles.hold(reticle_key, lot_done)
         ev1 = MachineDoneEvent(machine_done, [machine])
         ev2 = LotDoneEvent(lot_done, [machine], lots)
         self.add_event(ev1)

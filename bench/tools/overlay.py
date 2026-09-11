@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 
+import reticles as reticles_mod
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -70,10 +71,14 @@ class Overlay:
     construction rather than by a special case.
     """
 
-    def __init__(self, name, table, provenance=None):
+    def __init__(self, name, table, provenance=None, reticles=None):
         self.name = name
         self.table = {k: set(v) for k, v in table.items()}
         self.provenance = provenance or {}
+        #: An optional reticle library (ADR 0014). The pristine convention is
+        #: None, and an overlay that carries one hashes differently so it
+        #: cannot resume a checkpoint warmed without the masks.
+        self.reticles = reticles
         self.hash = self.provenance.get('table_hash') or table_hash(self.table)
         self._idx = None          # (family, part) -> frozenset of machine.idx
 
@@ -83,25 +88,34 @@ class Overlay:
     def load(cls, name, root=None):
         d = os.path.join(root or OVERLAY_DIR, name)
         qual = os.path.join(d, QUAL_FILE)
-        if not os.path.isfile(qual):
-            raise FileNotFoundError(f'no overlay {name!r}: {qual} is missing')
+        ret = reticles_mod.Reticles.load_dir(d)
+        # An overlay may carry a qualification matrix, a reticle library, or
+        # both. Only the empty directory is an error: ADR 0014's libraries
+        # are written without a matrix so the two constraint classes can be
+        # switched on one at a time and their contributions read separately.
+        if not os.path.isfile(qual) and ret is None:
+            raise FileNotFoundError(
+                f'no overlay {name!r}: neither {QUAL_FILE} nor '
+                f'{reticles_mod.RETICLE_FILE} is in {d}')
         table = {}
-        with open(qual) as f:
-            head = f.readline().rstrip('\n').split('\t')
-            if head[:3] != ['STNFAM', 'PART', 'STNS']:
-                raise ValueError(f'{qual}: expected STNFAM/PART/STNS, got {head}')
-            for line in f:
-                line = line.rstrip('\n')
-                if not line:
-                    continue
-                fam, part, stns = line.split('\t')[:3]
-                table[(fam, part)] = set(s for s in stns.split(';') if s)
+        if os.path.isfile(qual):
+            with open(qual) as f:
+                head = f.readline().rstrip('\n').split('\t')
+                if head[:3] != ['STNFAM', 'PART', 'STNS']:
+                    raise ValueError(
+                        f'{qual}: expected STNFAM/PART/STNS, got {head}')
+                for line in f:
+                    line = line.rstrip('\n')
+                    if not line:
+                        continue
+                    fam, part, stns = line.split('\t')[:3]
+                    table[(fam, part)] = set(s for s in stns.split(';') if s)
         prov = {}
         pj = os.path.join(d, PROV_FILE)
         if os.path.isfile(pj):
             with open(pj) as f:
                 prov = json.load(f)
-        ov = cls(name, table, prov)
+        ov = cls(name, table, prov, reticles=ret)
         # The provenance records the hash the generator computed. If the table
         # has been edited since, the checkpoint key and the row stamp would
         # both describe a fab that is not the one being simulated -- exactly
@@ -114,8 +128,24 @@ class Overlay:
                 f'overlay {name!r}: {QUAL_FILE} hashes {got} but '
                 f'{PROV_FILE} records {want}. The table was edited after it '
                 'was generated; regenerate it rather than relabelling.')
-        ov.hash = got
+        ov.hash = ov.combined_hash(got)
         return ov
+
+    def combined_hash(self, qual_hash):
+        """The key for this overlay as a whole, masks included.
+
+        A fab warmed without the reticle library has different WIP from one
+        warmed with it, exactly as ADR 0013 §3.5 argued for the qualification
+        matrix, so the library has to be part of the checkpoint key. An
+        overlay that carries NO library returns the qualification hash
+        unchanged, which keeps every ADR 0013 checkpoint filename and every
+        published row stamp byte-identical.
+        """
+        if self.reticles is None:
+            return qual_hash
+        h = hashlib.blake2b(digest_size=8)
+        h.update(f'{qual_hash}\n{self.reticles.hash}\n'.encode())
+        return h.hexdigest()
 
     def write(self, root=None):
         d = os.path.join(root or OVERLAY_DIR, self.name)
@@ -153,6 +183,8 @@ class Overlay:
             idx[(fam, part)] = frozenset(by_name[s] for s in stns)
         self._idx = idx
         instance.overlay = self
+        if self.reticles is not None:
+            self.reticles.bind(instance)
         return self
 
     # ---- the predicate -------------------------------------------------
@@ -194,8 +226,11 @@ class Overlay:
         An overlay row is never laid over a pristine one unlabelled, so this
         travels with the numbers rather than with the person reading them.
         """
-        return {'overlay': self.name, 'overlay_hash': self.hash,
-                'overlay_pairs': len(self.table)}
+        s = {'overlay': self.name, 'overlay_hash': self.hash,
+             'overlay_pairs': len(self.table)}
+        if self.reticles is not None:
+            s.update(self.reticles.stamp())
+        return s
 
 
 def load(name, root=None):

@@ -43,6 +43,8 @@ class CTool(ctypes.Structure):
         # set_tools and ignored by update_tools, so the matrix crosses this
         # boundary once per run. Empty means every part.
         ('qualified_parts', ctypes.c_char * PARTS),
+        # Master data too (adr/0014): does a lot here occupy a photomask.
+        ('is_scanner',     ctypes.c_int),
     ]
 
 
@@ -58,6 +60,9 @@ class CLot(ctypes.Structure):
         ('wafers',         ctypes.c_int),
         ('priority',       ctypes.c_double),
         ('qtime_slack_s',  ctypes.c_double),
+        # The mask this lot needs at THIS step, '' for none (adr/0014). Lot
+        # state, so unlike qualified_parts it rides every plan call.
+        ('reticle',        ctypes.c_char * ID),
         ('step_process_s', ctypes.c_double),
         ('due_s',          ctypes.c_double),
         ('waiting_s',      ctypes.c_double),
@@ -304,6 +309,7 @@ def _fill_tool(c, t):
     c.min_runs_setup = _b(t.get('min_runs_setup', ''), ID)
     parts = t.get('qualified_parts') or ()
     c.qualified_parts = _b(';'.join(parts), PARTS)
+    c.is_scanner = 1 if t.get('is_scanner') else 0
 
 
 def _fill_lot(c, l):
@@ -317,6 +323,7 @@ def _fill_lot(c, l):
     c.wafers = int(l.get('wafers', 25))
     c.priority = float(l.get('priority', 1.0))
     c.qtime_slack_s = float(l.get('qtime_slack_s', 1e9))
+    c.reticle = _b(l.get('reticle', '') or '', ID)
     c.step_process_s = float(l.get('step_process_s', 0.0))
     c.due_s = float(l.get('due_s', -1.0))
     c.waiting_s = float(l.get('waiting_s', 0.0))
