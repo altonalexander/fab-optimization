@@ -341,8 +341,23 @@ def run_one(spec, args):
     if use_reset:
         instance.add_event(ResetEvent(RESET_AT))
 
+    # The per-part mix is applied ONCE, and where it is applied depends on
+    # whether this run warmed its own fab (adr/0014).
+    #
+    # A resumed checkpoint already HAS the mix: it is warmed under it and the
+    # mix hash is part of the checkpoint name, so the schedule in the pickle
+    # is already re-timed. Applying it again compresses an already-compressed
+    # schedule -- 3.3x on top of 3.3x is 10.9x -- which burns the release list
+    # part-way through the window and starves the fab after. Measured: starts
+    # ran at 138/day against a 62.7/day target, then fell off a cliff to 8/day
+    # at day 125, and WIP drained 21-36 lots/day in every cell of the grid.
+    #
+    # --starts-scale is different and still applies here: it is deliberately
+    # NOT in the checkpoint key, so one warmed fab serves every start rate
+    # (adr/0012). Only the mix is baked in.
+    resumed = bool(args.warmup_days and not use_reset)
     scale_starts(instance, getattr(args, 'starts_scale', 1.0),
-                 getattr(args, 'starts_part_map', None))
+                 None if resumed else getattr(args, 'starts_part_map', None))
     rule = make_rule(spec, instance, args)
     banner = rule.banner() if hasattr(rule, 'banner') else f'  rule: {spec}'
     print(f'\n=== {spec} ===', flush=True)

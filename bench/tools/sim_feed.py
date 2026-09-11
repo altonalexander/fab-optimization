@@ -1897,7 +1897,11 @@ def main():
         t0 = time.time()
         instance = load_checkpoint(ckpt, feed, ov)
         if instance is not None:
-            n = scale_starts(instance, a.starts_scale, a.starts_part_map)
+            # NOT the mix: a resumed checkpoint is warmed under it and keyed
+            # by it, so the schedule is already re-timed. Re-applying it
+            # compresses an already-compressed list (adr/0014). --starts-scale
+            # is not in the key and does still apply here.
+            n = scale_starts(instance, a.starts_scale)
             if n:
                 print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
             run_to = sim_runner.SECONDS_PER_DAY * a.days
