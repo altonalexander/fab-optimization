@@ -53,25 +53,44 @@ class Instance:
         di = lot.actual_step.order
         if di in lot.dedications and machine.idx != lot.dedications[di]:
             return False
-        if not self.qualified(lot, machine):
-            return False
-        return self.mask_free(lot, machine)
+        return self.qualified(lot, machine)
 
     def mask_free(self, lot, machine):
         """Is the photomask this lot needs available on `machine` right now?
 
-        The third narrowing, and the only one that is not static (ADR 0014):
-        qualification and dedication are properties of the pair, while a
-        reticle is a shared resource whose availability depends on what every
-        OTHER scanner is doing at this instant. That is the whole reason it is
-        a harder problem than ADR 0013's matrix -- and why it is asked here,
-        at the decision point, rather than precomputed.
+        Deliberately NOT part of `eligible` (ADR 0014 §3.3). `eligible` is a
+        STATIC predicate and the dispatch managers call it once per lot, when
+        the lot becomes available, to decide which machines it queues on
+        (`dm_lot_for_machine.free_up_lots`). A mask's availability is
+        time-varying, so asking it there loses every lot whose mask happened
+        to be busy at the instant it arrived -- permanently, because the lot
+        is never re-offered. That reads as a slow monotonic collapse rather
+        than as a bug: utilisation decays as lots fall out one by one.
 
-        `None` library short-circuits, so the pristine fab and every ADR 0013
-        overlay run take exactly the path they took before.
+        So the question is asked where it belongs, at the moment of choosing
+        what to run, and `wake_mask_waiters` re-offers the scanners when a
+        mask comes back.
         """
         r = self.reticles
         return True if r is None else r.allows(lot, machine, self.current_time)
+
+    def wake_mask_waiters(self):
+        """A mask was released: re-offer every idle scanner with work queued.
+
+        A machine leaves `usable_machines` when nothing on it was runnable,
+        and only `free_up_machine` puts it back -- which fires when the tool
+        finishes a job, and so never comes for a tool that is already idle.
+        A mask freed elsewhere in the fab is exactly such a change: it makes
+        work runnable on a tool that no event of its own will wake. Without
+        this the scanners park one by one and never come back.
+        """
+        r = self.reticles
+        if r is None:
+            return
+        for fam in r.scanner_families:
+            for m in self.family_machines.get(fam, ()):
+                if self.free_machines[m.idx] and m.waiting_lots:
+                    self.usable_machines.add(m)
 
     def qualified(self, lot, machine):
         """The overlay half of `eligible`, alone.
@@ -206,6 +225,10 @@ class Instance:
 
             for plugin in self.plugins:
                 plugin.on_lot_free(self, lot)
+        # A lot leaving a scanner hands its mask back (ADR 0014 §3.3), which
+        # can make work runnable on an idle tool that has no event of its own
+        # coming. Re-offer those tools here or they stay parked.
+        self.wake_mask_waiters()
 
     def dispatch(self, machine: Machine, lots: List[Lot]):
         # remove machine and lot from active sets

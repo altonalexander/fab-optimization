@@ -209,7 +209,7 @@ def load_warm(args, sampler):
     return instance, SECONDS_PER_DAY * args.days
 
 
-def scale_starts(instance, scale):
+def scale_starts(instance, scale, parts=None):
     """Compress the remaining release schedule by `scale`.
 
     SMT2020 releases every part on a constant interval from order.txt and the
@@ -219,6 +219,26 @@ def scale_starts(instance, scale):
     lot is judged against the same lead time it was given. Released lots and
     WIP are untouched: the same fab, fed faster from here on.
     """
+    if parts:
+        # Per-part ramp (adr/0014). Raising every part's rate uniformly loads
+        # every family and every mask together, which tests capacity as much
+        # as scheduling. Ramping ONE part concentrates the extra demand on
+        # that part's ~25 masks and leaves the other nine alone -- the
+        # asymmetric contention that dedication-skew-70 showed is what makes
+        # the dispatching decision worth anything. It is also what a fab
+        # actually does: products ramp one at a time.
+        now = instance.current_time
+        n = 0
+        for lot in instance.dispatchable_lots:
+            s = parts.get(lot.part_name, scale)
+            if not s or abs(s - 1.0) < 1e-9 or lot.release_at <= now:
+                continue
+            new_rel = now + (lot.release_at - now) / s
+            lot.deadline_at -= lot.release_at - new_rel
+            lot.release_at = new_rel
+            n += 1
+        instance.dispatchable_lots.sort(key=lambda k: k.release_at)
+        return n
     if not scale or abs(scale - 1.0) < 1e-9:
         return 0
     now = instance.current_time
@@ -278,7 +298,8 @@ def run_one(spec, args):
     if use_reset:
         instance.add_event(ResetEvent(RESET_AT))
 
-    scale_starts(instance, getattr(args, 'starts_scale', 1.0))
+    scale_starts(instance, getattr(args, 'starts_scale', 1.0),
+                 getattr(args, 'starts_part_map', None))
     rule = make_rule(spec, instance, args)
     banner = rule.banner() if hasattr(rule, 'banner') else f'  rule: {spec}'
     print(f'\n=== {spec} ===', flush=True)
@@ -468,6 +489,13 @@ def main():
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them (1.1 = 10%% more starts). '
                         'Due dates move with the releases, so on-time stays fair.')
+    p.add_argument('--starts-part', action='append', default=None,
+                   metavar='PART=SCALE',
+                   help='ramp ONE part instead of the whole fab, e.g. '
+                        '--starts-part part_1=1.5 (repeatable). Parts not '
+                        'named keep --starts-scale. Concentrates the extra '
+                        'demand on that part\'s masks rather than loading '
+                        'every family at once (adr/0014).')
     p.add_argument('--no-lazy', action='store_true',
                    help='re-solve every family every cycle')
     p.add_argument('--warmup-days', type=float, default=0.0,
@@ -485,6 +513,14 @@ def main():
     a.dispatcher = None   # unused; --rules drives this tool
     a.overlay_obj = overlay_mod.load(a.overlay)
 
+    a.starts_part_map = None
+    if a.starts_part:
+        a.starts_part_map = {}
+        for spec in a.starts_part:
+            part, _, val = spec.partition('=')
+            if not part or not val:
+                p.error(f'--starts-part expects PART=SCALE, got {spec!r}')
+            a.starts_part_map[part] = float(val)
     if a.out:
         a.out = os.path.join(ORIG_CWD, a.out)
     if a.merge:
@@ -494,6 +530,9 @@ def main():
     print(f'  {a.dataset}  {a.days} days  seed={a.seed}  batch={a.batch_strat}'
           + (f'  warmup={a.warmup_days:g}d' if a.warmup_days else '')
           + (f'  starts={a.starts_scale:g}x' if a.starts_scale != 1.0 else '')
+          + (('  starts-part=' + ','.join(f'{k}x{v:g}' for k, v in
+                                          sorted(a.starts_part_map.items())))
+             if a.starts_part_map else '')
           + (f'  overlay={a.overlay_obj.name} ({a.overlay_obj.hash}, '
              f'{len(a.overlay_obj.table)} pairs)' if a.overlay_obj
              else '  overlay=none (pristine)'))

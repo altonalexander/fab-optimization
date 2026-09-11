@@ -163,6 +163,8 @@ class Reticles:
         self.holder = {}
         self.locked_until = {}
         self.moves = 0            # reticle transports paid, a run statistic
+        self.asked = 0            # allows() calls that needed a mask
+        self.blocked = 0          # ... of which the mask was unavailable
         for (ret, copies) in set(self.table.values()):
             for c in range(copies):
                 self.holder[(ret, c)] = None
@@ -207,7 +209,16 @@ class Reticles:
         if ent is None:
             return True
         ret, copies = ent
-        return self.available_copy(ret, copies, machine.idx, now) is not None
+        ok = self.available_copy(ret, copies, machine.idx, now) is not None
+        self.asked += 1
+        if not ok:
+            self.blocked += 1
+        return ok
+
+    def locked_now(self, now):
+        """Masks currently checked out. A run statistic and a deadlock probe:
+        if this never falls, a mask has been claimed and never released."""
+        return sum(1 for v in self.locked_until.values() if v > now)
 
     def claim(self, lot, machine, now):
         """Mount a copy on `machine`, and report the move cost and the copy.

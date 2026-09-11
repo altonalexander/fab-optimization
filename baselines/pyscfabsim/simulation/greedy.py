@@ -39,7 +39,10 @@ def find_alternative_machine(instance, lots, machine):
     for m in instance.family_machines[machine.family]: #hier wird eine Maschine gesucht, wo das Setup dem Los-Setup entspricht
         if (m in instance.usable_machines
                 and m.current_setup == lots[0].actual_step.setup_needed
-                and all(instance.eligible(l, m) for l in lots)):
+                and all(instance.eligible(l, m) for l in lots)
+                # Moving the batch to another tool needs the mask to be free
+                # for it there, too (ADR 0014 §3.3).
+                and all(instance.mask_free(l, m) for l in lots)):
             machine = m
             break
     return machine
@@ -77,7 +80,18 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
         for machine in instance.usable_machines:
             break
     dispatching_combined_permachine(ptuple_fcn, machine, time, instance.setups)
-    wl = sorted(machine.waiting_lots, key=lambda k: k.ptuple)
+    # The mask filter is applied HERE and not in `eligible` (ADR 0014 §3.3):
+    # a lot queues on its machines once, when it becomes available, and a
+    # time-varying test there would drop it for good. A lot whose mask is
+    # busy right now simply is not a candidate this instant; it stays on the
+    # machine's waiting list and `wake_mask_waiters` re-offers the tool when
+    # the mask comes back.
+    cand = machine.waiting_lots
+    if instance.reticles is not None:
+        cand = [l for l in cand if instance.mask_free(l, machine)]
+        if not cand:
+            return machine, None
+    wl = sorted(cand, key=lambda k: k.ptuple)
     # select lots to dispatch
     lot = wl[0]
     if lot.actual_step.batch_max > 1:

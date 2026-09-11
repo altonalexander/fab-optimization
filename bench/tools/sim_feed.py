@@ -89,7 +89,7 @@ KPI_WINDOW_S = 86400       # throughput / cycle time / on-time over a trailing d
 TOOLS_FLUSH_S = 6 * 3600   # per-tool books to the run store this often
 KPI_FIELDS = ('t', 'wip', 'running', 'util', 'thr', 'ct', 'otd', 'tard',
               'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd', 'iq', 'iw',
-              'sutil', 'nscan')
+              'sutil', 'nscan', 'rlock')
 
 # Warm-up is ~3 minutes of CPU per 30 simulated days, so a snapshot is worth
 # keeping. Keyed by everything that changes the trajectory; a cache hit makes a
@@ -279,12 +279,32 @@ def save_checkpoint(path, instance, feed, days):
         instance.plugins = plugins
 
 
-def scale_starts(instance, scale):
+def scale_starts(instance, scale, parts=None):
     """Compress the remaining release schedule by `scale` (compare.py has
     the same function; kept identical so a stored benchmark row and a live
     run at the same scale are the same experiment). Each unreleased lot's
     time-to-release is divided by `scale` and its due date moves by the same
     amount; released lots and WIP are untouched."""
+    if parts:
+        # Per-part ramp (adr/0014). Raising every part's rate uniformly loads
+        # every family and every mask together, which tests capacity as much
+        # as scheduling. Ramping ONE part concentrates the extra demand on
+        # that part's ~25 masks and leaves the other nine alone -- the
+        # asymmetric contention that dedication-skew-70 showed is what makes
+        # the dispatching decision worth anything. It is also what a fab
+        # actually does: products ramp one at a time.
+        now = instance.current_time
+        n = 0
+        for lot in instance.dispatchable_lots:
+            s = parts.get(lot.part_name, scale)
+            if not s or abs(s - 1.0) < 1e-9 or lot.release_at <= now:
+                continue
+            new_rel = now + (lot.release_at - now) / s
+            lot.deadline_at -= lot.release_at - new_rel
+            lot.release_at = new_rel
+            n += 1
+        instance.dispatchable_lots.sort(key=lambda k: k.release_at)
+        return n
     if not scale or abs(scale - 1.0) < 1e-9:
         return 0
     now = instance.current_time
@@ -1080,6 +1100,12 @@ class FeedPlugin(IPlugin):
             'util': round(100.0 * busy / ntools, 1),
             'sutil': round(100.0 * sbusy / nscan, 1) if nscan else None,
             'nscan': nscan,
+            # Masks checked out right now. A run statistic and a deadlock
+            # probe: a claim that is never released shows up as a floor this
+            # never falls below.
+            'rlock': (instance.reticles.locked_now(t)
+                      if getattr(instance, 'reticles', None) is not None
+                      else None),
             'thr': n,                                   # lots completed / day
             'ct': round(sum(cyc) / n / 86400, 3) if n else 0,      # days
             'otd': round(100.0 * (n - len(late)) / n, 1) if n else 0,
