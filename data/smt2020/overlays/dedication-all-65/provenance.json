@@ -1,0 +1,465 @@
+{
+  "capacity": {
+    "DE_BE_11": {
+      "effective_util": 0.8304,
+      "pristine_util": 0.8304,
+      "qualified_per_part": 6,
+      "tools": 9
+    },
+    "DE_BE_12": {
+      "effective_util": 0.8017,
+      "pristine_util": 0.8017,
+      "qualified_per_part": 5,
+      "tools": 7
+    },
+    "DE_BE_13": {
+      "effective_util": 0.7996,
+      "pristine_util": 0.7996,
+      "qualified_per_part": 8,
+      "tools": 13
+    },
+    "DE_BE_48": {
+      "effective_util": 0.8256,
+      "pristine_util": 0.8256,
+      "qualified_per_part": 7,
+      "tools": 11
+    },
+    "DE_BE_50": {
+      "effective_util": 0.8154,
+      "pristine_util": 0.8154,
+      "qualified_per_part": 6,
+      "tools": 10
+    },
+    "DE_BE_65": {
+      "effective_util": 0.7588,
+      "pristine_util": 0.7588,
+      "qualified_per_part": 7,
+      "tools": 11
+    },
+    "DE_BE_66": {
+      "effective_util": 0.7576,
+      "pristine_util": 0.7576,
+      "qualified_per_part": 11,
+      "tools": 17
+    },
+    "DE_BE_67": {
+      "effective_util": 0.7705,
+      "pristine_util": 0.7705,
+      "qualified_per_part": 7,
+      "tools": 11
+    },
+    "DE_BE_69": {
+      "effective_util": 0.5583,
+      "pristine_util": 0.5583,
+      "qualified_per_part": 2,
+      "tools": 3
+    },
+    "DE_FE_1": {
+      "effective_util": 0.7833,
+      "pristine_util": 0.7833,
+      "qualified_per_part": 3,
+      "tools": 5
+    },
+    "DE_FE_51": {
+      "effective_util": 0.8214,
+      "pristine_util": 0.8214,
+      "qualified_per_part": 13,
+      "tools": 20
+    },
+    "DE_FE_53": {
+      "effective_util": 0.6777,
+      "pristine_util": 0.6777,
+      "qualified_per_part": 3,
+      "tools": 5
+    },
+    "DE_FE_54": {
+      "effective_util": 0.6783,
+      "pristine_util": 0.6783,
+      "qualified_per_part": 2,
+      "tools": 3
+    },
+    "DE_FE_56": {
+      "effective_util": 0.7543,
+      "pristine_util": 0.7543,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "DE_FE_58": {
+      "effective_util": 0.7375,
+      "pristine_util": 0.7375,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "DE_FE_59": {
+      "effective_util": 0.7465,
+      "pristine_util": 0.7465,
+      "qualified_per_part": 5,
+      "tools": 8
+    },
+    "DE_FE_62": {
+      "effective_util": 0.8081,
+      "pristine_util": 0.8081,
+      "qualified_per_part": 11,
+      "tools": 17
+    },
+    "DE_FE_70": {
+      "effective_util": 0.8121,
+      "pristine_util": 0.8121,
+      "qualified_per_part": 7,
+      "tools": 11
+    },
+    "DE_FE_71": {
+      "effective_util": 0.8275,
+      "pristine_util": 0.8275,
+      "qualified_per_part": 12,
+      "tools": 18
+    },
+    "DE_FE_72": {
+      "effective_util": 0.7873,
+      "pristine_util": 0.7873,
+      "qualified_per_part": 7,
+      "tools": 11
+    },
+    "DE_FE_86": {
+      "effective_util": 0.8268,
+      "pristine_util": 0.8268,
+      "qualified_per_part": 77,
+      "tools": 118
+    },
+    "DefMEt_FE_118": {
+      "effective_util": 0.7368,
+      "pristine_util": 0.7368,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "DefMet_BE_33": {
+      "effective_util": 0.2229,
+      "pristine_util": 0.2229,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "DefMet_BE_42": {
+      "effective_util": 0.2697,
+      "pristine_util": 0.2697,
+      "qualified_per_part": 1,
+      "tools": 1
+    },
+    "DefMet_FE_10": {
+      "effective_util": 0.7259,
+      "pristine_util": 0.7259,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "DefMet_FE_106": {
+      "effective_util": 0.0501,
+      "pristine_util": 0.0501,
+      "qualified_per_part": 1,
+      "tools": 1
+    },
+    "DefMet_FE_34": {
+      "effective_util": 0.3715,
+      "pristine_util": 0.3715,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "DefMet_FE_43": {
+      "effective_util": 0.7759,
+      "pristine_util": 0.7759,
+      "qualified_per_part": 3,
+      "tools": 5
+    },
+    "Dielectric_BE_21": {
+      "effective_util": 0.7112,
+      "pristine_util": 0.7112,
+      "qualified_per_part": 4,
+      "tools": 6
+    },
+    "Dielectric_BE_28": {
+      "effective_util": 0.7407,
+      "pristine_util": 0.7407,
+      "qualified_per_part": 2,
+      "tools": 3
+    },
+    "Dielectric_FE_112": {
+      "effective_util": 0.6954,
+      "pristine_util": 0.6954,
+      "qualified_per_part": 6,
+      "tools": 9
+    },
+    "Dielectric_FE_29": {
+      "effective_util": 0.5948,
+      "pristine_util": 0.5948,
+      "qualified_per_part": 2,
+      "tools": 3
+    },
+    "Dielectric_FE_31": {
+      "effective_util": 0.7272,
+      "pristine_util": 0.7272,
+      "qualified_per_part": 3,
+      "tools": 4
+    },
+    "Diffusion_BE_123": {
+      "effective_util": 0.6565,
+      "pristine_util": 0.6565,
+      "qualified_per_part": 6,
+      "tools": 9
+    },
+    "Diffusion_FE_100": {
+      "effective_util": 0.7973,
+      "pristine_util": 0.7973,
+      "qualified_per_part": 2,
+      "tools": 3
+    },
+    "Diffusion_FE_101": {
+      "effective_util": 0.684,
+      "pristine_util": 0.684,
+      "qualified_per_part": 6,
+      "tools": 10
+    },
+    "Diffusion_FE_120": {
+      "effective_util": 0.6574,
+      "pristine_util": 0.6574,
+      "qualified_per_part": 5,
+      "tools": 8
+    },
+    "Diffusion_FE_122": {
+      "effective_util": 0.7331,
+      "pristine_util": 0.7331,
+      "qualified_per_part": 4,
+      "tools": 6
+    },
+    "Diffusion_FE_125": {
+      "effective_util": 0.6313,
+      "pristine_util": 0.6313,
+      "qualified_per_part": 3,
+      "tools": 5
+    },
+    "Diffusion_FE_126": {
+      "effective_util": 0.6798,
+      "pristine_util": 0.6798,
+      "qualified_per_part": 3,
+      "tools": 4
+    },
+    "Diffusion_FE_127": {
+      "effective_util": 0.6762,
+      "pristine_util": 0.6762,
+      "qualified_per_part": 5,
+      "tools": 8
+    },
+    "Diffusion_FE_44": {
+      "effective_util": 0.6802,
+      "pristine_util": 0.6802,
+      "qualified_per_part": 5,
+      "tools": 7
+    },
+    "Diffusion_FE_94": {
+      "effective_util": 0.726,
+      "pristine_util": 0.726,
+      "qualified_per_part": 8,
+      "tools": 13
+    },
+    "LithoMet_BE_18": {
+      "effective_util": 0.8892,
+      "pristine_util": 0.8892,
+      "qualified_per_part": 7,
+      "tools": 11
+    },
+    "LithoMet_FE_19": {
+      "effective_util": 0.9073,
+      "pristine_util": 0.9073,
+      "qualified_per_part": 9,
+      "tools": 14
+    },
+    "LithoTrack_BE_117": {
+      "effective_util": 0.7105,
+      "pristine_util": 0.7105,
+      "qualified_per_part": 3,
+      "tools": 5
+    },
+    "LithoTrack_FE_115": {
+      "effective_util": 0.7884,
+      "pristine_util": 0.7884,
+      "qualified_per_part": 27,
+      "tools": 41
+    },
+    "LithoTrack_FE_95": {
+      "effective_util": 0.7285,
+      "pristine_util": 0.7285,
+      "qualified_per_part": 26,
+      "tools": 40
+    },
+    "LithoTrack_FE_96": {
+      "effective_util": 0.6792,
+      "pristine_util": 0.6792,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "Litho_BE_110": {
+      "effective_util": 0.8528,
+      "pristine_util": 0.8528,
+      "qualified_per_part": 15,
+      "tools": 23
+    },
+    "Litho_BE_93": {
+      "effective_util": 0.6752,
+      "pristine_util": 0.6752,
+      "qualified_per_part": 3,
+      "tools": 4
+    },
+    "Litho_BE_99": {
+      "effective_util": 0.5784,
+      "pristine_util": 0.5784,
+      "qualified_per_part": 2,
+      "tools": 3
+    },
+    "Litho_FE_111": {
+      "effective_util": 0.8578,
+      "pristine_util": 0.8578,
+      "qualified_per_part": 13,
+      "tools": 20
+    },
+    "Litho_FE_35": {
+      "effective_util": 0.6428,
+      "pristine_util": 0.6428,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "Litho_FE_92": {
+      "effective_util": 0.8503,
+      "pristine_util": 0.8503,
+      "qualified_per_part": 17,
+      "tools": 26
+    },
+    "Litho_FE_98": {
+      "effective_util": 0.7922,
+      "pristine_util": 0.7922,
+      "qualified_per_part": 3,
+      "tools": 4
+    },
+    "Litho_REG_BE_63": {
+      "effective_util": 0.8091,
+      "pristine_util": 0.8091,
+      "qualified_per_part": 5,
+      "tools": 8
+    },
+    "Litho_REG_FE_64": {
+      "effective_util": 0.8623,
+      "pristine_util": 0.8623,
+      "qualified_per_part": 8,
+      "tools": 12
+    },
+    "TF_Met_FE_45": {
+      "effective_util": 0.171,
+      "pristine_util": 0.171,
+      "qualified_per_part": 2,
+      "tools": 2
+    },
+    "TF_Met_FE_61": {
+      "effective_util": 0.7199,
+      "pristine_util": 0.7199,
+      "qualified_per_part": 2,
+      "tools": 2
+    }
+  },
+  "dataset": "SMT2020_LVHM",
+  "fabwide_pristine_util": 0.5497,
+  "families_constrained": [
+    "DE_BE_11",
+    "DE_BE_12",
+    "DE_BE_13",
+    "DE_BE_48",
+    "DE_BE_50",
+    "DE_BE_65",
+    "DE_BE_66",
+    "DE_BE_67",
+    "DE_BE_69",
+    "DE_FE_1",
+    "DE_FE_51",
+    "DE_FE_53",
+    "DE_FE_54",
+    "DE_FE_59",
+    "DE_FE_62",
+    "DE_FE_70",
+    "DE_FE_71",
+    "DE_FE_72",
+    "DE_FE_86",
+    "DefMet_FE_43",
+    "Dielectric_BE_20",
+    "Dielectric_BE_21",
+    "Dielectric_BE_27",
+    "Dielectric_BE_28",
+    "Dielectric_BE_60",
+    "Dielectric_FE_112",
+    "Dielectric_FE_130",
+    "Dielectric_FE_29",
+    "Dielectric_FE_31",
+    "Diffusion_BE_123",
+    "Diffusion_FE_100",
+    "Diffusion_FE_101",
+    "Diffusion_FE_120",
+    "Diffusion_FE_122",
+    "Diffusion_FE_125",
+    "Diffusion_FE_126",
+    "Diffusion_FE_127",
+    "Diffusion_FE_44",
+    "Diffusion_FE_94",
+    "Implant_128",
+    "Implant_132",
+    "Implant_91",
+    "LithoMet_BE_18",
+    "LithoMet_FE_19",
+    "LithoTrack_BE_117",
+    "LithoTrack_FE_115",
+    "LithoTrack_FE_95",
+    "Litho_BE_110",
+    "Litho_BE_93",
+    "Litho_BE_99",
+    "Litho_FE_111",
+    "Litho_FE_92",
+    "Litho_FE_98",
+    "Litho_REG_BE_63",
+    "Litho_REG_FE_64",
+    "Planar_BE_75",
+    "Planar_FE_79",
+    "TF_BE_2",
+    "TF_BE_23",
+    "TF_BE_24",
+    "TF_BE_26",
+    "TF_BE_40",
+    "TF_FE_103",
+    "TF_FE_104",
+    "TF_FE_113",
+    "TF_FE_131",
+    "TF_FE_3",
+    "TF_FE_5",
+    "WE_BE_14",
+    "WE_BE_16",
+    "WE_BE_81",
+    "WE_BE_82",
+    "WE_BE_9",
+    "WE_FE_108",
+    "WE_FE_41",
+    "WE_FE_47",
+    "WE_FE_83",
+    "WE_FE_84"
+  ],
+  "floors": {
+    "every_tool_qualified": true,
+    "min_tools_per_pair": 2
+  },
+  "fraction": 0.65,
+  "generator": "bench/tools/gen_overlay.py",
+  "generator_version": 1,
+  "machine_naming": "<STNFAM>#<ordinal within family, file order>",
+  "max_util": 0.9,
+  "overlay_seed": 7,
+  "pairs": 780,
+  "pseudo_groups_excluded": [
+    "Delay_32"
+  ],
+  "rework_modelled": false,
+  "scope": "all",
+  "skew": false,
+  "starts_scale_checked": 1.03,
+  "table_hash": "0d31644488dfab85"
+}
