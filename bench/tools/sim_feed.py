@@ -216,7 +216,28 @@ CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
                     '_release_log')
 
 
-def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
+def mix_key(parts):
+    """Checkpoint key fragment for a per-part start mix (adr/0014).
+
+    A fab warmed under a uniform mix has the wrong WIP for a run that ramps
+    one part: with a ~37-day cycle time, an 8-day window from such a
+    checkpoint completes only lots released BEFORE the ramp, so the per-part
+    numbers describe the old mix and the experiment cannot see its own
+    effect. Same argument as adr/0013 §3.5 makes for the qualification
+    matrix. An empty mix contributes nothing, so every existing checkpoint
+    filename is unchanged.
+    """
+    if not parts:
+        return ''
+    import hashlib
+    h = hashlib.blake2b(digest_size=4)
+    for k in sorted(parts):
+        h.update(f'{k}={parts[k]:g}\n'.encode())
+    return f'_mix{h.hexdigest()}'
+
+
+def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
+              parts=None):
     """Where the shared warm-up checkpoint for this configuration lives.
 
     The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
@@ -228,15 +249,17 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
     existing checkpoint filename is unchanged.
     """
     name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}'
-            f'_day{day:g}{overlay_mod.key(overlay)}_h{int(days)}.ckpt')
+            f'_day{day:g}{overlay_mod.key(overlay)}{mix_key(parts)}'
+            f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
-def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
+def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
+              parts=None):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
-    pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay) \
-        .replace('_h0.ckpt', '_h*.ckpt')
+    pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay,
+                    parts).replace('_h0.ckpt', '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
         try:
@@ -1661,6 +1684,13 @@ def main():
                         '(ADR 0013). Keys the warm-up checkpoint and is stamped '
                         'on the run, so an overlay row is never laid over a '
                         'pristine one unlabelled. Omit for the pristine fab.')
+    p.add_argument('--starts-part', action='append', default=None,
+                   metavar='PART=SCALE',
+                   help='ramp ONE part instead of the whole fab, e.g. '
+                        '--starts-part part_1=3.3 (repeatable). Applied during '
+                        'the warm-up too, and keyed into the checkpoint name: '
+                        'a fab warmed under a uniform mix has the wrong WIP '
+                        'for a ramped run (adr/0014).')
     p.add_argument('--starts-scale', type=float, default=1.0,
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them, after the warm-up checkpoint '
@@ -1786,8 +1816,17 @@ def main():
     # Resume from a checkpoint if one covers this run: the warm-up is then
     # paid once per (dataset, seed, dispatcher, batching, day) rather than on
     # every start. --rebuild forces the slow path.
+    a.starts_part_map = None
+    if getattr(a, 'starts_part', None):
+        a.starts_part_map = {}
+        for spec in a.starts_part:
+            part, _, val = spec.partition('=')
+            if not part or not val:
+                p.error(f'--starts-part expects PART=SCALE, got {spec!r}')
+            a.starts_part_map[part] = float(val)
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
-        a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days, ov)
+        a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days,
+        ov, a.starts_part_map)
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1799,11 +1838,13 @@ def main():
                '--batch-strat', a.batch_strat, '--days', str(a.days),
                '--dispatcher', warm_rule, '--warmup-days', str(a.warmup_days),
                '--checkpoint-only', '--no-store', '--speed', '0',
-               '--out', os.devnull] + (['--overlay', a.overlay] if a.overlay else [])
+               '--out', os.devnull] + (['--overlay', a.overlay] if a.overlay else []) \
+              + [f'--starts-part={k}={v:g}'
+                 for k, v in sorted((a.starts_part_map or {}).items())]
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
-                         a.batch_strat, a.days, ov)
+                         a.batch_strat, a.days, ov, a.starts_part_map)
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1848,7 +1889,7 @@ def main():
         t0 = time.time()
         instance = load_checkpoint(ckpt, feed, ov)
         if instance is not None:
-            n = scale_starts(instance, a.starts_scale)
+            n = scale_starts(instance, a.starts_scale, a.starts_part_map)
             if n:
                 print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
             run_to = sim_runner.SECONDS_PER_DAY * a.days
@@ -1873,6 +1914,18 @@ def main():
         # checkpoints was itself simulated under the matrix.
         if ov is not None:
             ov.bind(instance)
+        # Same reasoning for the start mix (adr/0014): the ramp has to be in
+        # force THROUGH the warm-up, not applied to a fab warmed uniform.
+        # Cycle time is ~37 days, so a fab warmed at the uniform mix is full
+        # of pre-ramp lots and a 30-day window measures the OLD mix draining.
+        # The checkpoint name carries the mix (`mix_key`) so the two can
+        # never be confused.
+        if a.starts_part_map:
+            n = scale_starts(instance, 1.0, a.starts_part_map)
+            print(f'  start mix: {n} future releases re-timed for '
+                  + ', '.join(f'{k}x{v:g}' for k, v in
+                              sorted(a.starts_part_map.items())),
+                  file=sys.stderr)
 
     def before_dispatch(instance):
         nonlocal warmed, next_report
@@ -1913,7 +1966,7 @@ def main():
                                kpi=feed._kpi)
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
-                              a.batch_strat, a.days, ov)
+                              a.batch_strat, a.days, ov, a.starts_part_map)
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)

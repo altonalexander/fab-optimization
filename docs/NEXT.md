@@ -113,13 +113,30 @@ the wire; see 0013 §2 before adding anything to `LOT_READY`.
       reading is *untested* rather than *refuted*: these matrices are mild
       enough that `fifo` holds 98–99% on-time on every fab. The harder
       `all-65` / `skew-70` rows are the tiebreak before the reticle branch.
-- [ ] **Reticles** per (part, litho layer): exclusive across scanners, transport
-      delay between them, two copies for high-volume parts. Simulator gets a
-      reticle resource; `LOT_READY` gains a reticle id; the C++ planner's
-      reticle fields start to bind; the litho scene draws the library. Next
-      overlay if dedication alone does not separate the rules (0013 §7).
+- [x] **Reticles** per (part, litho layer) — **built, ADR 0014.** Exclusive
+      across scanners, transport between them, copies per layer. The simulator
+      has the resource, `slate_rule` sends the reticle id and the scanner set,
+      and the C++ planner's reticle fields now bind (both paths have carried
+      `AddAtMostOne` over scanners sharing a mask since 0009; nothing had ever
+      fed them an id). Gates held: pristine fp `8d77d45c4c2654a3` unchanged,
+      every 0013 overlay hashes as before, 97/97 C++ tests pass.
+- [ ] **Make the masks contend, which is the open question** (0014 §6). The
+      coupling argument is necessary and not sufficient: with transport zeroed
+      the library is indistinguishable from pristine on LVHM at 1.00× (493
+      lots against 495), because 251 masks over 82 scanners sit at ~27% of a
+      mask-day and a blocked lot never idles a scanner. A mask has to be
+      scarce enough that blocking propagates. For a high-mix fab the lever is
+      **volume, not mix**: `--starts-part part_1=3.3` takes one part's masks
+      to ~89% while the rest scale down to hold total starts at 57 lots/day.
+      Warm under the mix (the checkpoint key carries it) and read `by_part` —
+      a fab-wide average cannot register a mask on a high-mix fab.
 - [ ] **Queue-time enforcement** (CQT columns): scrap or rework on violation;
       un-inert the planner's q-time term (`QTIME_INERT` in `slate_rule.py`).
+      Named in 0014 §5 as the successor if masks do not separate the rules,
+      on the same "built and inert" grounds — and because it is the only
+      candidate that gives the fab a way to **lose work**. Today a bad
+      decision can only make a lot late, and tardiness below the knee is a
+      few lot-days across 1,300 tools.
 - [ ] Sequence-dependent track setups — only if the loss analysis names
       setups as a material loss.
 - [ ] Rerun the starts grid on the overlay; same page, with and without.

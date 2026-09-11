@@ -72,21 +72,45 @@ def kpis(instance, warm_from):
     transient so the numbers describe steady state.
     """
     ct, on_time, tard, n = [], 0, 0.0, 0
+    # Per part as well as fab-wide (ADR 0014). On a HIGH-MIX fab a saturated
+    # reticle cannot show up in a fab-wide number: when one part's mask blocks
+    # a lot, the scanner simply takes one of the ~250 other layers, so the fab
+    # stays busy and the damage lands entirely on the blocked part's own cycle
+    # time and on-time. Averaging over every part is structurally blind to the
+    # effect being measured, which is how the first mix-shift run read as a
+    # no-op.
+    per = {}
     for lot in instance.done_lots:
         if lot.done_at is None or lot.done_at < warm_from:
             continue
         n += 1
-        ct.append((lot.done_at - lot.release_at) / SECONDS_PER_DAY)
+        c = (lot.done_at - lot.release_at) / SECONDS_PER_DAY
+        ct.append(c)
         late = lot.done_at - lot.deadline_at
+        p = per.setdefault(lot.part_name, {'n': 0, 'ct': 0.0,
+                                           'ot': 0, 'tard': 0.0})
+        p['n'] += 1
+        p['ct'] += c
         if late <= 0:
             on_time += 1
+            p['ot'] += 1
         else:
             tard += late / SECONDS_PER_DAY
+            p['tard'] += late / SECONDS_PER_DAY
+    by_part = {}
+    for name, p in sorted(per.items()):
+        by_part[name] = {
+            'throughput': p['n'],
+            'cycle_time_days': round(p['ct'] / p['n'], 4) if p['n'] else 0.0,
+            'on_time_pct': round(100.0 * p['ot'] / p['n'], 2) if p['n'] else 0.0,
+            'tardiness_lot_days': round(p['tard'], 2),
+        }
     return {
         'throughput': n,
         'cycle_time_days': round(sum(ct) / len(ct), 4) if ct else 0.0,
         'on_time_pct': round(100.0 * on_time / n, 2) if n else 0.0,
         'tardiness_lot_days': round(tard, 2),
+        'by_part': by_part,
     }
 
 
@@ -170,8 +194,10 @@ def warm_checkpoint(args):
     """
     import sim_feed
     ov = args.overlay_obj
+    mix = getattr(args, 'starts_part_map', None)
     ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
-                            args.warmup_days, args.batch_strat, args.days, ov)
+                            args.warmup_days, args.batch_strat, args.days, ov,
+                            mix)
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
               f'{args.warmup_days:g} (horizon >= {args.days}d'
@@ -184,11 +210,13 @@ def warm_checkpoint(args):
                '--dispatcher', args.warmup_dispatcher,
                '--warmup-days', str(args.warmup_days),
                '--checkpoint-only', '--no-store', '--speed', '0',
-               '--out', os.devnull] + (['--overlay', ov.name] if ov else [])
+               '--out', os.devnull] + (['--overlay', ov.name] if ov else []) \
+              + [f'--starts-part={k}={v:g}' for k, v in sorted((mix or {}).items())]
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
-                                args.warmup_days, args.batch_strat, args.days, ov)
+                                args.warmup_days, args.batch_strat, args.days,
+                                ov, mix)
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
