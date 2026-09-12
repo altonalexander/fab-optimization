@@ -399,6 +399,7 @@ def run_one(spec, args):
     # so a warmed fab always matches the enforcement it is being run under.
     instance.cqt_enforce = bool(getattr(args, 'cqt', False))
     instance.cqt_scale = float(getattr(args, 'cqt_scale', 1.0) or 1.0)
+    instance.cqt_rework = not bool(getattr(args, 'cqt_no_rework', False))
 
     resumed = bool(args.warmup_days and not use_reset)
     scale_starts(instance, getattr(args, 'starts_scale', 1.0),
@@ -458,6 +459,7 @@ def run_one(spec, args):
         'scale': float(getattr(args, 'cqt_scale', 1.0) or 1.0),
         'violations': getattr(instance, 'counter_cqt_violated', 0),
         'reworks': getattr(instance, 'counter_cqt_rework', 0),
+        'rework_enabled': bool(getattr(instance, 'cqt_rework', True)),
     }
     # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
     # per-sample tool counts over the reporting window gives tool-hours; the
@@ -609,6 +611,10 @@ def main():
                         'default: adr/0008 records that these are parsed and '
                         'ignored, and every published row was produced that '
                         'way.')
+    p.add_argument('--cqt-no-rework', action='store_true',
+                   help='count queue-time violations but do NOT rework the '
+                        'lot. Opens the feedback loop so its contribution can '
+                        'be separated from the constraint (adr/0017 §3).')
     p.add_argument('--cqt-scale', type=float, default=1.0,
                    help='multiply every queue-time window: >1 loosens, <1 '
                         'tightens. The Y axis of adr/0017 grid.')

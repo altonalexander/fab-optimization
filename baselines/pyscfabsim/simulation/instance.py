@@ -50,6 +50,14 @@ class Instance:
     cqt_enforce = False
     cqt_scale = 1.0
 
+    # cqt_rework=False counts violations but does NOT reroute the lot. That
+    # opens the feedback loop ADR 0017 §3 predicts -- violations feed rework
+    # feeds load feeds queues feeds violations -- so the same grid run with
+    # this on and off isolates the loop's contribution from the constraint's.
+    # If the two look the same, rework is a flat tax and the feedback story
+    # is wrong.
+    cqt_rework = True
+
     def eligible(self, lot, machine):
         """Can `machine` run `lot` at the step it is waiting for?
 
@@ -236,7 +244,7 @@ class Instance:
                 # Scanned from the END: routes are re-entrant, so the same
                 # Step object can appear several times in processed_steps and
                 # the most recent visit is the one that opened this window.
-                if lot.cqt_violated:
+                if lot.cqt_violated and self.cqt_rework:
                     lot.cqt_violated = False
                     tgt = lot.cqt_open_step
                     pos = None
@@ -249,6 +257,11 @@ class Instance:
                         lot.processed_steps = lot.processed_steps[:pos]
                         lot.remaining_steps = removed + lot.remaining_steps
                         self.counter_cqt_rework += 1
+                    lot.cqt_open_step = None
+                elif lot.cqt_violated:
+                    # Counted, not rerouted. The flag must still be cleared
+                    # or it would fire on the next window this lot opens.
+                    lot.cqt_violated = False
                     lot.cqt_open_step = None
                 lot.actual_step, lot.remaining_steps = lot.remaining_steps[0], lot.remaining_steps[1:]
                 if lot.actual_step.has_to_perform():
