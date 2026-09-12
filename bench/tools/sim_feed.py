@@ -217,7 +217,14 @@ CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
                     '_release_log')
 
 
-def cqt_key(enforce, scale):
+def _mx(a):
+    """The rework cap off the parsed args; 0 on the command line means the
+    unbounded behaviour, which the key represents as no fragment at all."""
+    v = getattr(a, 'cqt_max_rework', 3)
+    return None if not v else int(v)
+
+
+def cqt_key(enforce, scale, max_rework=3):
     """Checkpoint key fragment for queue-time enforcement (adr/0016).
 
     A fab warmed WITHOUT enforcement has different WIP from one warmed with
@@ -225,10 +232,18 @@ def cqt_key(enforce, scale):
     share a checkpoint, for the reason adr/0013 §3.5 gives about the
     qualification matrix. Empty when off, so every existing checkpoint
     filename is unchanged.
+
+    The rework cap folds in too, and for the same reason: capped and
+    uncapped warm-ups are different fabs -- uncapped traps lots forever
+    (adr/0016 §6), capped scraps them. Only when enforcement is on, so every
+    non-cqt checkpoint filename is still unchanged. Checkpoints built before
+    the cap existed carry no 'r' fragment and are therefore orphaned rather
+    than silently reused, which is the point.
     """
     if not enforce:
         return ''
-    return '_cqt' if abs(scale - 1.0) < 1e-9 else f'_cqt{scale:g}'
+    base = '_cqt' if abs(scale - 1.0) < 1e-9 else f'_cqt{scale:g}'
+    return base + ('' if max_rework is None else f'r{int(max_rework)}')
 
 
 def mix_key(parts):
@@ -252,7 +267,8 @@ def mix_key(parts):
 
 
 def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
-              parts=None, trim=None, cqt=False, cqt_scale=1.0):
+              parts=None, trim=None, cqt=False, cqt_scale=1.0,
+              cqt_max_rework=3):
     """Where the shared warm-up checkpoint for this configuration lives.
 
     The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
@@ -265,17 +281,20 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
     """
     name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}'
             f'_day{day:g}{overlay_mod.key(overlay)}{mix_key(parts)}'
-            f'{trim_mod.key(trim)}{cqt_key(cqt, cqt_scale)}'
+            f'{trim_mod.key(trim)}'
+            f'{cqt_key(cqt, cqt_scale, cqt_max_rework)}'
             f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
 def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
-              parts=None, trim=None, cqt=False, cqt_scale=1.0):
+              parts=None, trim=None, cqt=False, cqt_scale=1.0,
+              cqt_max_rework=3):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
     pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay,
-                    parts, trim, cqt, cqt_scale).replace('_h0.ckpt',
+                    parts, trim, cqt, cqt_scale,
+                    cqt_max_rework).replace('_h0.ckpt',
                                                          '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
@@ -1711,6 +1730,9 @@ def main():
                         'pristine one unlabelled. Omit for the pristine fab.')
     p.add_argument('--cqt', action='store_true',
                    help='enforce the dataset queue-time windows (adr/0016)')
+    p.add_argument('--cqt-max-rework', type=int, default=3,
+                   help='scrap a lot after this many queue-time reworks; 0 '
+                        'means unbounded (adr/0016 §6)')
     p.add_argument('--cqt-scale', type=float, default=1.0,
                    help='multiply every queue-time window (adr/0016)')
     p.add_argument('--trim', default=None,
@@ -1860,7 +1882,8 @@ def main():
             a.starts_part_map[part] = float(val)
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
         a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days,
-        ov, a.starts_part_map, a.trim_obj, a.cqt, a.cqt_scale)
+        ov, a.starts_part_map, a.trim_obj, a.cqt, a.cqt_scale,
+        _mx(a))
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1879,7 +1902,7 @@ def main():
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
                          a.batch_strat, a.days, ov, a.starts_part_map,
-                         a.trim_obj, a.cqt, a.cqt_scale)
+                         a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1930,6 +1953,7 @@ def main():
             # is not in the key and does still apply here.
             instance.cqt_enforce = bool(a.cqt)
             instance.cqt_scale = float(a.cqt_scale or 1.0)
+            instance.cqt_max_rework = _mx(a)
             n = scale_starts(instance, a.starts_scale)
             if n:
                 print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
@@ -1964,6 +1988,7 @@ def main():
         # never be confused.
         instance.cqt_enforce = bool(a.cqt)
         instance.cqt_scale = float(a.cqt_scale or 1.0)
+        instance.cqt_max_rework = _mx(a)
         if a.starts_part_map:
             n = scale_starts(instance, 1.0, a.starts_part_map)
             print(f'  start mix: {n} future releases re-timed for '
@@ -2011,7 +2036,7 @@ def main():
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
                               a.batch_strat, a.days, ov, a.starts_part_map,
-                              a.trim_obj, a.cqt, a.cqt_scale)
+                              a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)

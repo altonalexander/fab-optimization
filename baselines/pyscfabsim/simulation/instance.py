@@ -58,6 +58,19 @@ class Instance:
     # is wrong.
     cqt_rework = True
 
+    # A lot cannot be reworked forever. Measured on a 30-day cold run at
+    # window scale 8: 422 violations fell on just 12 lots, six of which
+    # reworked 20+ times and one 83 times -- the reroute was an ABSORBING
+    # STATE, not a cost. Those lots never leave, so WIP climbs while the
+    # fab-wide utilisation FALLS (30% against an 80% control) because the
+    # trapped work concentrates on a handful of steps and starves the rest.
+    # That is not a fab; it is a missing termination rule. A real fab scraps
+    # material that has missed its window too many times, and the scrap is
+    # the loss that gives queue time its teeth.
+    #
+    # None restores the old unbounded behaviour, for reproducing the above.
+    cqt_max_rework = 3
+
     def eligible(self, lot, machine):
         """Can `machine` run `lot` at the step it is waiting for?
 
@@ -159,6 +172,8 @@ class Instance:
         #self.setup_per_timestep_when_needed = {}
         self.counter_cqt_violated = 0
         self.counter_cqt_rework = 0      # violations that actually rerouted
+        self.counter_cqt_scrapped = 0    # lots scrapped at the rework cap
+        self.scrapped_lots: List[Lot] = []
 
         self.current_time = 0 
 
@@ -221,6 +236,7 @@ class Instance:
         for lot in lots:
             lot.free_since = self.current_time
             step_found = False
+            scrapped = False
             while len(lot.remaining_steps) > 0:
                 old_step = None
                 if lot.actual_step is not None:
@@ -246,6 +262,22 @@ class Instance:
                 # the most recent visit is the one that opened this window.
                 if lot.cqt_violated and self.cqt_rework:
                     lot.cqt_violated = False
+                    lot.cqt_reworks = getattr(lot, 'cqt_reworks', 0) + 1
+                    if (self.cqt_max_rework is not None
+                            and lot.cqt_reworks > self.cqt_max_rework):
+                        # Scrapped, not shipped: it leaves active_lots and is
+                        # deliberately NOT appended to done_lots, so it counts
+                        # against throughput and never against on-time. A
+                        # scrapped lot that landed in done_lots would read as
+                        # a completion and hide the loss entirely.
+                        lot.cqt_open_step = None
+                        lot.cqt_scrapped = True
+                        lot.scrapped_at = self.current_time
+                        self.counter_cqt_scrapped += 1
+                        self.active_lots.remove(lot)
+                        self.scrapped_lots.append(lot)
+                        scrapped = True
+                        break
                     tgt = lot.cqt_open_step
                     pos = None
                     for i in range(len(lot.processed_steps) - 1, -1, -1):
@@ -270,6 +302,8 @@ class Instance:
                     for plugin in self.plugins:
                         plugin.on_step_done(self, lot, old_step)
                     break
+            if scrapped:
+                continue
             if not step_found:
                 assert len(lot.remaining_steps) == 0
                 lot.actual_step = None

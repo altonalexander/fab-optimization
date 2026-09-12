@@ -230,6 +230,13 @@ def make_rule(spec, instance, args):
     return spec          # a plain name; sim_runner resolves it
 
 
+def _mxr(args):
+    """The queue-time rework cap, as the checkpoint key wants it. 0 on the
+    command line means unbounded, which the key represents as no fragment."""
+    v = getattr(args, 'cqt_max_rework', 3)
+    return None if not v else int(v)
+
+
 def warm_checkpoint(args):
     """The shared warm-up checkpoint for this run, building it if missing.
 
@@ -244,7 +251,8 @@ def warm_checkpoint(args):
     ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                             args.warmup_days, args.batch_strat, args.days, ov,
                             mix, tr, getattr(args, 'cqt', False),
-                            getattr(args, 'cqt_scale', 1.0))
+                            getattr(args, 'cqt_scale', 1.0),
+                            _mxr(args))
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
               f'{args.warmup_days:g} (horizon >= {args.days}d'
@@ -262,13 +270,16 @@ def warm_checkpoint(args):
               + (['--trim', args.trim] if getattr(args, 'trim', None) else []) \
               + (['--cqt'] if getattr(args, 'cqt', False) else []) \
               + ([f'--cqt-scale={args.cqt_scale:g}']
-                 if abs(getattr(args, 'cqt_scale', 1.0) - 1.0) > 1e-9 else [])
+                 if abs(getattr(args, 'cqt_scale', 1.0) - 1.0) > 1e-9 else []) \
+              + ([f'--cqt-max-rework={int(getattr(args, "cqt_max_rework", 3))}']
+                 if getattr(args, 'cqt', False) else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                                 args.warmup_days, args.batch_strat, args.days,
                                 ov, mix, tr, getattr(args, 'cqt', False),
-                                getattr(args, 'cqt_scale', 1.0))
+                                getattr(args, 'cqt_scale', 1.0),
+                                _mxr(args))
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
@@ -400,6 +411,8 @@ def run_one(spec, args):
     instance.cqt_enforce = bool(getattr(args, 'cqt', False))
     instance.cqt_scale = float(getattr(args, 'cqt_scale', 1.0) or 1.0)
     instance.cqt_rework = not bool(getattr(args, 'cqt_no_rework', False))
+    _mx = getattr(args, 'cqt_max_rework', 3)
+    instance.cqt_max_rework = None if not _mx else int(_mx)
 
     resumed = bool(args.warmup_days and not use_reset)
     scale_starts(instance, getattr(args, 'starts_scale', 1.0),
@@ -460,6 +473,8 @@ def run_one(spec, args):
         'violations': getattr(instance, 'counter_cqt_violated', 0),
         'reworks': getattr(instance, 'counter_cqt_rework', 0),
         'rework_enabled': bool(getattr(instance, 'cqt_rework', True)),
+        'max_rework': getattr(instance, 'cqt_max_rework', None),
+        'scrapped': getattr(instance, 'counter_cqt_scrapped', 0),
     }
     # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
     # per-sample tool counts over the reporting window gives tool-hours; the
@@ -618,6 +633,12 @@ def main():
     p.add_argument('--cqt-scale', type=float, default=1.0,
                    help='multiply every queue-time window: >1 loosens, <1 '
                         'tightens. The Y axis of adr/0017 grid.')
+    p.add_argument('--cqt-max-rework', type=int, default=3,
+                   help='scrap a lot after this many queue-time reworks. 0 '
+                        'means unbounded, which is what produced the '
+                        'absorbing state of adr/0016 §6: 422 violations on 12 '
+                        'lots, one reworked 83 times, utilisation 30%% '
+                        'against an 80%% control.')
     p.add_argument('--trim', default=None,
                    help='right-size the tool set from a trim table beside the '
                         'dataset, e.g. --trim trim-82 (adr/0015)')
