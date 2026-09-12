@@ -14,7 +14,7 @@ overturn it. Not how anything works — that lives beside the code.
 | [0006](0006-zeromq-inbound-kafka-outbound.md) | ZeroMQ inbound, Kafka outbound: the transport split |
 | [0007](0007-playback-is-a-cursor-not-a-throttle.md) | Playback is a cursor, not a throttle: run unpaced, replay at will |
 | [0008](0008-what-pyscfabsim-simplifies.md) | What PySCFabSim simplifies (transport, delay, storage, CQT), and what that hides |
-| [0009](0009-slate-rule-hybrid-split.md) | `slate_rule`: where the line between Python and C++ falls |
+| [0009](0009-slate-rule-hybrid-split.md) | `slate_rule`: where the line between Python and C++ falls (built and measured; the solve is 60% of a slate run, marshalling 13% — family-level parallelism is the ~2.1× left on the table) |
 | [0010](0010-look-ahead-dispatch-the-hold-decision.md) | Look-ahead dispatch: let a tool hold for a predictable arrival (proposed) |
 | [0011](0011-downstream-aware-dispatch.md) | Downstream-aware dispatch: push bottleneck and batch need back up the route (proposed) |
 | [0012](0012-starts-knee-and-what-the-slate-optimises.md) | The starts knee, what the slate optimises, and look-ahead coverage (measured; sets cr fallback + 900 s horizon as defaults) |

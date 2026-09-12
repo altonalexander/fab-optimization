@@ -1,6 +1,7 @@
 # 0016 — Queue-time enforcement: give the fab a way to lose work
 
-**Status:** Proposed, 2026-09-12. Plan only; no code, no numbers. Successor to
+**Status:** **Implemented 2026-09-12**; §6 records what the first runs found
+and what had to be fixed. §1–§5 are the original plan, unedited. Successor to
 ADR 0014, whose answer was that the real-time layer should be a sort key — and
 the one candidate left that changes the *shape* of the problem rather than its
 strength. Gated on [ADR 0015](0015-right-sizing-the-tool-set.md): a constraint

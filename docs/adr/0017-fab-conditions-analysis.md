@@ -1,8 +1,9 @@
 # 0017 — Fab conditions analysis: find the cliff, then operate just past it
 
-**Status:** Proposed, 2026-09-12. Design only; the grid runs after
-[ADR 0016](0016-queue-time-enforcement.md) is built, because the mechanism
-that makes the cliff sharp does not exist yet.
+**Status:** **In progress, 2026-09-12.** §1–§7 are the original design,
+unedited. §8 records what the first attempt found: the pre-flight gate killed
+the matrix before it ran, and the admissibility criterion §5 states in advance
+turned out to be insufficient once scrap existed.
 
 Companion to 0016 rather than a successor to anything: 0013–0014 asked *does
 the solver help*, this asks *under what conditions could it*, and answers the

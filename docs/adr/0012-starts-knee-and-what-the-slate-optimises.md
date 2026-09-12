@@ -154,8 +154,12 @@ remaining ones stand.
 
 - ~~A 120-day row where the reworked slate does not hold on-time within a
   point of cr at 1.03×~~ — tested, holds (99.0 vs 98.6).
-- An overlay fab (reticles, dedication, q-times) where the assignment
+- ~~An overlay fab (reticles, dedication, q-times) where the assignment
   solver still adds nothing over a sort → drop CP-SAT from the real-time
-  layer and keep it for the segment schedule only.
+  layer and keep it for the segment schedule only.~~ — **met, 2026-09-12.**
+  Dedication ([0013](0013-tool-dedication-overlay.md)) and reticles
+  ([0014](0014-reticle-overlay.md)) were both built and fed; `slate`
+  recovered −0.09% against `cr` at 14.4× the compute. The consequence named
+  here is the one [0014 §7](0014-reticle-overlay.md) draws.
 - WIP settling at 1.05× over 120 days → the knee is at or above 1.05 and
   the grid should be re-run at 1.05–1.10 in 2% steps.

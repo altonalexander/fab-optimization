@@ -1,6 +1,6 @@
 # 0009 — `slate_rule`: where the line between Python and C++ falls
 
-**Status:** Accepted, being built. Supersedes the integration half of
+**Status:** Accepted; **built and measured.** Supersedes the integration half of
 [0002](0002-dispatcher-inside-pyscfabsim.md); the experiment 0002 describes is
 unchanged, this records how it is wired.
 
@@ -208,3 +208,78 @@ not remove it. That remains an informative result, not a bug.
   dependency and 0002's original preference stands.
 - `slate` losing to `cr` on cycle time *because* of missing sequencing. That
   argues for a time-indexed model, which is a different ADR.
+
+---
+
+## Measured, 2026-09-12: where a slate run's time actually goes
+
+§"What would change this" named the condition — "a measured rebuild cost that
+stays intolerable after per-family decomposition and lazy invalidation" — and
+predicted the response would be a coarser trigger rather than a different
+language. The measurement is now in hand and the prediction holds, but the
+reason is not the one anyone had been repeating.
+
+`cProfile` over a 2-day LVHM slate run, `solver=cpsat`, `cycle=60s`,
+2,679 rebuilds:
+
+| | seconds | share |
+|---|---:|---:|
+| **total** | **1093.4** | |
+| `fabslate.plan` — self time, i.e. inside the ctypes call | **659.2** | **60.3%** |
+| `slate_rule.rebuild` — cumulative | 900.1 | 82.3% |
+| …of which the Python side (all prep + marshalling) | 145.1 | 13.3% |
+| …of which the named marshalling helpers | 138.7 | 12.7% |
+| the simulator's own `instance.dispatch` | 139.5 | 12.8% |
+
+Two ceilings follow directly, and they are the numbers to plan against:
+
+- **remove every byte of Python marshalling → 1.15×**
+- **make the solve free → 2.52×**
+
+Cross-checked by a second, independent route: the same run under `greedy`
+instead of `cpsat`, with byte-identical marshalling, takes 202.6 s against
+888.7 s. That attributes 686 s to the solver choice, against 659 s of `plan`
+self-time here — two methods, 4% apart.
+
+### The claim this retires
+
+"Marshalling, not the solve, is the run's cost" was **true of the first cut**
+and is preserved as such in the comment at `slate_rule.py:238`. That version
+sent all ~2,500 waiting lots across the boundary every cycle and rebuilt 1,313
+tool structs with them, ~1,440 times per simulated day. Lazy invalidation and
+per-family decomposition — §Consequence 2 — fixed it, and in doing so **moved
+the bottleneck onto the solve.** The statement should not be repeated about the
+current code, and an estimate of a full C++ port built on it (≈10×) is wrong by
+most of an order of magnitude: with the simulator itself at 12.8% and the solve
+already in OR-Tools' C++, the honest figure is ≈1.3×.
+
+### The lever that is actually available
+
+`Planner::plan_by_family` walks families in a **serial** `for` loop, one
+`backend_->solve()` at a time (`planner.hpp:179`). §Consequence 2 already
+established that the families are independent — the eligibility matrix is
+block-diagonal, there are no cross-family constraints, and the one coupling
+(reticle exclusivity) is litho-internal — and said in as many words that they
+are "independent and parallelizable." They are simply not parallelized.
+
+At 60.3% solve, Amdahl puts an 8-way family-parallel rebuild at ≈2.1× and a
+16-way at ≈2.3× — that is most of the 2.52× that exists at all. The likely
+shape is one family per worker at `threads=1`, rather than today's single
+family handed `cfg.threads`: a ~300-variable model does not repay intra-solve
+threading, and the parallelism is better spent across families.
+
+### Why this is recorded and not built
+
+Deliberate, with a trigger, so it is not mistaken for an oversight:
+
+1. **Nothing currently running would get faster.** The ADR 0017 grid is
+   `fifo` and `cr`; no slate code executes in it.
+2. **[ADR 0014](0014-reticle-overlay.md) is a verdict against `slate`.** Until
+   [0017](0017-fab-conditions-analysis.md) finds an operating point where
+   assignment beats ordering, there is no run that needs this speed, and if it
+   finds none the work is wasted entirely.
+3. The remaining 1.15× from marshalling is not worth the ctypes surface it
+   would cost.
+
+**Trigger: the first time 0017 yields an operating point that needs `slate` at
+volume.** The work then is family-level parallelism, not marshalling.
