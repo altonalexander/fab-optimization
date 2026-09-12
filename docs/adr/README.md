@@ -18,7 +18,12 @@ overturn it. Not how anything works — that lives beside the code.
 | [0010](0010-look-ahead-dispatch-the-hold-decision.md) | Look-ahead dispatch: let a tool hold for a predictable arrival (proposed) |
 | [0011](0011-downstream-aware-dispatch.md) | Downstream-aware dispatch: push bottleneck and batch need back up the route (proposed) |
 | [0012](0012-starts-knee-and-what-the-slate-optimises.md) | The starts knee, what the slate optimises, and look-ahead coverage (measured; sets cr fallback + 900 s horizon as defaults) |
-| [0013](0013-tool-dedication-overlay.md) | Tool dedication overlay: qualification matrices beside the testbed, read by simulator and solver alike; the ADR 0012 overturn test (proposed, hand-off plan) |
+| [0013](0013-tool-dedication-overlay.md) | Tool dedication overlay: qualification matrices beside the testbed, read by simulator and solver alike (implemented; the rules did not separate — qualification is a unary constraint and a sort key handles it) |
+| [0014](0014-reticle-overlay.md) | Reticle overlay: the coupling constraint the solver already had and nothing ever fed (implemented and **answered** — the real-time layer should be a sort key; ADR 0012's overturn condition is met) |
+
+Plain-language write-up of how 0012 → 0013 → 0014 played out, including the
+three ways the measurements lied on the way:
+[`docs/notes/2026-09-12-does-the-solver-earn-its-place.md`](../notes/2026-09-12-does-the-solver-earn-its-place.md).
 
 ## Why these are central and not filed under bench/ or dispatch/
 
