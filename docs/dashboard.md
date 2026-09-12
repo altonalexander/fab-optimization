@@ -29,12 +29,20 @@ the sim clock) pauses and resumes the simulated fab and sets the replay
 speed from 1x to 1600x. It changes pacing only — the run, its seed and every
 decision are unchanged, so the same fab can be watched slowly or raced
 through; this is working, and the dashboard's choice persists across API
-restarts. The **Assistant** rail is a conceptual mockup of where an
-operator would ask the fab questions in plain language — "what happens if
-LITHO_03 goes down?", "which tool is the bottleneck?" — with answers
-grounded in the live state and the same C++ planner the dispatcher uses,
-read-only by construction. The panel and its tool contract exist; it is not
-wired to a model in this checkout.
+restarts. The **Assistant** rail answers questions about the fab in plain
+language — "what happens if LITHO_03 goes down?", "which tool is the
+bottleneck?", "what does this chart mean?" — and is wired to Gemini Flash on
+Vertex AI through `/api/chat`. Questions the documentation answers come back
+in one round trip with no tool call, because the help guide is resident in the
+prompt; questions about live state call the page's own endpoint, the Kafka
+mirror, or the same C++ planner the dispatcher uses. It is read-only by
+construction, every number comes from a tool result rather than model recall,
+and a trace chip above each reply names the tools that ran. Design and
+rationale: [`docs/adr/0018`](adr/0018-dashboard-assistant.md).
+
+It needs credentials to run: without Application Default Credentials or
+`GOOGLE_CLOUD_PROJECT` the panel reports itself unavailable rather than
+guessing.
 
 ### Lots — cohort burndown
 ![lots](screenshots/lots.png)
