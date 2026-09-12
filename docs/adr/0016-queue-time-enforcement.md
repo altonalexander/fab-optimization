@@ -136,3 +136,92 @@ That is a genuinely useful outcome and should be written up as one. The
 alternative failure — that nothing ever violates a queue time — is a weaker
 result and means the windows need tightening before the question has been
 asked at all.
+
+---
+
+## 6. Measured, 2026-09-12: the reroute was an absorbing state
+
+§4 anticipated that scrap would be the awkward part — "the `done_lots` path
+assumes a lot finishes its route." It was awkward for the opposite reason to
+the one expected. Scrap was not hard to model; **the absence of it** was the
+defect, and it did not present as a modelling gap. It presented as a fab that
+diverged.
+
+### 6.1 What it looked like
+
+A 90-day warm-up under enforcement reached WIP 6551 against a 2053 no-q-time
+control, with fab-wide utilisation at **30.4%** against 80.5%, and
+idle-tool-hours-with-eligible-WIP-waiting up from 335 to 1053 per day.
+
+The reading that does not work is overload. An overloaded fab pins its
+bottleneck near 100% and queues WIP in front of it; here the busiest family
+was 91.5%, most were near zero, and tools sat idle while lots they were
+qualified to run waited. **Utilisation falling while WIP climbs means work is
+being blocked, not added.** That is the same signature as the ADR 0014 §3.3
+defect — a resource test used as an eligibility filter — and it was again
+mistaken for a capacity cliff on first reading.
+
+### 6.2 What it was
+
+A depth probe over 30 cold days at window scale 8: **422 violations fell on
+twelve lots.** Six reworked twenty or more times, one reworked 83 times, and
+the violations concentrated on six step orders out of the route.
+
+A lot violated its window, rerouted to the step that opened it, failed the
+window again on the way forward, and cycled. Nothing terminated the loop, so
+those lots never left. WIP accumulated as trapped material, concentrated on a
+handful of steps, and starved the rest of the fab — which is why utilisation
+fell rather than rose.
+
+The fab-wide counter could not show this. 2772 violations/day against 6500 WIP
+is consistent with both a broad tax spread over most lots and an absorbing
+state on a few, and those demand opposite responses. Only the **distribution**
+separates them, and nothing recorded it.
+
+### 6.3 The fix, and what it says about the model
+
+`cqt_max_rework` (default 3): past the cap the lot is **scrapped** — removed
+from `active_lots` and deliberately *not* appended to `done_lots`, so it
+counts against throughput and never as an on-time completion. A scrapped lot
+in `done_lots` would read as a completion and hide the loss entirely.
+
+This is not a workaround. Unbounded rework is the unrealistic part: a real fab
+does not rework material indefinitely, it scraps it, and that scrap is the
+loss this ADR set out to introduce. §2 argued queue time is the one constraint
+class that is a *deadline with loss* — and the loss was missing from the
+implementation. What existed was a deadline with a retry.
+
+Verified rather than assumed:
+
+| arm, 40 cold days | tput | WIP | util | idle-qual | viol | scrap |
+|---|---:|---:|---:|---:|---:|---:|
+| no q-time (control) | 2380 | 2054 | 81.9 | 323 | 0 | 0 |
+| scale 8, detection only | **2380** | **2054** | **81.9** | **323** | 300 | 0 |
+| scale 8, loop closed | 1932 | 2502 | 81.6 | 330 | 734 | 0 |
+| scale 4, loop closed, **uncapped** | 700 | 3734 | **44.4** | 787 | 14518 | — |
+| scale 4, loop closed, **capped** | 1612 | 2070 | 61.8 | 604 | 5216 | 752 |
+
+- **Detection is free.** Digit-identical to the control on every field, at 40
+  days as well as 8. Enforcement has no side effects, so anything else
+  observed is attributable to the loop rather than to the machinery.
+- **Scale 8 is an honest tax.** Utilisation unchanged (81.6 vs 81.9),
+  throughput down 19% — the same tools, equally busy, producing less because
+  they redo work. That is what rework should look like.
+- **The cap recovers scale 4** from util 44.4/tput 700 to 61.8/1612, with 752
+  lots scrapped instead of cycling forever.
+- **A no-q-time regression control reproduces the pre-cap run exactly**
+  (2380 / 2054 / 81.9 / 91.68 on-time), so the cap has not leaked into the
+  route's own rework path.
+
+The cap folds into the checkpoint key: capped and uncapped warm-ups are
+different fabs, so pre-cap checkpoints are orphaned rather than silently
+reused. Non-q-time checkpoint names are unchanged.
+
+### 6.4 What is still unsettled
+
+**The cap value is a parameter, not a measurement.** Three is defensible and
+is not calibrated against anything. It should be swept once an operating point
+exists, because it sets the exchange rate between rework and scrap and
+therefore how much a violation costs — which is exactly what the solver would
+be optimising against.
+

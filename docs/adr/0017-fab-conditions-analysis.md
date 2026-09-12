@@ -143,3 +143,94 @@ is a sort key by default rather than by contest.
   different constraint.
 - **Rework makes no difference to the cliff's shape** (§3), which would mean
   the feedback mechanism this page is built around is not real.
+
+---
+
+## 8. Revision, 2026-09-12: WIP stationarity is no longer sufficient
+
+The first matrix launch was abandoned at its gate, and the reason changes a
+criterion this page stated in advance.
+
+### 8.1 The gate earned its cost
+
+§1 argued a grid beats picking a cell by argument. In practice what saved the
+compute was smaller than the grid: a **16-day, `fifo`-only, six-cell probe
+reading only rates and states** — WIP slope and violations per day, not
+on-time or throughput, which a short window cannot measure. It ran in about
+25 minutes and reported all six cells diverging, so the 2.5-hour matrix was
+never spent on them.
+
+That is worth keeping as a pattern. A grid whose cells are expensive deserves
+a cheap pre-flight whose only job is to falsify the axis, sampling the same
+cells and reading only the quantities a short window can support.
+
+It also caught something the design had not allowed for: the **warm-up itself**
+had diverged (day-90 WIP 6551 against a 2053 control). Every cell inherited
+that, so the apparent differences between scales were inherited state rather
+than measured response. Admissibility has to be checked on the warm-up, not
+only on the measurement window.
+
+The cause was [ADR 0016 §6](0016-queue-time-enforcement.md) — the rework
+reroute was unbounded and acted as an absorbing state. §3 of this page
+predicted the loop would gain; it gained without limit, which is not a cliff
+but a missing termination rule.
+
+### 8.2 The criterion has to change
+
+§5 defined admissibility as "|WIP slope| small enough that end-of-window WIP
+is within a few percent of start." With scrap in the model that is no longer
+sufficient, and the probe showed why in one line: at window scale 6 the fab
+warmed to **WIP 1727 — below the 2053 control — on 3256 scrapped lots.**
+
+Scrapping holds WIP down by destroying material. A fab can therefore satisfy
+the stationarity gate *because* it is eating itself. Read alone, WIP slope
+would have marked that cell as the healthiest in the grid.
+
+So admissibility becomes a conservation statement rather than a level check:
+
+```
+releases  =  good lots out  +  scrapped  +  dWIP
+```
+
+- **stationary** — dWIP small over the final third, as before
+- **and not by loss** — scrap rate reported beside it, never summarised away
+- **the economic metric is good lots out**, which `throughput` already is:
+  scrapped lots never enter `done_lots`
+
+This is the same failure mode as every earlier one in this repo — a metric
+that could not respond to the thing being changed — and the fix is again an
+invariant rather than a better number.
+
+### 8.3 What the second matrix samples, and why it is smaller
+
+The axis moved. Cold range-finding put the usable band at 3–10; with the loop
+bounded, the scrap boundary sits between scale 8 and 10 — at 10 and 12 nothing
+scraps and utilisation is indistinguishable from control, at 8 and below scrap
+appears. So the grid samples **{6, 8, 10, 12}** to straddle it.
+
+The **load axis is dropped** for this pass. Queue time is plainly the live
+axis, load doubles the cost, and §6 already warned that two coupled axes
+measure a surface rather than two curves — better to locate the edge on one
+axis first. Load returns only if a cell proves admissible and rule-sensitive.
+
+Rework-off controls run at one scrapping scale (6) and one non-scrapping scale
+(10), so §3's falsifier — does the loop change the cliff's shape — is testable
+at both ends rather than only where it bites.
+
+### 8.4 A note on what short windows can and cannot say
+
+Two readings were discarded during this work, both for the same reason, and
+both of them mine:
+
+- **40-day cold throughput and on-time.** A cold window is mostly fill-up, so
+  the re-range came out non-monotonic (scale 10 apparently better than 12).
+  Utilisation, WIP level and scrap counts survive; the ordering does not.
+- **2-day warmed utilisation.** Compared against a 90-day control it produced
+  an impossible result — scale 7 at 81.8% against scale 8 at 61.1% — because
+  over two days utilisation is dominated by the instantaneous state. The
+  probe's only valid output was `wip_first`, a state rather than a rate, which
+  is what it had been designed to read.
+
+The general rule this repo keeps rediscovering: **decide which quantities a
+window can support before reading any of them**, and write that down first.
+
