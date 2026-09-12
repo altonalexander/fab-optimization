@@ -11,7 +11,8 @@ is the story, for whoever picks it up next — including us in six months.
 
 ## What we are trying to accomplish
 
-The simulated fab has ~1,300 machines and a constant stream of lots. Something
+The simulated fab has 913 process tools (plus 400 `Delay` placeholders that
+model fixed waits, not capacity) and a constant stream of lots. Something
 has to decide, moment to moment, **which lot runs on which machine.** Two ways
 to do it:
 

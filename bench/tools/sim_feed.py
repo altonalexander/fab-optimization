@@ -66,7 +66,8 @@ import uuid
 import sim_runner  # noqa: E402
 from sim_runner import REPO  # noqa: E402
 
-import overlay as overlay_mod  # noqa: E402  (ADR 0013 tool qualification)
+import overlay as overlay_mod
+import trim as trim_mod  # noqa: E402  (ADR 0013 tool qualification)
 
 from plugins.interface import IPlugin  # noqa: E402
 
@@ -237,7 +238,7 @@ def mix_key(parts):
 
 
 def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
-              parts=None):
+              parts=None, trim=None):
     """Where the shared warm-up checkpoint for this configuration lives.
 
     The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
@@ -250,16 +251,16 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
     """
     name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}'
             f'_day{day:g}{overlay_mod.key(overlay)}{mix_key(parts)}'
-            f'_h{int(days)}.ckpt')
+            f'{trim_mod.key(trim)}_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
 def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
-              parts=None):
+              parts=None, trim=None):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
     pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay,
-                    parts).replace('_h0.ckpt', '_h*.ckpt')
+                    parts, trim).replace('_h0.ckpt', '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
         try:
@@ -1692,6 +1693,10 @@ def main():
                         '(ADR 0013). Keys the warm-up checkpoint and is stamped '
                         'on the run, so an overlay row is never laid over a '
                         'pristine one unlabelled. Omit for the pristine fab.')
+    p.add_argument('--trim', default=None,
+                   help='right-size the tool set from a trim table beside the '
+                        'dataset, e.g. --trim trim-82 (adr/0015). A trimmed '
+                        'fab is a different fab and keys its own checkpoint.')
     p.add_argument('--starts-part', action='append', default=None,
                    metavar='PART=SCALE',
                    help='ramp ONE part instead of the whole fab, e.g. '
@@ -1824,6 +1829,7 @@ def main():
     # Resume from a checkpoint if one covers this run: the warm-up is then
     # paid once per (dataset, seed, dispatcher, batching, day) rather than on
     # every start. --rebuild forces the slow path.
+    a.trim_obj = trim_mod.load(a.trim)
     a.starts_part_map = None
     if getattr(a, 'starts_part', None):
         a.starts_part_map = {}
@@ -1834,7 +1840,7 @@ def main():
             a.starts_part_map[part] = float(val)
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
         a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days,
-        ov, a.starts_part_map)
+        ov, a.starts_part_map, a.trim_obj)
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1852,7 +1858,8 @@ def main():
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
-                         a.batch_strat, a.days, ov, a.starts_part_map)
+                         a.batch_strat, a.days, ov, a.starts_part_map,
+                         a.trim_obj)
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1922,7 +1929,7 @@ def main():
     if instance is None:
         instance, run_to = sim_runner.build(
             a.dataset, a.days, a.seed, [feed], a.batch_strat,
-            build_days=build_horizon_days(a))
+            build_days=build_horizon_days(a), trim=a.trim_obj)
         # Bound BEFORE the first decision point, so the warm-up this run
         # checkpoints was itself simulated under the matrix.
         if ov is not None:
@@ -1979,7 +1986,8 @@ def main():
                                kpi=feed._kpi)
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
-                              a.batch_strat, a.days, ov, a.starts_part_map)
+                              a.batch_strat, a.days, ov, a.starts_part_map,
+                              a.trim_obj)
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)

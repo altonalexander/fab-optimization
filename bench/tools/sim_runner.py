@@ -69,7 +69,8 @@ def normalize_dataset(name):
     return name if name.startswith('SMT2020_') else 'SMT2020_' + name
 
 
-def build(dataset, days, seed, plugins, batch_strat, build_days=None):
+def build(dataset, days, seed, plugins, batch_strat, build_days=None,
+          trim=None):
     """Load the dataset, seed the RNG, and construct the instance.
 
     Returns (instance, run_to). Seeding happens before FileInstance is built
@@ -93,6 +94,15 @@ def build(dataset, days, seed, plugins, batch_strat, build_days=None):
     from read import read_all
 
     files = read_all('datasets/' + dataset)
+    # Right-sizing is applied to the TOOL MASTER, before the instance is
+    # constructed (adr/0015). Doing it here rather than deleting machines from
+    # a built instance is the whole point: indices stay dense, family_machines
+    # is correct, and every utilisation denominator counts the fab we asked
+    # for. None is the full tool set.
+    if trim is not None:
+        changed, removed = trim.apply(files)
+        print(f'  trim {trim.name} ({trim.hash}): {changed} families resized, '
+              f'{removed} tools removed', file=sys.stderr)
     run_to = SECONDS_PER_DAY * days
     build_to = SECONDS_PER_DAY * (build_days if build_days else days)
     Randomizer().random.seed(seed)

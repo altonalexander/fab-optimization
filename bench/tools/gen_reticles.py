@@ -53,8 +53,7 @@ def scanner_families(instance, groups_by_family):
 def step_tool_seconds(step, cascading, lu):
     """Tool-seconds one lot occupies at `step`. Same model as gen_overlay."""
     fam = step.family
-    t = step.cascading_time.m if hasattr(step.cascading_time, 'm') else 0.0
-    t = float(t)
+    t = go.dist_mean(step.cascading_time)
     if not cascading.get(fam, False):
         t += lu.get(fam, 0.0)
     if step.batch_max and step.batch_max > 1:

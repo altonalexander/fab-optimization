@@ -59,6 +59,7 @@ import sim_runner  # noqa: E402  (bootstraps sys.path and cwd for the baseline)
 from sim_runner import REPO, RESET_AT, SECONDS_PER_DAY  # noqa: E402
 
 import overlay as overlay_mod  # noqa: E402  (ADR 0013 tool qualification)
+import trim as trim_mod  # noqa: E402  (ADR 0015 right-sizing)
 import slate_rule  # noqa: E402
 
 
@@ -154,11 +155,41 @@ def make_sampler(rule_name, warm_from):
             self.rows = []
             self.rule = rule_name
             self.store = None
+            # Per-FAMILY utilisation, accumulated rather than sampled into the
+            # row series (adr/0015). 60 families x 2,160 hourly samples would
+            # dominate the result file, and the question -- did this tool set
+            # land where we sized it for -- only needs the window mean. Counted
+            # here because a fab-wide average is what hid three effects
+            # already: it says the fab is at 80% while one family is at 91%
+            # and another at 5%.
+            self._fam_busy = {}
+            self._fam_n = 0
 
         def _kpi_sample(self, instance, t):
             row = super()._kpi_sample(instance, t)
+            if t >= warm_from:
+                self._fam_n += 1
+                for tool in self._busy:
+                    fam = tool.rsplit('_', 1)[0]
+                    if fam.startswith('Delay'):
+                        continue
+                    self._fam_busy[fam] = self._fam_busy.get(fam, 0) + 1
             self.rows.append(dict(row, warmup=t < warm_from))
             return row
+
+        def family_util(self, instance):
+            """family -> (mean busy tools, tools, utilisation %)."""
+            if not self._fam_n:
+                return {}
+            out = {}
+            for fam, machines in instance.family_machines.items():
+                if fam.startswith('Delay'):
+                    continue
+                n = len(machines)
+                busy = self._fam_busy.get(fam, 0) / self._fam_n
+                out[fam] = {'tools': n, 'busy_mean': round(busy, 2),
+                            'util_pct': round(100.0 * busy / n, 1) if n else None}
+            return out
 
     return _Sampler()
 
@@ -209,9 +240,10 @@ def warm_checkpoint(args):
     import sim_feed
     ov = args.overlay_obj
     mix = getattr(args, 'starts_part_map', None)
+    tr = getattr(args, 'trim_obj', None)
     ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                             args.warmup_days, args.batch_strat, args.days, ov,
-                            mix)
+                            mix, tr)
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
               f'{args.warmup_days:g} (horizon >= {args.days}d'
@@ -225,12 +257,13 @@ def warm_checkpoint(args):
                '--warmup-days', str(args.warmup_days),
                '--checkpoint-only', '--no-store', '--speed', '0',
                '--out', os.devnull] + (['--overlay', ov.name] if ov else []) \
-              + [f'--starts-part={k}={v:g}' for k, v in sorted((mix or {}).items())]
+              + [f'--starts-part={k}={v:g}' for k, v in sorted((mix or {}).items())] \
+              + (['--trim', args.trim] if getattr(args, 'trim', None) else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                                 args.warmup_days, args.batch_strat, args.days,
-                                ov, mix)
+                                ov, mix, tr)
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
@@ -321,7 +354,8 @@ def run_one(spec, args):
     else:
         instance, run_to = sim_runner.build(
             args.dataset, args.days, args.seed, [sampler], args.batch_strat,
-            build_days=build_horizon_days(args))
+            build_days=build_horizon_days(args),
+            trim=getattr(args, 'trim_obj', None))
         if args.overlay_obj is not None:
             args.overlay_obj.bind(instance)
 
@@ -404,6 +438,8 @@ def run_one(spec, args):
     row['scanner_util_pct'] = round(sum(sut) / len(sut), 2) if sut else None
     row['starts_scale'] = getattr(args, 'starts_scale', 1.0)
     row.update(overlay_mod.stamp(args.overlay_obj))
+    row.update(trim_mod.stamp(getattr(args, 'trim_obj', None)))
+    row['family_util'] = sampler.family_util(instance)
     # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
     # per-sample tool counts over the reporting window gives tool-hours; the
     # per-day figure is what the table prints, because rows of different
@@ -547,6 +583,9 @@ def main():
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them (1.1 = 10%% more starts). '
                         'Due dates move with the releases, so on-time stays fair.')
+    p.add_argument('--trim', default=None,
+                   help='right-size the tool set from a trim table beside the '
+                        'dataset, e.g. --trim trim-82 (adr/0015)')
     p.add_argument('--starts-part', action='append', default=None,
                    metavar='PART=SCALE',
                    help='ramp ONE part instead of the whole fab, e.g. '
@@ -571,6 +610,7 @@ def main():
     a.dispatcher = None   # unused; --rules drives this tool
     a.overlay_obj = overlay_mod.load(a.overlay)
 
+    a.trim_obj = trim_mod.load(a.trim)
     a.starts_part_map = None
     if a.starts_part:
         a.starts_part_map = {}

@@ -181,7 +181,7 @@ lot needs which mask, a row labelled `slate` would be measuring its fallback.
 ### 3.5 Harness
 
 **Scanner-scoped utilisation on every row.** Fab-wide utilisation averages a
-litho constraint over 1,313 tools and hides half of it. Pristine scanners run
+litho constraint over 913 process tools and hides half of it. Pristine scanners run
 at **93%** — they are the bottleneck — and under `reticles-mix` the choice
 between `fifo` and `cr` is worth **4.8 points of scanner utilisation against
 2.3 fab-wide**. Reported for the pristine fab too, since the number only
@@ -263,7 +263,7 @@ consumes `qtime_slack_s` all the way into `BatchTool::should_fire`.
 
 It is the only candidate that gives the fab a way to **lose work**. Today the
 worst outcome of a bad decision is a late lot, and total tardiness below the
-knee is a few lot-days across 1,300 tools; with CQT enforced, a blown queue
+knee is a few lot-days across 913 tools; with CQT enforced, a blown queue
 time is scrap or rework, which is capacity destroyed. A dispatcher that
 cannot lose anything is hard to beat and hard to justify.
 

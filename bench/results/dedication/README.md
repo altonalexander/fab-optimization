@@ -146,7 +146,7 @@ Both passed before any row was run, and neither is optional (`bench/README.md`).
   starts, and that the rules only spread above it — at 1.15× the starts grid
   has `fifo` at 89.0% on-time against `cr`'s 96.1%. At the 1.00×/1.03×
   §3.6 asked for, total tardiness over 30 days is 1–33 lot-days across a
-  1,300-tool fab and every rule clears 98% on-time. There is nothing for any
+  913-tool fab and every rule clears 98% on-time. There is nothing for any
   dispatcher to optimise at this load, dedicated or not, so the experiment
   could not have separated the rules whatever the matrix looked like.
   Dedication needs *queues* to matter: a qualification constraint only costs
@@ -184,7 +184,8 @@ instrument as a null effect.
 What the rows *do* establish, and it is not nothing:
 
 - The mechanism works end to end. Both gates pass, the solver receives the
-  matrix (863 of 1,313 tools carry a qualified-part list under the
+  matrix (863 of 1,313 machines -- 913 process tools plus 400 Delay
+  placeholders -- carry a qualified-part list under the
   all-scope overlays), and the pristine fingerprints are untouched.
 - On SMT2020 at the 1.03× operating point, **dedication cannot be made much
   harder than this without deleting capacity** — 0.60 is refused, 0.65 is
