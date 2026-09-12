@@ -184,8 +184,19 @@ class Lot:
         self.processing_time = 0
         self.transport_time = 0
 
-        # self.cqt_waiting = None
-        # self.cqt_deadline = None
+        # Queue-time state (fab-optimization deviation 10, ADR 0016). The
+        # dataset carries 264 real windows ("from this step, reach step N
+        # within T"); PySCFabSim parsed and ignored them (ADR 0008).
+        #   cqt_waiting   step ORDER the open window closes at, or None
+        #   cqt_deadline  absolute time by which it must be reached
+        #   cqt_open_step the Step that opened it -- the rework target, because
+        #                 that is the operation whose result went stale
+        #   cqt_violated  set when the window was missed; consumed by
+        #                 Instance.free_up_lots on the next step transition
+        self.cqt_waiting = None
+        self.cqt_deadline = None
+        self.cqt_open_step = None
+        self.cqt_violated = False
 
         self.ft = None
 

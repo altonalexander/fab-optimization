@@ -35,6 +35,21 @@ class Instance:
     # Set by bench/tools/reticles.py's Reticles.bind(); None is no masks.
     reticles = None
 
+    # Queue-time enforcement (fab-optimization deviation 10, ADR 0016).
+    # Class attributes so a checkpoint pickled before they existed still
+    # unpickles into an instance that dispatches, as with `overlay` above.
+    #
+    # OFF by default and that is deliberate: ADR 0008 records that SMT2020's
+    # CQT columns are parsed and ignored, every published row was produced
+    # that way, and `slate_rule.QTIME_INERT` exists precisely so the solver
+    # does not optimise against a signal the environment never punishes. The
+    # flag is what lets the pristine rows stay reproducible.
+    #
+    # cqt_scale multiplies every window: >1 loosens, <1 tightens. It is the
+    # Y axis of ADR 0017's grid.
+    cqt_enforce = False
+    cqt_scale = 1.0
+
     def eligible(self, lot, machine):
         """Can `machine` run `lot` at the step it is waiting for?
 
@@ -135,6 +150,7 @@ class Instance:
 
         #self.setup_per_timestep_when_needed = {}
         self.counter_cqt_violated = 0
+        self.counter_cqt_rework = 0      # violations that actually rerouted
 
         self.current_time = 0 
 
@@ -207,6 +223,33 @@ class Instance:
                     removed = lot.processed_steps[rw_step - 1:]
                     lot.processed_steps = lot.processed_steps[:rw_step - 1]
                     lot.remaining_steps = removed + lot.remaining_steps
+                # A missed queue-time window sends the lot back to the step
+                # that OPENED it (ADR 0016): that is the operation whose
+                # result went stale, so redoing from there is what a fab
+                # does. Handled alongside the route's own rework because the
+                # mechanism is identical -- move processed steps back onto
+                # remaining -- and because doing it here means the closing
+                # step has already been paid for, which is the conservative
+                # direction: the fab loses the wasted operation AND the
+                # rework, so violations cost more rather than less.
+                #
+                # Scanned from the END: routes are re-entrant, so the same
+                # Step object can appear several times in processed_steps and
+                # the most recent visit is the one that opened this window.
+                if lot.cqt_violated:
+                    lot.cqt_violated = False
+                    tgt = lot.cqt_open_step
+                    pos = None
+                    for i in range(len(lot.processed_steps) - 1, -1, -1):
+                        if lot.processed_steps[i] is tgt:
+                            pos = i
+                            break
+                    if pos is not None:
+                        removed = lot.processed_steps[pos:]
+                        lot.processed_steps = lot.processed_steps[:pos]
+                        lot.remaining_steps = removed + lot.remaining_steps
+                        self.counter_cqt_rework += 1
+                    lot.cqt_open_step = None
                 lot.actual_step, lot.remaining_steps = lot.remaining_steps[0], lot.remaining_steps[1:]
                 if lot.actual_step.has_to_perform():
                     self.dm.free_up_lots(self, lot)
@@ -240,16 +283,36 @@ class Instance:
             lot.waiting_time += self.current_time - lot.free_since
             if lot.actual_step.batch_max > 1:
                 lot.waiting_time_batching += self.current_time - lot.free_since
-            # if lot.actual_step.cqt_for_step is not None: TODO: CQT handling, Deactivated for now
-            #     lot.cqt_waiting = lot.actual_step.cqt_for_step
-            #     #lot.cqt_deadline = self.current_time + lot.actual_step.cqt_time
-            #     lot.cqt_deadline = lot.actual_step.cqt_time
-            # if lot.actual_step.order == lot.cqt_waiting:
-            #     if lot.cqt_deadline < self.current_time:
-            #         for plugin in self.plugins:
-            #             plugin.on_cqt_violated(self, machine, lot)
-            #     lot.cqt_waiting = None
-            #     lot.cqt_deadline = None
+            # Queue-time windows (ADR 0016). The clock is read HERE, at the
+            # start of processing, which is the industry definition: material
+            # degrades while it waits, and the wait ends when the next
+            # operation begins, not when the lot joins a queue.
+            #
+            # CLOSE before OPEN: one step can both close an inbound window and
+            # open an outbound one, and doing it the other way round would
+            # have a step close the window it had just opened.
+            #
+            # Note the original commented-out code stored the window LENGTH
+            # in cqt_deadline where it needed an absolute time -- the correct
+            # line was there, commented out above the wrong one.
+            if self.cqt_enforce:
+                st = lot.actual_step
+                if (lot.cqt_waiting is not None
+                        and st.order == lot.cqt_waiting):
+                    if lot.cqt_deadline is not None \
+                            and self.current_time > lot.cqt_deadline:
+                        self.counter_cqt_violated += 1
+                        lot.cqt_violated = True
+                        for plugin in self.plugins:
+                            plugin.on_cqt_violated(self, machine, lot)
+                    lot.cqt_waiting = None
+                    lot.cqt_deadline = None
+                fs = getattr(st, 'cqt_for_step', None)
+                if isinstance(fs, (int, float)) and st.cqt_time:
+                    lot.cqt_waiting = fs
+                    lot.cqt_deadline = (self.current_time
+                                        + st.cqt_time * self.cqt_scale)
+                    lot.cqt_open_step = st
         # compute times for lot and machine
         lot_time, machine_time, setup_time = self.get_times(self.setups, lots, machine)
         # Mount the photomask (ADR 0014). Moving one between scanners costs

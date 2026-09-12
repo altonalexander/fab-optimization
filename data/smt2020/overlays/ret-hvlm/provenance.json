@@ -1,0 +1,36 @@
+{
+  "reticles": {
+    "autosize": true,
+    "busiest": {
+      "R_part_3_092_Litho": 0.8788,
+      "R_part_3_439_Litho": 0.8456,
+      "R_part_3_620_Litho": 0.8729,
+      "R_part_4_092_Litho": 0.8788,
+      "R_part_4_390_Litho": 0.8396,
+      "R_part_4_439_Litho": 0.8456,
+      "R_part_4_520_Litho": 0.9324,
+      "R_part_4_620_Litho": 0.8729
+    },
+    "copies": 1,
+    "dataset": "SMT2020_HVLM",
+    "extra_copies_top": 0,
+    "generator": "bench/tools/gen_reticles.py",
+    "generator_version": 1,
+    "masks": 114,
+    "max_util": 0.95,
+    "pairs": 60,
+    "reticle_hash": "9b56a330c7d93067",
+    "rework_modelled": false,
+    "scanner_families": [
+      "Litho_BE_110",
+      "Litho_BE_93",
+      "Litho_BE_99",
+      "Litho_FE_111",
+      "Litho_FE_35",
+      "Litho_FE_92",
+      "Litho_FE_98"
+    ],
+    "starts_scale_checked": 1.0,
+    "transport_s": 0.0
+  }
+}

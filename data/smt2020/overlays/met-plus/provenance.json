@@ -1,0 +1,18 @@
+{
+  "trim": {
+    "dataset": "SMT2020_LVHM",
+    "explicit": [
+      "LithoMet_FE_19=16",
+      "LithoMet_BE_18=13",
+      "Litho_REG_FE_64=14",
+      "Litho_REG_BE_63=9"
+    ],
+    "generator": "bench/tools/gen_trim.py --set",
+    "generator_version": 1,
+    "sized_from": "measured run utilisation, not static load",
+    "tools_after": 920,
+    "tools_before": 913,
+    "tools_delta": 7
+  },
+  "trim_hash": "ae0fc30e8b8c4492"
+}

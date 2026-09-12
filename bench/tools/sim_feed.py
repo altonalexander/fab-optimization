@@ -217,6 +217,20 @@ CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
                     '_release_log')
 
 
+def cqt_key(enforce, scale):
+    """Checkpoint key fragment for queue-time enforcement (adr/0016).
+
+    A fab warmed WITHOUT enforcement has different WIP from one warmed with
+    it -- violations rework lots and change the queues -- so the two must not
+    share a checkpoint, for the reason adr/0013 §3.5 gives about the
+    qualification matrix. Empty when off, so every existing checkpoint
+    filename is unchanged.
+    """
+    if not enforce:
+        return ''
+    return '_cqt' if abs(scale - 1.0) < 1e-9 else f'_cqt{scale:g}'
+
+
 def mix_key(parts):
     """Checkpoint key fragment for a per-part start mix (adr/0014).
 
@@ -238,7 +252,7 @@ def mix_key(parts):
 
 
 def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
-              parts=None, trim=None):
+              parts=None, trim=None, cqt=False, cqt_scale=1.0):
     """Where the shared warm-up checkpoint for this configuration lives.
 
     The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
@@ -251,16 +265,18 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
     """
     name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}'
             f'_day{day:g}{overlay_mod.key(overlay)}{mix_key(parts)}'
-            f'{trim_mod.key(trim)}_h{int(days)}.ckpt')
+            f'{trim_mod.key(trim)}{cqt_key(cqt, cqt_scale)}'
+            f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
 def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
-              parts=None, trim=None):
+              parts=None, trim=None, cqt=False, cqt_scale=1.0):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
     pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay,
-                    parts, trim).replace('_h0.ckpt', '_h*.ckpt')
+                    parts, trim, cqt, cqt_scale).replace('_h0.ckpt',
+                                                         '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
         try:
@@ -1693,6 +1709,10 @@ def main():
                         '(ADR 0013). Keys the warm-up checkpoint and is stamped '
                         'on the run, so an overlay row is never laid over a '
                         'pristine one unlabelled. Omit for the pristine fab.')
+    p.add_argument('--cqt', action='store_true',
+                   help='enforce the dataset queue-time windows (adr/0016)')
+    p.add_argument('--cqt-scale', type=float, default=1.0,
+                   help='multiply every queue-time window (adr/0016)')
     p.add_argument('--trim', default=None,
                    help='right-size the tool set from a trim table beside the '
                         'dataset, e.g. --trim trim-82 (adr/0015). A trimmed '
@@ -1840,7 +1860,7 @@ def main():
             a.starts_part_map[part] = float(val)
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
         a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days,
-        ov, a.starts_part_map, a.trim_obj)
+        ov, a.starts_part_map, a.trim_obj, a.cqt, a.cqt_scale)
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1859,7 +1879,7 @@ def main():
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
                          a.batch_strat, a.days, ov, a.starts_part_map,
-                         a.trim_obj)
+                         a.trim_obj, a.cqt, a.cqt_scale)
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1908,6 +1928,8 @@ def main():
             # by it, so the schedule is already re-timed. Re-applying it
             # compresses an already-compressed list (adr/0014). --starts-scale
             # is not in the key and does still apply here.
+            instance.cqt_enforce = bool(a.cqt)
+            instance.cqt_scale = float(a.cqt_scale or 1.0)
             n = scale_starts(instance, a.starts_scale)
             if n:
                 print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
@@ -1940,6 +1962,8 @@ def main():
         # of pre-ramp lots and a 30-day window measures the OLD mix draining.
         # The checkpoint name carries the mix (`mix_key`) so the two can
         # never be confused.
+        instance.cqt_enforce = bool(a.cqt)
+        instance.cqt_scale = float(a.cqt_scale or 1.0)
         if a.starts_part_map:
             n = scale_starts(instance, 1.0, a.starts_part_map)
             print(f'  start mix: {n} future releases re-timed for '
@@ -1987,7 +2011,7 @@ def main():
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
                               a.batch_strat, a.days, ov, a.starts_part_map,
-                              a.trim_obj)
+                              a.trim_obj, a.cqt, a.cqt_scale)
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)

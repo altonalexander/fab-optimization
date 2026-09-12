@@ -243,7 +243,8 @@ def warm_checkpoint(args):
     tr = getattr(args, 'trim_obj', None)
     ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                             args.warmup_days, args.batch_strat, args.days, ov,
-                            mix, tr)
+                            mix, tr, getattr(args, 'cqt', False),
+                            getattr(args, 'cqt_scale', 1.0))
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
               f'{args.warmup_days:g} (horizon >= {args.days}d'
@@ -258,12 +259,16 @@ def warm_checkpoint(args):
                '--checkpoint-only', '--no-store', '--speed', '0',
                '--out', os.devnull] + (['--overlay', ov.name] if ov else []) \
               + [f'--starts-part={k}={v:g}' for k, v in sorted((mix or {}).items())] \
-              + (['--trim', args.trim] if getattr(args, 'trim', None) else [])
+              + (['--trim', args.trim] if getattr(args, 'trim', None) else []) \
+              + (['--cqt'] if getattr(args, 'cqt', False) else []) \
+              + ([f'--cqt-scale={args.cqt_scale:g}']
+                 if abs(getattr(args, 'cqt_scale', 1.0) - 1.0) > 1e-9 else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                                 args.warmup_days, args.batch_strat, args.days,
-                                ov, mix, tr)
+                                ov, mix, tr, getattr(args, 'cqt', False),
+                                getattr(args, 'cqt_scale', 1.0))
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
@@ -389,6 +394,12 @@ def run_one(spec, args):
     # --starts-scale is different and still applies here: it is deliberately
     # NOT in the checkpoint key, so one warmed fab serves every start rate
     # (adr/0012). Only the mix is baked in.
+    # Queue-time enforcement is a property of the RUN, set on the instance
+    # after it is built or resumed (adr/0016). It is in the checkpoint key,
+    # so a warmed fab always matches the enforcement it is being run under.
+    instance.cqt_enforce = bool(getattr(args, 'cqt', False))
+    instance.cqt_scale = float(getattr(args, 'cqt_scale', 1.0) or 1.0)
+
     resumed = bool(args.warmup_days and not use_reset)
     scale_starts(instance, getattr(args, 'starts_scale', 1.0),
                  None if resumed else getattr(args, 'starts_part_map', None))
@@ -440,6 +451,14 @@ def run_one(spec, args):
     row.update(overlay_mod.stamp(args.overlay_obj))
     row.update(trim_mod.stamp(getattr(args, 'trim_obj', None)))
     row['family_util'] = sampler.family_util(instance)
+    # The loss function adr/0016 adds. Reported whether or not enforcement is
+    # on, so a pristine row carries an explicit zero rather than a silence.
+    row['cqt'] = {
+        'enforced': bool(getattr(args, 'cqt', False)),
+        'scale': float(getattr(args, 'cqt_scale', 1.0) or 1.0),
+        'violations': getattr(instance, 'counter_cqt_violated', 0),
+        'reworks': getattr(instance, 'counter_cqt_rework', 0),
+    }
     # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
     # per-sample tool counts over the reporting window gives tool-hours; the
     # per-day figure is what the table prints, because rows of different
@@ -583,6 +602,16 @@ def main():
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them (1.1 = 10%% more starts). '
                         'Due dates move with the releases, so on-time stays fair.')
+    p.add_argument('--cqt', action='store_true',
+                   help='ENFORCE the queue-time windows the dataset ships '
+                        '(264 steps, 1-24h). A missed window reworks the lot '
+                        'back to the step that opened it (adr/0016). Off by '
+                        'default: adr/0008 records that these are parsed and '
+                        'ignored, and every published row was produced that '
+                        'way.')
+    p.add_argument('--cqt-scale', type=float, default=1.0,
+                   help='multiply every queue-time window: >1 loosens, <1 '
+                        'tightens. The Y axis of adr/0017 grid.')
     p.add_argument('--trim', default=None,
                    help='right-size the tool set from a trim table beside the '
                         'dataset, e.g. --trim trim-82 (adr/0015)')

@@ -74,6 +74,44 @@ def build(args):
                                       args.seed, [], args.batch_strat)
     load = family_load(instance, args.starts_scale)
 
+    # --set is the explicit form and it may raise a count as well as lower it.
+    # Sizing from STATIC load is what broke the first trim: static omits
+    # rework, PM and breakdowns and understates real load by ~11%, so an 82%
+    # static target landed at ~91% measured and the fab collapsed. Counts
+    # derived from a MEASURED run are passed in here instead, which is also
+    # the only way to ADD capacity -- the automatic path below only ever
+    # removes slack, so it can never move a bottleneck off a family.
+    if args.set:
+        table = {}
+        for fam, (n, _u, _d) in load.items():
+            if not fam.startswith(trim_mod.NEVER_TRIM_PREFIX):
+                table[fam] = n
+        for spec in args.set:
+            fam, _, val = spec.partition('=')
+            if fam not in table:
+                raise SystemExit(f'  --set {spec}: no family {fam!r}')
+            table[fam] = int(val)
+        delta = sum(table[f] - load[f][0] for f in table)
+        t = trim_mod.Trim(args.name, table, provenance={'trim': {
+            'generator': 'bench/tools/gen_trim.py --set',
+            'generator_version': 1,
+            'dataset': args.dataset,
+            'explicit': list(args.set),
+            'tools_before': sum(load[f][0] for f in table),
+            'tools_after': sum(table.values()),
+            'tools_delta': delta,
+            'sized_from': 'measured run utilisation, not static load',
+        }})
+        print(f'\n  trim {args.name} (explicit)')
+        for spec in args.set:
+            fam = spec.split('=')[0]
+            print(f'    {fam:<22} {load[fam][0]:3d} -> {table[fam]:3d}')
+        print(f'  total {sum(load[f][0] for f in table)} -> '
+              f'{sum(table.values())} ({delta:+d})')
+        d = t.write(args.root)
+        print(f'  wrote {os.path.relpath(d, go.REPO)}  trim hash {t.hash}')
+        return t
+
     table, notes = {}, []
     kept = removed = 0
     for fam, (n, u, d) in sorted(load.items()):
@@ -173,6 +211,11 @@ def main():
     p.add_argument('--batch-strat', default='Demand',
                    choices=['Max', 'Min', 'RoundRobin', 'Demand'])
     p.add_argument('--name', required=True)
+    p.add_argument('--set', action='append', default=None,
+                   metavar='FAMILY=N',
+                   help='set one family explicitly, up or down (repeatable). '
+                        'Bypasses --target; use counts derived from MEASURED '
+                        'utilisation, not static load (adr/0015 §2).')
     p.add_argument('--target', type=float, default=0.82,
                    help='static load to size each family to (default 0.82)')
     p.add_argument('--min-tools', type=int, default=2,

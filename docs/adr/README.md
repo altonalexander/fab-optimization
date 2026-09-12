@@ -21,7 +21,8 @@ overturn it. Not how anything works — that lives beside the code.
 | [0013](0013-tool-dedication-overlay.md) | Tool dedication overlay: qualification matrices beside the testbed, read by simulator and solver alike (implemented; the rules did not separate — qualification is a unary constraint and a sort key handles it) |
 | [0014](0014-reticle-overlay.md) | Reticle overlay: the coupling constraint the solver already had and nothing ever fed (implemented and **answered** — the real-time layer should be a sort key; ADR 0012's overturn condition is met) |
 | [0015](0015-right-sizing-the-tool-set.md) | Right-sizing the tool set: trim tables beside the dataset, and the demand model that silently returned zero for 45 of 105 families (implemented) |
-| [0016](0016-queue-time-enforcement.md) | Queue-time enforcement: give the fab a way to lose work — the one remaining constraint class that is a set problem rather than an ordering (proposed) |
+| [0016](0016-queue-time-enforcement.md) | Queue-time enforcement: give the fab a way to lose work — the one remaining constraint class that is a set problem rather than an ordering (implemented; the shipped windows bite hard) |
+| [0017](0017-fab-conditions-analysis.md) | Fab conditions analysis: locate the cliff on a load × queue-time grid, then operate just past it (proposed) |
 
 Plain-language write-up of how 0012 → 0013 → 0014 played out, including the
 three ways the measurements lied on the way:
