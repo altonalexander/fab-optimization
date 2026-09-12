@@ -1,9 +1,16 @@
 # 0014 — Reticles: the coupling constraint, and the loss function the fab lacks
 
-**Status:** Implemented 2026-09-11. Successor to ADR 0013, whose
-qualification matrix did not separate the rules. Written for hand-off: the
-mechanism, the generator and both solver paths are in place; what remains is
-the ladder in §3.6.
+**Status:** Implemented 2026-09-11, **answered 2026-09-12: the real-time layer
+should be a sort key.** Successor to ADR 0013, whose qualification matrix did
+not separate the rules. Full rows and caveats in
+[`bench/results/reticles/`](../../bench/results/reticles/README.md); the
+verdict is §7 below.
+
+The mask constraint is real and large — 756 lots and +21 days of cycle time
+over a 90-day window — and a third of that is a dispatching loss rather than
+deleted capacity, because `cr` recovers +239 lots (+5.5%) over `fifo` on the
+same fab. **The CP-SAT slate recovers none of the rest: −4 lots (−0.09%) at
+14.4× the compute.** ADR 0012's overturn condition is met.
 
 **Read §6 before §2.** §2's argument — that a reticle is a *coupling*
 constraint and therefore a different class of problem from 0013's matrix — is
@@ -322,3 +329,61 @@ which the §2 argument can be tested on the fab being modelled, and it is what
 
 If the constraint does not bind even there, the coupling argument is
 exhausted on this testbed and §5 applies.
+
+## 7. The answer (2026-09-12)
+
+It did not bind, and §5 applies. Rows in
+[`bench/results/reticles/`](../../bench/results/reticles/README.md).
+
+**Exclusivity never binds on LVHM.** With transport zeroed the library is
+indistinguishable from the pristine fab (493 lots against 495). The ramp
+sweep shows why it cannot be fixed by contention: ramping two parts from
+1.00× to 2.75× nearly triples their mask load (27% → 74%) and the penalty
+stays **flat** at −756 to −1052 lots and +20–21 days. A coupling constraint
+bites harder as its resource saturates. This is a transport cost, charged per
+move, indifferent to contention.
+
+The arithmetic §2 should have carried: 251 masks over 82 scanners at ~27% of
+a mask-day means a blocked lot never idles a tool — the scanner takes one of
+the other ~250 layers. **Being a coupling constraint is necessary for the
+solver's case and not sufficient; the resource must also be scarce enough
+that blocking propagates.** On HVLM (2 parts, 60 masks) one mask per layer
+needs 169% of a mask-day and the generator refuses it as infeasible; masks
+there run at 84–93% and would bind. LVHM cannot be ramped into that regime,
+because raising a part's rate loads the mask *and* every tool it uses.
+
+**What remains is transport, and a sort key captures it.** `fifo → cr`
+recovers +239 lots (+5.5%); `cr → slate` is −4 lots (−0.09%), CT −0.09 d,
+on-time +0.06 pp, for 14.4× the compute. Same on the pristine fab: −11 lots.
+
+So: **real-time layer is a sort key with the downstream and batch terms;
+optimisation effort moves to the segment scheduler** (NEXT §3). §5's
+successor — queue-time enforcement, the only candidate that lets the fab
+*lose work* — is the next thing to try if anyone wants to reopen this.
+
+### Two caveats the verdict rests on, stated plainly
+
+- **No mask arm is a stationary operating point.** WIP climbs +7.3 to +11.4
+  lots/day for all three rules; only pristine `cr` holds (−1.8). The mask
+  rows therefore compare three rules on a fab none of them can sustain. That
+  is the weakest form of the comparison — and the most favourable one
+  available, since the alternative is a fab where the constraint costs
+  nothing at all.
+- **The library is invented.** SMT2020 ships no reticle data, transport is a
+  constant, and copies-per-layer is a knob. This is a real property of a
+  synthetic library, not a measurement of a real fab.
+
+### What the mechanisms were worth anyway
+
+Both overlays found defects in the vendored simulator that have nothing to do
+with reticles, and both were the kind that produce plausible numbers rather
+than crashes:
+
+- a resource modelled as an eligibility filter drains the fab silently,
+  because eligibility is cached into queue membership (§3.3)
+- `scale_starts` re-times a finite pre-built schedule, so a ramp runs it dry
+  mid-window and the fab starves (§3.5)
+
+And the harness gained scanner-scoped utilisation, per-part KPIs, and
+WIP-slope admissibility — each because a fab-wide average had already hidden
+an effect or manufactured one.
