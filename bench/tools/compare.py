@@ -414,6 +414,22 @@ def run_one(spec, args):
     _mx = getattr(args, 'cqt_max_rework', 3)
     instance.cqt_max_rework = None if not _mx else int(_mx)
 
+    # The q-time counters live on the instance and are therefore PICKLED INTO
+    # THE CHECKPOINT: a resumed run starts with the warm-up's totals already
+    # on the clock. Every other KPI on the row is window-scoped, so reporting
+    # them raw mixes 180 days of violations with 90 days of throughput.
+    #
+    # Measured, and this is how it was caught: the s6 cell read
+    # 2,074 good + 5,498 scrapped + 753 dWIP = 8,325 lots through a 90-day
+    # window on a fab that releases ~57/day. Subtracting the warm-up's 3,256
+    # gives 5,069 -- 56.3/day against a control's 56.6. The identity is the
+    # only reason the mismatch was visible at all (adr/0017 §8.2).
+    cqt_base = {
+        'violations': getattr(instance, 'counter_cqt_violated', 0),
+        'reworks': getattr(instance, 'counter_cqt_rework', 0),
+        'scrapped': getattr(instance, 'counter_cqt_scrapped', 0),
+    }
+
     resumed = bool(args.warmup_days and not use_reset)
     scale_starts(instance, getattr(args, 'starts_scale', 1.0),
                  None if resumed else getattr(args, 'starts_part_map', None))
@@ -470,11 +486,23 @@ def run_one(spec, args):
     row['cqt'] = {
         'enforced': bool(getattr(args, 'cqt', False)),
         'scale': float(getattr(args, 'cqt_scale', 1.0) or 1.0),
-        'violations': getattr(instance, 'counter_cqt_violated', 0),
-        'reworks': getattr(instance, 'counter_cqt_rework', 0),
+        # Window-scoped, to match every other KPI on this row. The cumulative
+        # totals are kept beside them rather than discarded: a warm-up that
+        # scrapped heavily is itself a fact worth seeing.
+        'violations': (getattr(instance, 'counter_cqt_violated', 0)
+                       - cqt_base['violations']),
+        'reworks': (getattr(instance, 'counter_cqt_rework', 0)
+                    - cqt_base['reworks']),
+        'scrapped': (getattr(instance, 'counter_cqt_scrapped', 0)
+                     - cqt_base['scrapped']),
         'rework_enabled': bool(getattr(instance, 'cqt_rework', True)),
         'max_rework': getattr(instance, 'cqt_max_rework', None),
-        'scrapped': getattr(instance, 'counter_cqt_scrapped', 0),
+        'warmup': cqt_base,
+        'cumulative': {
+            'violations': getattr(instance, 'counter_cqt_violated', 0),
+            'reworks': getattr(instance, 'counter_cqt_rework', 0),
+            'scrapped': getattr(instance, 'counter_cqt_scrapped', 0),
+        },
     }
     # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
     # per-sample tool counts over the reporting window gives tool-hours; the

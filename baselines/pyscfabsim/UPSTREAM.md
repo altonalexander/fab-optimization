@@ -107,6 +107,17 @@ is recoverable from upstream at the SHA above.
    This is the ONLY change to the simulator that ADR 0013 makes. Everything
    else the overlay needs lives in `bench/tools/`.
 
+9. **A `qt` dispatching rule was added** (`dispatching/dispatcher.py`). It is
+   `cr` with a queue-time tier inserted ahead of setup, ordered by slack to
+   the open window. Upstream had written this tier into every rule and left
+   it commented out -- `#0 if lot.cqt_waiting is not None else 1` appears in
+   `fifo`, both `lifo` variants, `cr` and `random` -- which was reasonable
+   while CQT was parsed and never enforced. Two differences from theirs: it
+   orders by slack rather than a binary at-risk flag, and it is registered as
+   a separate rule rather than changed inside the existing ones, so every
+   published `fifo` and `cr` row is byte-identical to before. The commented
+   lines are left exactly as upstream wrote them.
+
 Also modified but not load-bearing: `.gitignore` (5 lines), and
 `chart_jobs.html` / `chart_tools.html`, which are regenerated run outputs rather
 than upstream source - `chart_jobs.html` is empty upstream.

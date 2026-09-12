@@ -70,6 +70,54 @@ class Dispatchers:
             return -lot.priority, lot.cr(time),
 
     @staticmethod
+    def qt_slack(lot: Lot, time):
+        """Seconds until this lot's open queue-time window lapses.
+
+        A lot carries cqt_waiting/cqt_deadline from the moment the OPENING
+        step dispatched until the closing step is reached (instance.py). So a
+        lot sitting in a queue with cqt_waiting set is mid-window and at risk;
+        everything else is not. Returns None when no window is open.
+        """
+        if lot.cqt_waiting is None or lot.cqt_deadline is None:
+            return None
+        return lot.cqt_deadline - time
+
+    @staticmethod
+    def qt_ptuple_for_lot(lot: Lot, time, machine: Machine = None, setups=None):
+        """`cr`, with a queue-time tier in front of it.
+
+        Deliberately identical to cr_ptuple_for_lot except for two inserted
+        elements, so that `qt` minus `cr` isolates the cost and benefit of
+        protecting q-time windows and nothing else.
+
+        Upstream wrote this tier and left it commented out in every rule
+        ("#0 if lot.cqt_waiting is not None else 1") -- reasonably, since it
+        had nothing to act on while CQT was parsed and never enforced
+        (adr/0008 §2). Two differences from their version:
+
+          - it is ORDERED BY SLACK, not binary. Theirs put every at-risk lot
+            ahead of every safe one and then stopped; with hundreds of open
+            windows that says nothing about which of them is about to lapse.
+          - it sits AHEAD OF SETUP, which is where they put it, and that is
+            the aggressive choice: protecting a window is treated as worth a
+            changeover. It is also the choice that makes the tradeoff visible
+            rather than muffling it, which is the point of the rule.
+        """
+        slack = Dispatchers.qt_slack(lot, time)
+        at_risk = 0 if slack is not None else 1
+        rank = slack if slack is not None else 0.0
+        if machine is not None:
+            lot.ptuple = (
+                0 if machine.min_runs_left is None or machine.min_runs_setup == lot.actual_step.setup_needed else 1,
+                at_risk, rank,
+                Dispatchers.get_setup(lot.actual_step.setup_needed, machine, lot.actual_step.setup_time, setups),
+                -lot.priority, lot.cr(time),
+            )
+            return lot.ptuple
+        else:
+            return at_risk, rank, -lot.priority, lot.cr(time),
+
+    @staticmethod
     def random_ptuple_for_lot(lot: Lot, time, machine: Machine = None, setups=None):
         if machine is not None:
             return (
@@ -86,5 +134,6 @@ dispatcher_map = {
     'lifo_org': Dispatchers.lifo_ptuple_for_lot_vergammeln,
     'lifo_anders': Dispatchers.lifo_ptuple_for_lot,
     'cr': Dispatchers.cr_ptuple_for_lot,
+    'qt': Dispatchers.qt_ptuple_for_lot,
     'random': Dispatchers.random_ptuple_for_lot,
 }
