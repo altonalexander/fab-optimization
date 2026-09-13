@@ -363,3 +363,109 @@ opportunity — a due-date allocation problem, with slack-rich parts to borrow
 from, on a fab with zero scrap — but it is a narrower one than §9.3 claimed,
 and the claim was made from a single seed after that seed's own caveat had
 been written down.
+
+---
+
+## 11. The answer, 2026-09-13: `slate` loses to a sort key, decisively
+
+§10.1 named the target: ~7% of lots late with a 15-point per-part spread, on a
+fab with zero scrap and slack sitting in the products that finish early. A
+due-date **allocation** problem — the one shape a decision about a *set* should
+beat a ranking on.
+
+It does not. Two replicates, one `qt`-warmed fab, 180-day window, 1.00× starts,
+q-time term live, `qt` as the fallback for the ~47% of decisions the solver
+does not cover:
+
+| | good/day | on-time | cycle time | violations/day | WIP 2199 → | final-third slope | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **`qt`** | **57.5** | **81.7%** | **38.4 d** | **1.4** | **2145** | **−1.13** | **3,113 s** |
+| `slate` a | 48.1 | 24.9% | 48.8 d | 22.2 | 3843 | **+10.40** | 17,776 s |
+| `slate` b | 48.5 | 24.2% | 48.6 d | 23.1 | 3765 | **+8.95** | 17,626 s |
+
+Tardiness: **1,925** lot-days against **91,888** and **91,583**.
+
+All three pre-registered bars fail. WIP diverges rather than holding
+stationary; throughput is 16% below `qt`; and the per-part spread did not
+close but collapsed — `part_9` 66.4% → 11.7%, `part_10` 99.3% → 18.1%, every
+product but `part_7` down 53 to 81 points. The replicates agree to within
+0.4 lots/day and 0.7 on-time points, far inside the noise floor measured
+in §11.2, so this is not a seed or a scheduling coincidence.
+
+### 11.1 Why, as far as the data says
+
+`slate`'s divergence signature is nearly identical to `cr`'s from §9.1:
++10.38 lots/day and WIP → 3822 there, +10.40 and → 3843 here. **With the
+q-time term live and a `qt` fallback on half its decisions, the solver still
+behaves like the rule that diverges.**
+
+The likely reason is instrument, not information. `qt` expresses queue time as
+a **hard lexicographic tier** — an at-risk-but-saveable lot outranks
+everything else, full stop. The solver expresses it as a **soft multiplier**
+inside a cost ratio, `qtime_boost = 1 + 600/max(slack, 60)`, which competes
+with setup time, processing time and urgency rather than dominating them. At
+22 violations/day against `qt`'s 1.4, the term is plainly too weak to break
+the backlog loop, and once the backlog builds everything else follows.
+
+That is a fixable-sounding diagnosis and it should be treated with suspicion,
+because ADR 0012 had one too ("every machine in a group is identical") and
+fixing it did not help. A stronger q-time weight is a tuning exercise on a
+method that has now lost on four constraint classes.
+
+### 11.2 The short window said the opposite
+
+A 20-day probe over days 90–110 read **58.1 good/day and 87.4% on-time**,
+against `qt`'s 58.5 and 83.3% on the same days — level throughput, *better*
+on-time. On that evidence `slate` wins.
+
+Over 180 days the same configuration reads 48.1 and 24.9%.
+
+`slate` is fine until the backlog builds and then degrades with it; WIP climbs
+the entire window. **Had the probe been trusted, this ADR would record a win.**
+It was not trusted only because the probe's running-average throughput was not
+comparable to a trailing-day rate, and `qt` happened to dip in exactly those
+days — an objection about metric shape, not about the result.
+
+This is the sharpest instance of the pattern this repo keeps producing, and it
+belongs in §6 of anything written next: **a window long enough to be
+convenient is not long enough to be right**, and the failure mode is not noise
+but a systematic transient that points the wrong way.
+
+### 11.3 What it costs
+
+**5.7× the wall clock** (17,776 s against 3,113 s) *with* the family-level
+parallelism added in `dd65189`; roughly 17× the CPU without it. The "14×"
+quoted through ADR 0014 and 0016 came from a different configuration and
+should not be repeated; 5.7× wall / ~17× CPU is the measured like-for-like
+figure at this operating point.
+
+### 11.4 What this settles
+
+Four constraint classes, four negatives:
+
+| | class | outcome |
+|---|---|---|
+| [0013](0013-tool-dedication-overlay.md) | unary / filtering | qualification is a filter; a sort key handles it |
+| [0014](0014-reticle-overlay.md) | coupling | reticles never bind on this fab |
+| [0016](0016-queue-time-enforcement.md) | deadline-with-loss | a five-element sort tuple takes scrap to zero |
+| **here** | **due-date allocation** | **the solver makes it dramatically worse** |
+
+ADR 0012's overturn condition — "an overlay fab where the assignment solver
+still adds nothing over a sort → drop CP-SAT from the real-time layer and keep
+it for the segment schedule only" — is met for the fourth time, and this time
+on the class that was the best remaining candidate rather than a near-miss.
+
+**The recommendation is to close the real-time CP-SAT line.** The dispatching
+decision on this fab is a sort key; the useful finding of the work is §9's,
+that *which* sort key decides whether the fab is viable at all.
+
+### 11.5 What would overturn this
+
+- **A stronger q-time weight in the cost function** closing the gap. Worth one
+  attempt (§11.1), and it is tuning, not a new claim.
+- **`qt` tuned into a harder baseline** that `slate` then beats — unlikely to
+  reverse a 33-point on-time gap, but it is the honest version of the test.
+- **A fab with a binding coupling constraint.** Every negative so far is on
+  LVHM, where reticles never bind and tools within a family are identical. The
+  HVLM scenario is the remaining place the assignment formulation could earn
+  its cost, and nothing here speaks to it.
