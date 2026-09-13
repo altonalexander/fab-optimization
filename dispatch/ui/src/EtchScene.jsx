@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js'
@@ -42,8 +42,11 @@ const LAMP = {
 const VIEW_W = 47            // metres across the viewport at zoom 1
 const FOUP_SCALE = 1.6       // FOUPs and vehicles are drawn oversize so they read at this scale
 const FOUP_H = 0.48 * FOUP_SCALE
-const NEIGHBOURS_FRONT = [-13.5, -9, -4.5, -0.5, 9.5, 14]
-const NEIGHBOURS_BACK = [-13.5, -9, -4.5, 0, 4.5, 9, 13.5]
+// Neighbour meshes are a POOL, not a fixed arrangement. Where each one stands
+// comes from the selected tool's slot in its cell (see G.bayWindow), so two
+// tools in the same pod render as two different places in the same bay. The
+// pool is sized to what the rail can hold: 2L metres at one tool footprint.
+const POOL_PER_ROW = Math.ceil((2 * G.L) / G.SLOT_PITCH) + 1
 
 const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.1, ...extra })
 
@@ -447,9 +450,18 @@ function createWorld(host, toolId, family, kind) {
   scene.add(railMeshes(track))
   scene.add(shelves(track))
 
-  const neighbours = []
-  for (const x of NEIGHBOURS_FRONT) { const m = neighbourTool(-1); m.position.set(x, 0, G.FRONT_Z); scene.add(m); neighbours.push(m) }
-  for (const x of NEIGHBOURS_BACK) { const m = neighbourTool(1); m.position.set(x, 0, G.BACK_Z); scene.add(m); neighbours.push(m) }
+  // Two pools, one per row. They start hidden: until a layout arrives we do
+  // not know who is in this cell, and inventing a bay full of blank tools is
+  // what the fixed arrangement used to do.
+  const rowPools = { '-1': [], '1': [] }
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < POOL_PER_ROW; i++) {
+      const m = neighbourTool(s)
+      m.visible = false
+      scene.add(m)
+      rowPools[s].push(m)
+    }
+  }
 
   const focal = kind === 'furnace' ? furnaceTool(toolId, family) : kind === 'cmp' ? cmpTool(toolId, family)
     : kind === 'litho' ? lithoTool(toolId, family) : focalTool(toolId, family)
@@ -682,8 +694,24 @@ function createWorld(host, toolId, family, kind) {
     return m
   }
 
-  function setNeighbours(ids) {
-    neighbours.forEach((m, i) => setText(m.userData.label, ids[i] || ''))
+  // `win` is a G.bayWindow result: who is beside the selected tool, and where.
+  // Meshes are positioned per call rather than laid out once, which is the
+  // whole point -- the bay slides past a focal tool that never moves.
+  function setNeighbours(win) {
+    const used = { '-1': 0, '1': 0 }
+    for (const n of (win?.shown || [])) {
+      const pool = rowPools[n.s]
+      const i = used[n.s]
+      if (i >= pool.length) continue
+      used[n.s] += 1
+      const m = pool[i]
+      m.visible = true
+      m.position.set(n.x, 0, n.s < 0 ? G.FRONT_Z : G.BACK_Z)
+      setText(m.userData.label, shortId(n.id))
+    }
+    for (const s of [-1, 1]) {
+      for (let i = used[s]; i < rowPools[s].length; i++) rowPools[s][i].visible = false
+    }
   }
 
   // ---- per frame ----------------------------------------------------------
@@ -950,18 +978,27 @@ function createWorld(host, toolId, family, kind) {
   }
 }
 
-// Real neighbours from the synthetic floor plan: the other tools in this
-// tool's cell, same family first, so the subdued context is at least honest
-// about who shares the bay.
-function neighbourIds(layout, t) {
-  const n = NEIGHBOURS_FRONT.length + NEIGHBOURS_BACK.length
-  if (!layout || !layout.assign || !layout.assign[t.id]) return Array(n).fill('')
-  const [bay, seg] = layout.assign[t.id]
-  const cell = (layout.cell_tools || {})[`${bay},${seg}`] || []
-  const fam = t.group || ''
-  const others = cell.filter(id => id !== t.id)
-    .sort((a, b) => (b.startsWith(fam) - a.startsWith(fam)) || a.localeCompare(b))
-  return Array.from({ length: n }, (_, i) => others[i] || '')
+// Where this tool stands in its cell, and who is beside it.
+//
+// The cell's tools arrive in slot order and the tool's own slot says which
+// one it is, so the arrangement is this tool's, not a generic bay. Sorting
+// the neighbours -- which the fixed layout did, same family first -- would
+// undo exactly that: a neighbour is whoever is physically next to you.
+function bayFor(layout, t) {
+  const cellKey = (layout?.assign || {})[t.id]
+  if (!cellKey) return null
+  const cell = (layout.cell_tools || {})[`${cellKey[0]},${cellKey[1]}`] || []
+  const slot = (layout.slots || {})[t.id]
+  if (slot == null || !cell.length) return null
+  const tmpl = layout.cell_template || {}
+  return {
+    ...G.bayWindow(cell, slot, {
+      pitch: tmpl.slot_pitch_m || G.SLOT_PITCH,
+      rows: tmpl.rows || 2,
+    }),
+    cell: cellKey,
+    slot,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,7 +1257,7 @@ function Legend({ view }) {
   )
 }
 
-function StateStrip({ view, t, mode, hasReplayable, kind }) {
+function StateStrip({ view, t, mode, hasReplayable, kind, bay }) {
   const state = view?.state || 'IDLE'
   const base = G.statesFor(kind)
   const states = state === 'DOWN' ? [...base, 'DOWN'] : base
@@ -1248,6 +1285,17 @@ function StateStrip({ view, t, mode, hasReplayable, kind }) {
           : <span className="etch-dim">nothing on the tool</span>}
         {mode === 'live' && hasReplayable && (
           <span className="etch-dim">▶ watch on a recent decision below replays it here at 1x.</span>
+        )}
+        {bay && (
+          // What the bay actually is, rather than letting the window imply it
+          // is the whole pod. A crowded cell hides most of itself and saying
+          // so is cheaper than pretending the twelve on screen are all of it.
+          <span className="etch-dim">
+            bay {bay.cell[0]} · seg {bay.cell[1]} · slot {bay.slot + 1} of {bay.total}
+            {bay.hidden > 0
+              ? ` · showing ${bay.shown.length} of ${bay.total - 1} neighbours (${bay.hidden} beyond the view)`
+              : ` · all ${bay.shown.length} neighbours shown`}
+          </span>
         )}
         <span className="etch-dim">
           AMHS, ports and shelves are a visualisation of the decision: SMT2020 models transport as Delay steps, and the layout is synthetic (see Floor).
@@ -1335,7 +1383,8 @@ export default function EtchScene({ t, playback = null, onPlayback, track = null
 
   // Live polls only steer the scene in live mode; a replay owns the bay.
   useEffect(() => { if (!playRef.current) worldRef.current?.reconcile(t) }, [t])
-  useEffect(() => { worldRef.current?.setNeighbours(neighbourIds(layout, t)) }, [layout, t.id, t.group])
+  const bay = useMemo(() => bayFor(layout, t), [layout, t.id])
+  useEffect(() => { worldRef.current?.setNeighbours(bay) }, [bay])
 
   useEffect(() => { worldRef.current?.track(track) }, [track])
 
@@ -1385,7 +1434,7 @@ export default function EtchScene({ t, playback = null, onPlayback, track = null
           <Legend view={view} />
         </div>
       </div>
-      <StateStrip view={view} t={t} mode={mode} hasReplayable={!!latest} kind={kind} />
+      <StateStrip view={view} t={t} mode={mode} hasReplayable={!!latest} kind={kind} bay={bay} />
     </div>
   )
 }

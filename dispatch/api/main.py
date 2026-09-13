@@ -8,6 +8,7 @@
 # A React button must not be able to retune a running fab.
 
 import json
+import math
 import os
 import sys
 import queue
@@ -1546,13 +1547,57 @@ def area_for_group(group):
     return {"id": zid, "label": zid, "color": None}
 
 
-class Floorplan:
-    """Geometry plus a stable tool -> cell assignment.
+def _walk_cells(cells):
+    """A zone's cells in walking order, so "contiguous" means physically next.
 
-    The assignment is derived, because SMT2020 has no floorplan, but it must be
-    deterministic: tools are sorted and dealt round-robin into their zone's
-    cells, so a tool keeps its cell across restarts. A map that reshuffles on
-    reload teaches an operator nothing.
+    Bay-major and serpentine: down one bay's segments, up the next. Consecutive
+    cells are then always adjacent, which is what makes a family's run a strip
+    of floor rather than a set of cells that merely sort next to each other.
+    """
+    by_bay = defaultdict(list)
+    for c in cells:
+        by_bay[c[0]].append(tuple(c))
+    out = []
+    for i, bay in enumerate(sorted(by_bay)):
+        segs = sorted(by_bay[bay], key=lambda c: c[1], reverse=bool(i % 2))
+        out.extend(segs)
+    return out
+
+
+def slot_offset(slot, template):
+    """Slot index -> (dx, dz) metres from its cell's origin.
+
+    Two rows facing an intrabay aisle: slot i is in row i%2 at column i//2, so
+    consecutive slots alternate across the aisle the way tools face each other
+    in a real bay. dz is the aisle offset, negative for the front row.
+    """
+    rows = max(1, int(template.get("rows", 2)))
+    pitch = float(template.get("slot_pitch_m", 4.5))
+    offset = float(template.get("row_offset_m", 3.0))
+    row = slot % rows
+    col = slot // rows
+    dz = offset * (1 if row else -1) if rows > 1 else 0.0
+    return round(col * pitch, 3), round(dz, 3)
+
+
+class Floorplan:
+    """Geometry plus a stable tool -> (cell, slot) placement.
+
+    The placement is derived, because SMT2020 has no floorplan, but it must be
+    deterministic: families are walked in sorted order and tools within them in
+    sorted order, so a tool keeps its position for a given tool set. A map that
+    reshuffles on reload teaches an operator nothing.
+
+    Placement is family-coherent. Each family takes a CONTIGUOUS RUN of its
+    zone's cells, sized by how many machines it has; small families share a
+    cell, large ones span several. The previous round-robin deal scattered a
+    family's machines across every cell in its zone, which made "the other
+    tools in this bay" an arbitrary set and left a family with no location at
+    all -- and a location is what any future transport model has to key on.
+
+    Within a cell a tool takes a SLOT: a position in one of two rows either
+    side of the intrabay aisle, laid out by `cell_template` in the config. The
+    slot is what lets a view draw one tool somewhere different from another.
     """
 
     def __init__(self):
@@ -1560,14 +1605,16 @@ class Floorplan:
         self.error = None
         self.zone_cells = {}
         self.assign = {}          # tool_id -> (bay, seg)
-        self.cell_tools = {}      # (bay, seg) -> [tool_id]
+        self.cell_tools = {}      # (bay, seg) -> [tool_id], slot order
+        self.slots = {}           # tool_id -> slot index within its cell
+        self.capacity = []        # per-zone occupancy vs what a cell can hold
         self._assigned_for = set()
         self.lock = threading.Lock()
         try:
             with open(os.path.abspath(FLOORPLAN_FILE)) as f:
                 self.doc = json.load(f)
             for z in self.doc["zones"]:
-                self.zone_cells[z["id"]] = [tuple(c) for c in z["cells"]]
+                self.zone_cells[z["id"]] = _walk_cells(z["cells"])
         except Exception as e:
             self.error = str(e)
 
@@ -1580,21 +1627,78 @@ class Floorplan:
             if ids == self._assigned_for:
                 return
             self._assigned_for = ids
-            assign, cell_tools = {}, {}
-            by_zone = defaultdict(list)
+            assign, cell_tools, slots = {}, {}, {}
+
+            by_zone = defaultdict(lambda: defaultdict(list))
             for t in sorted(ids):
-                z = zone_for_group(tool_group(t))
+                g = tool_group(t)
+                z = zone_for_group(g)
                 if z:
-                    by_zone[z].append(t)
-            for z, tools in by_zone.items():
+                    by_zone[z][g].append(t)
+
+            for z, fams in by_zone.items():
                 cells = self.zone_cells.get(z) or []
                 if not cells:
                     continue
-                for i, t in enumerate(tools):
-                    cell = cells[i % len(cells)]
-                    assign[t] = cell
-                    cell_tools.setdefault(cell, []).append(t)
-            self.assign, self.cell_tools = assign, cell_tools
+                total = sum(len(v) for v in fams.values())
+                # Cell-space is measured in units of "an even share of the
+                # zone", so a family's run is proportional to its size without
+                # anyone needing to agree what a cell holds. The zone's cells
+                # are exactly consumed however lopsided the families are.
+                per_cell = total / len(cells)
+                cursor = 0.0
+                for fam in sorted(fams):
+                    tools = fams[fam]
+                    span = len(tools) / per_cell if per_cell else 0.0
+                    first = min(int(cursor), len(cells) - 1)
+                    last = min(max(first, math.ceil(cursor + span) - 1),
+                               len(cells) - 1)
+                    run = cells[first:last + 1]
+                    for i, t in enumerate(tools):
+                        cell = run[i * len(run) // len(tools)]
+                        assign[t] = cell
+                        cell_tools.setdefault(cell, []).append(t)
+                    cursor += span
+
+            # Slot order is the order tools were dealt into the cell: families
+            # in sorted order, tools sorted within them. So a cell's slots read
+            # as family blocks, and a tool's slot is stable for a tool set.
+            for cell, ts in cell_tools.items():
+                for i, t in enumerate(ts):
+                    slots[t] = i
+
+            self.assign, self.cell_tools, self.slots = assign, cell_tools, slots
+            self.capacity = self._capacity(cell_tools)
+
+    def _capacity(self, cell_tools):
+        """How far each zone's busiest cell overruns the floor it was given.
+
+        The synthetic grid predates any notion of where a tool sits, and in the
+        crowded zones a cell holds several times what its bay pitch can fit.
+        Slotting tools at a real footprint makes that visible instead of
+        hiding it behind a shrunken pitch, so it is measured and published.
+        """
+        tmpl = self.doc.get("cell_template") or {}
+        rows = max(1, int(tmpl.get("rows", 2)))
+        pitch = float(tmpl.get("slot_pitch_m", 4.5))
+        cell_w = float(self.doc.get("bay_pitch_m") or 0) or None
+        out = []
+        for z, cells in sorted(self.zone_cells.items()):
+            counts = [len(cell_tools.get(c, ())) for c in cells]
+            if not any(counts):
+                continue
+            worst = max(counts)
+            span = math.ceil(worst / rows) * pitch
+            out.append({
+                "zone": z,
+                "cells": len(cells),
+                "tools": sum(counts),
+                "max_per_cell": worst,
+                "span_m": round(span, 1),
+                "cell_w_m": cell_w,
+                "oversubscribed": round(span / cell_w, 1) if cell_w else None,
+            })
+        return out
 
 
 floorplan = Floorplan()
@@ -1711,6 +1815,8 @@ def layout():
     with floorplan.lock:
         assign = {t: list(c) for t, c in floorplan.assign.items()}
         cell_tools = {f"{b},{s}": list(v) for (b, s), v in floorplan.cell_tools.items()}
+        slots = dict(floorplan.slots)
+        capacity = [dict(c) for c in floorplan.capacity]
 
     delay_groups = defaultdict(list)
     unplaced = []
@@ -1724,6 +1830,16 @@ def layout():
     doc = dict(floorplan.doc)
     doc["assign"] = assign
     doc["cell_tools"] = cell_tools
+    # Slot within the cell, and the metres it works out to. The offsets are
+    # sent rather than left for each view to recompute: the map and the 3D
+    # scene drifting apart about where a tool is would be worse than either
+    # being wrong, and the template is right here in the same document.
+    doc["slots"] = slots
+    tmpl = doc.get("cell_template") or {}
+    doc["slot_offsets"] = {t: list(slot_offset(i, tmpl)) for t, i in slots.items()}
+    # Published because slotting tools at a real footprint overruns the
+    # synthetic cells in the crowded zones, and that is worth saying out loud.
+    doc["capacity"] = capacity
     doc["delays"] = [{"group": g, "tools": v, "count": len(v)}
                      for g, v in sorted(delay_groups.items())]
     # Surfaced rather than silently dropped: a tool with no zone mapping is a

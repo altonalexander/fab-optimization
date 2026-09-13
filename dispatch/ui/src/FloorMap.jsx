@@ -275,10 +275,16 @@ export default function FloorMap({ onOpenTool, sel, onSel, heat, onHeat }) {
             <Mini label="down" value={selCell.down} />
           </div>
           <h5>Tools</h5>
+          {/* Where each tool stands, not just who is here. The same slot order
+              the 3D scene builds its bay from, so the two views cannot
+              disagree about which tool is next to which. */}
+          <CellPlan tools={selTools} template={layout.cell_template}
+                    onOpenTool={onOpenTool} />
           <div className="floor-tools">
-            {selTools.map(t => (
+            {selTools.map((t, i) => (
               <button key={t} className="tcard" onClick={() => onOpenTool(t)}>
                 <div className="tcard-id">{t}</div>
+                <div className="tcard-slot">slot {i + 1}</div>
               </button>
             ))}
           </div>
@@ -286,6 +292,69 @@ export default function FloorMap({ onOpenTool, sel, onSel, heat, onHeat }) {
       )}
     </div>
   )
+}
+
+// The inside of one cell: two rows of tools either side of the intrabay
+// aisle, in slot order. This is the only place the map shows a position
+// WITHIN a pod -- the cell rects on the map itself are the pod, and until
+// this strip existed a cell was just a bag of tool ids.
+//
+// Drawn to scale in metres and then scaled to fit, so a crowded cell visibly
+// runs past the floor it was given rather than quietly compressing to fit.
+function CellPlan({ tools, template, onOpenTool }) {
+  const rows = Math.max(1, template?.rows || 2)
+  const pitch = template?.slot_pitch_m || 4.5
+  if (!tools.length) return null
+
+  const cols = Math.ceil(tools.length / rows)
+  const W = 30, H = 22, GAP = 3         // per-tool box, in drawing units
+  const vbW = cols * (W + GAP) + GAP
+  const vbH = rows * (H + GAP) + GAP + 16
+
+  return (
+    <div className="cell-plan">
+      <div className="cell-plan-head muted">
+        {tools.length} tools · {(cols * pitch).toFixed(1)} m of bay at {pitch} m pitch
+      </div>
+      <svg viewBox={`0 0 ${vbW} ${vbH}`} width="100%" className="cell-plan-svg"
+           role="group" aria-label="Tool positions within this cell">
+        {/* the aisle the tools face across */}
+        <line x1={0} y1={vbH / 2 - 8} x2={vbW} y2={vbH / 2 - 8}
+              stroke="#cbd5e1" strokeWidth={1} strokeDasharray="3 3" />
+        {tools.map((id, i) => {
+          const row = i % rows
+          const col = Math.floor(i / rows)
+          const x = GAP + col * (W + GAP)
+          const y = GAP + row * (H + GAP) + (row ? 8 : 0)
+          return (
+            <g key={id} role="button" tabIndex={0}
+               aria-label={`${id}, slot ${i + 1} of ${tools.length}`}
+               onClick={() => onOpenTool(id)}
+               onKeyDown={e => {
+                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenTool(id) }
+               }}
+               style={{ cursor: 'pointer' }}>
+              <rect x={x} y={y} width={W} height={H} rx={2}
+                    fill="#fff" stroke="#94a3b8" strokeWidth={0.8} />
+              <title>{id} · slot {i + 1}</title>
+              <text x={x + W / 2} y={y + H / 2 + 3} textAnchor="middle"
+                    fontSize={7} fill="#475569">{shortSlot(id)}</text>
+            </g>
+          )
+        })}
+        <text x={GAP} y={vbH - 3} fontSize={7} fill="#9ca3af">
+          slot 1 → {tools.length} · aisle between rows
+        </text>
+      </svg>
+    </div>
+  )
+}
+
+// Tool ids are long and the boxes are small; the tail is what distinguishes
+// machines of the same family, which is exactly what a cell is full of.
+const shortSlot = id => {
+  const m = String(id).match(/_(\d+)$/)
+  return m ? m[1] : String(id).slice(-4)
 }
 
 function Mini({ label, value }) {

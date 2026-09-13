@@ -6,6 +6,7 @@ import {
   planDeparture, departureAt, toolState, decideProgress, railDistance,
   V, L, R, HOIST_S, DECIDE_S, PRE_S, STOCKER_X, UTS_X, PARK, TOOL_X, N_PORTS, PORT_Y, SLOT_Y, CARRY_Y,
   portNode, stockerNode, utsNode,
+  toolSlotPos, bayWindow, SLOT_PITCH, ROW_OFFSET,
 } from './etch_geom.js'
 
 const track = buildTrack()
@@ -258,4 +259,64 @@ test('a changeover holds the tool between loading and processing, and is read fr
   assert.equal(statesFor('litho')[5], 'SETUP CHANGE'); assert.equal(sceneKind('LithoTrack_FE_115'), 'litho'); assert.equal(sceneKind('Litho_FE_92'), 'litho')
   assert.equal(sceneKind('LithoMet_FE_19'), null); assert.equal(sceneKind('Litho_REG_FE_64'), null)
   assert.equal(setupHue('-'), null); assert.equal(setupHue('SU036_1'), setupHue('SU036_1')); assert.ok(setupHue('SU036_1') >= 0 && setupHue('SU036_1') < 360)
+})
+
+test('tool slots alternate across the aisle and step by one footprint', () => {
+  assert.deepEqual(toolSlotPos(0), { x: 0, z: -ROW_OFFSET })
+  assert.deepEqual(toolSlotPos(1), { x: 0, z: ROW_OFFSET })
+  assert.deepEqual(toolSlotPos(2), { x: SLOT_PITCH, z: -ROW_OFFSET })
+  assert.deepEqual(toolSlotPos(3), { x: SLOT_PITCH, z: ROW_OFFSET })
+  // Rows straddle the rail, so a slot's z is one of exactly two values.
+  for (let i = 0; i < 40; i++) assert.ok(Math.abs(toolSlotPos(i).z) === ROW_OFFSET)
+})
+
+test('the bay window moves with the selected tool', () => {
+  const cell = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
+  const first = bayWindow(cell, 0)
+  const later = bayWindow(cell, 4)
+  // The whole point: a different tool is a different arrangement. The old
+  // scene put every focal tool at the same x with the same neighbours.
+  const xs = w => w.shown.map(n => `${n.id}@${n.x}`).join(' ')
+  assert.notEqual(xs(first), xs(later))
+  // Slot 0 is at one end, so nothing is upstream of it (slot 1 is its
+  // across-the-aisle partner, same column, so it sits at exactly TOOL_X)...
+  assert.ok(first.shown.every(n => n.x >= TOOL_X))
+  assert.equal(first.shown.find(n => n.slot === 1).x, TOOL_X)
+  // ...while a middle slot has tools on both sides.
+  assert.ok(later.shown.some(n => n.x < TOOL_X) && later.shown.some(n => n.x > TOOL_X))
+  // The focal tool is never its own neighbour, and every other tool is
+  // accounted for -- shown, or counted as clipped by the rail.
+  assert.equal(first.shown.length + first.hidden, cell.length - 1)
+  assert.ok(!first.shown.some(n => n.slot === 0))
+  assert.equal(bayWindow(['A', 'B', 'C', 'D'], 0).shown.length, 3, 'a short cell fits whole')
+})
+
+test('a cell wider than the rail reports what it could not show', () => {
+  // An etch cell really does hold this many: 312 tools over 10 cells.
+  const crowded = Array.from({ length: 36 }, (_, i) => `DE_FE_86_${i}`)
+  const w = bayWindow(crowded, 0)
+  assert.equal(w.total, 36)
+  assert.equal(w.shown.length + w.hidden + 1, 36, 'every tool is shown, hidden, or the focal one')
+  assert.ok(w.hidden > 0, 'a 36-tool cell cannot fit a 30m rail')
+  assert.ok(w.shown.every(n => n.x >= -L && n.x <= L))
+  // A small cell hides nothing.
+  assert.equal(bayWindow(['A', 'B', 'C'], 1).hidden, 0)
+})
+
+test('the focal tool keeps the front rail whichever row it really sits in', () => {
+  const cell = ['A', 'B', 'C', 'D', 'E', 'F']
+  // Slot 2 is an even (front) slot, slot 3 its odd (back) partner. Whichever
+  // is selected, its own row renders as the front rail, so the load ports and
+  // the track never have to move.
+  for (const focal of [2, 3]) {
+    const w = bayWindow(cell, focal)
+    const partner = w.shown.find(n => n.slot === (focal ^ 1))
+    assert.equal(partner.z, ROW_OFFSET, 'the aisle partner is across the aisle')
+    assert.equal(partner.x, TOOL_X, 'and level with the focal tool')
+    const sameCol = w.shown.filter(n => Math.floor(n.slot / 2) === Math.floor(focal / 2))
+    assert.equal(sameCol.length, 1, 'a column holds the focal tool and one other')
+  }
+  // Neighbours in the focal tool's own row stay on the front rail.
+  const w = bayWindow(cell, 3)
+  assert.equal(w.shown.find(n => n.slot === 1).z, -ROW_OFFSET)
 })

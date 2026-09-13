@@ -1,12 +1,18 @@
 {
   "synthetic": true,
-  "note": "Synthetic layout. SMT2020 has no floorplan (every machine's loc is 'Fab'), so tools are assigned to cells by family. Positions are plausible, not measured.",
+  "note": "Synthetic layout. SMT2020 has no floorplan (every machine's loc is 'Fab'), so tools are assigned to cells by family: each family takes a contiguous run of its zone's cells, and within a cell each tool takes a slot. Positions are plausible, not measured, and cells in the busiest zones are oversubscribed -- see `capacity` on /api/layout for by how much.",
   "envelope_m": [
     141.6,
     100.0
   ],
   "bay_pitch_m": 11.8,
   "seg_m": 12.5,
+  "cell_template": {
+    "rows": 2,
+    "slot_pitch_m": 4.5,
+    "row_offset_m": 3.0,
+    "note": "A cell's interior. rows=2 is front/back of the intrabay aisle; slot i sits in row i%2 at column i//2. slot_pitch_m is a tool footprint, so a cell holding more tools than its bay_pitch_m fits will overrun it -- that overrun is reported, not hidden."
+  },
   "bays": 12,
   "segs": 8,
   "cells": [

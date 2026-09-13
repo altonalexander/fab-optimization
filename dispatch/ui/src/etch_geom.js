@@ -41,6 +41,61 @@ export const PORT_PITCH = 1.0
 export const SHELF_IN = 0.9      // shelves hang on the aisle side of the rail, this far in
 export const ARC_SEGS = 8
 
+// ---------------------------------------------------------------------------
+// Where the focal tool stands in its own cell.
+//
+// The scene is a WINDOW onto a bay, not the whole bay: the rail runs from -L
+// to +L, so only the slots either side of the focal tool fit. Which is why
+// this returns both the neighbours it can show AND the count it cannot -- a
+// cell in the etch zone holds thirty-odd tools and showing twelve of them
+// silently would be the same lie the fixed layout used to tell.
+//
+// Everything is FOCAL-RELATIVE. The focal tool stays at TOOL_X and the bay
+// slides past it, so the track model, the parking spots and the exit spur
+// never have to know which tool is selected.
+// ---------------------------------------------------------------------------
+
+export const SLOT_PITCH = 4.5    // a tool footprint; matches cell_template
+export const ROW_OFFSET = 3.0    // half the aisle; matches FRONT_Z/BACK_Z
+
+// A tool slot's position within its cell, in the scene's frame. Mirrors
+// slot_offset() in api/main.py -- the API sends the metres, this is the
+// fallback for an older API and the thing the tests pin.
+//
+// NB "slot" is overloaded in this module: slotPos() below is a track-side
+// SHELF slot, which is a different thing entirely. Tool slots say so.
+export const toolSlotPos = (slot, pitch = SLOT_PITCH, rows = 2) => ({
+  x: Math.floor(slot / rows) * pitch,
+  z: (slot % rows) ? ROW_OFFSET : -ROW_OFFSET,
+})
+
+/**
+ * Lay a cell's tools out around the focal one.
+ *
+ * `tools` is the cell's occupants in slot order (slot i is tools[i]); `focal`
+ * is the selected tool's slot. Returns the neighbours that fit the rail, each
+ * with the sign of the row it belongs to, plus how many were cut.
+ */
+export function bayWindow(tools, focal, { pitch = SLOT_PITCH, rows = 2, half = L } = {}) {
+  const shown = []
+  let hidden = 0
+  const at = toolSlotPos(focal, pitch, rows)
+  for (let i = 0; i < tools.length; i++) {
+    if (i === focal) continue
+    const p = toolSlotPos(i, pitch, rows)
+    // Slide the cell so the focal slot lands on TOOL_X.
+    const x = p.x - at.x + TOOL_X
+    if (x < -half || x > half) { hidden++; continue }
+    // Rows are FOCAL-RELATIVE: whichever row the selected tool is in becomes
+    // the front rail, because that is where the scene's load ports and track
+    // are. So "across the aisle" stays across the aisle whether the tool sits
+    // in the odd or the even row of its real cell.
+    const across = (i % rows) !== (focal % rows)
+    shown.push({ id: tools[i], slot: i, x, z: across ? ROW_OFFSET : -ROW_OFFSET, s: across ? 1 : -1 })
+  }
+  return { shown, hidden, total: tools.length }
+}
+
 export const STOCKER_X = [-13.5, -12, -10.5, -9, -7.5, -6, -4.5, -3]
 export const UTS_X = [-6, -8, -10, -12]
 // Vehicle parking: one just after the left turn on the front rail (close to
