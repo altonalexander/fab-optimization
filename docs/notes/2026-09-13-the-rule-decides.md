@@ -232,11 +232,78 @@ reason. The honest comparison waits for the same window on both.
 cannot be observed cannot be estimated, cannot be aborted early, and cannot
 be trusted to be measuring what you think it is.
 
+## And then we ran it
+
+The solver went up against the queue-time sort key at the operating point,
+twice, aimed at the due-date imbalance. Six months of simulated time each.
+
+It lost, on everything.
+
+| | good lots/day | on-time | scrapped | inventory |
+|---|---:|---:|---:|---|
+| queue-time sort key | **57.5** | **81.7%** | 0 | **steady** |
+| solver (run 1) | 48.1 | 24.9% | 0 | climbing |
+| solver (run 2) | 48.5 | 24.2% | 0 | climbing |
+
+Lateness, totalled: **1,925 lot-days for the sort key, 91,888 for the
+solver.** The two solver runs agree with each other to within half a lot a
+day, so this isn't a fluke of one run.
+
+The target had been the imbalance between products — some finishing at 99% on
+time, others at 84%. The solver didn't close that gap, it flattened
+everything: nine of ten products dropped 53 to 81 percentage points.
+
+It also costs **5.7× the wall clock** — and that's *after* the 2.9× speedup.
+
+### The part that nearly fooled us
+
+We ran a short 20-day version first, to check the pace. It said the solver was
+**winning** — level throughput and better on-time than the sort key over the
+same days.
+
+The full run says the opposite. The solver is fine until a backlog builds, and
+then it degrades along with it; inventory climbs the entire six months.
+
+**If we had trusted the short run, this page would say the solver works.** It
+was distrusted only on a technicality — the short run reported a running
+average while the reference reported a daily rate, and the sort key happened
+to have a dip in exactly those days. That objection was about how the numbers
+were shaped, not about the answer, and it happened to save us from publishing
+the opposite of the truth.
+
+That is the night's lesson in its sharpest form: **a window long enough to be
+convenient is not long enough to be right**, and when a short window is wrong
+it isn't noisy — it points confidently the wrong way.
+
+## Where that leaves the project
+
+Four kinds of constraint, four losses:
+
+- machine qualification — a filter; sorting handles it
+- reticles — never actually binding on this fab
+- queue time — a five-line sort key takes scrap to zero
+- due-date balance — the solver makes it dramatically worse
+
+The bet the project rested on — that the solver beats the simple rule — has
+now failed four times, the last one on the problem shape that suited it best.
+The recommendation is to stop pursuing the solver for moment-to-moment
+dispatching.
+
+That is not a wasted night, because the other finding is bigger than the one
+we were chasing: **the choice of simple rule decides whether the fab survives
+at all.** We went looking for a few percent and found the difference between a
+fab that runs and one that buries itself.
+
 ## What's next
 
-1. Run the solver against `qt` at this operating point, twice, aimed at the
-   due-date imbalance rather than at queue time.
-2. Tune `qt` first if the solver wins, because beating a weak baseline proves
-   nothing.
-3. Give the solver a deterministic deadline, so runs replay. The code already
-   claims this.
+1. One attempt at strengthening how the solver weighs queue time — it treats
+   it as a preference where the sort key treats it as a rule. Tuning, not a
+   new idea, and it should be time-boxed.
+2. Tune the sort key, so that whatever it is compared against next faces a
+   harder bar.
+3. Try the other fab in the dataset. Every negative so far is on the
+   low-volume/high-mix scenario, where machines within a group are identical
+   and reticles never bind — which is exactly where an assignment solver has
+   least to offer.
+4. Give the solver a deterministic deadline, so runs replay. The code already
+   claims this and doesn't do it.

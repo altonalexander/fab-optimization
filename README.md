@@ -112,11 +112,28 @@ result.**
   This is the one constraint class that makes the fab able to *lose* work
   rather than just be slow, and it is now enforced.
 
-The working conclusion is that a fab has to be pushed into a much harder
-regime before the dispatching decision is worth solving rather than sorting —
-and [`0017`](docs/adr/0017-fab-conditions-analysis.md) is the search for that
-regime. If it turns out not to exist on this fab, that is a real answer and
-gets written up as one.
+- **Due-date balance** — the last and best-shaped candidate
+  ([`0017`](docs/adr/0017-fab-conditions-analysis.md)). With queue times
+  enforced, a queue-time-aware sort key leaves the fab stable at full load
+  with zero scrap, and ~7% of lots late — unevenly, some products at 99% and
+  others at 84%. Rebalancing that is a decision about a *set*, which is the
+  solver's whole claim. Measured over 180 days, twice: the solver delivers
+  **48.1 good lots/day against the sort key's 57.5, on-time 24.9% against
+  81.7%**, with WIP diverging rather than stationary, at **5.7× the wall
+  clock**. It did not close the per-product gap; it flattened nine of ten
+  products by 53 to 81 points.
+
+**So the answer is no, four times over, and the recommendation is to stop
+pursuing CP-SAT for moment-to-moment dispatching.** The assignment
+formulation may still earn its cost in the segment scheduler, or on the
+high-volume scenario where tools within a group are not interchangeable —
+neither of which this work speaks to.
+
+The bigger finding is the one we were not looking for: **which simple rule you
+choose decides whether the fab is viable at all**, not merely how efficient it
+is. A queue-time-aware rule holds WIP stationary at full load with zero scrap;
+`cr` and `fifo` diverge on the same fab, same demand, same machines. That is
+replicated on three seeds and is worth more than the question it came from.
 
 ### What went wrong on the way, and why it is in the ADRs
 
