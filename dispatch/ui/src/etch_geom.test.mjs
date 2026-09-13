@@ -7,6 +7,7 @@ import {
   V, L, R, HOIST_S, DECIDE_S, PRE_S, STOCKER_X, UTS_X, PARK, TOOL_X, N_PORTS, PORT_Y, SLOT_Y, CARRY_Y,
   portNode, stockerNode, utsNode,
   toolSlotPos, bayWindow, SLOT_PITCH, ROW_OFFSET,
+  groupOfTool, pickScenes, SCENE_KINDS,
 } from './etch_geom.js'
 
 const track = buildTrack()
@@ -319,4 +320,57 @@ test('the focal tool keeps the front rail whichever row it really sits in', () =
   // Neighbours in the focal tool's own row stay on the front rail.
   const w = bayWindow(cell, 3)
   assert.equal(w.shown.find(n => n.slot === 1).z, -ROW_OFFSET)
+})
+
+test('a tool id resolves to its family the way the API groups it', () => {
+  assert.equal(groupOfTool('DE_FE_86_204'), 'DE_FE_86')
+  assert.equal(groupOfTool('ETCH_11'), 'ETCH')
+  assert.equal(groupOfTool('LithoTrack_FE_115_23'), 'LithoTrack_FE_115')
+  // Unnumbered tails are their own group, not a guess.
+  assert.equal(groupOfTool('Planar_BE_75_x'), 'Planar_BE_75_x')
+  assert.equal(groupOfTool('solo'), 'solo')
+  assert.equal(groupOfTool(''), '')
+  // The families that must NOT read as etch, which a bare /^DE_/ on the id
+  // would be at risk of: Delay_* placeholders and the metrology family.
+  assert.equal(sceneKind(groupOfTool('Delay_32_7')), null)
+  assert.equal(sceneKind(groupOfTool('DefMet_FE_43_2')), null)
+  assert.equal(sceneKind(groupOfTool('DE_FE_86_204')), 'etch')
+})
+
+test('each scene kind gets one online tool, and an all-down kind says so', () => {
+  const tools = {
+    DE_FE_86_1: { online: true }, DE_FE_86_2: { online: true },
+    LithoTrack_FE_115_1: { online: true },
+    Planar_BE_75_1: { online: false }, Planar_BE_75_2: { online: false },
+    Diffusion_FE_94_1: { online: true },
+    Delay_32_1: { online: true },          // not a scene, must not appear
+    DefMet_FE_43_1: { online: true },      // ditto
+  }
+  const got = pickScenes(tools, () => 0)
+  assert.deepEqual(got.map(s => s.kind), SCENE_KINDS, 'one per kind, in a fixed order')
+  const by = Object.fromEntries(got.map(s => [s.kind, s]))
+  assert.ok(['DE_FE_86_1', 'DE_FE_86_2'].includes(by.etch.id))
+  assert.equal(by.etch.online, 2)
+  // A kind whose tools are all down still gets a link, flagged.
+  assert.equal(by.cmp.allDown, true)
+  assert.ok(['Planar_BE_75_1', 'Planar_BE_75_2'].includes(by.cmp.id))
+  assert.equal(by.cmp.online, 0)
+  assert.equal(by.furnace.allDown, false)
+  // Nothing that is not a scene family leaks in.
+  assert.ok(!got.some(s => s.id.startsWith('Delay') || s.id.startsWith('DefMet')))
+})
+
+test('the draw prefers online tools and stays inside the pool', () => {
+  const tools = { DE_FE_86_1: { online: false }, DE_FE_86_2: { online: true } }
+  // Whatever the draw lands on, the down tool is not chosen while one is up.
+  for (const r of [0, 0.25, 0.5, 0.99]) {
+    assert.equal(pickScenes(tools, () => r)[0].id, 'DE_FE_86_2')
+  }
+  // rand() returning exactly 1 must not index off the end.
+  const many = Object.fromEntries(
+    Array.from({ length: 5 }, (_, i) => [`DE_FE_86_${i}`, { online: true }]))
+  const edge = pickScenes(many, () => 1)[0]
+  assert.ok(Object.keys(many).includes(edge.id), 'rand()===1 stays in range')
+  // A kind that is absent entirely is simply not offered.
+  assert.deepEqual(pickScenes({}, () => 0), [])
 })

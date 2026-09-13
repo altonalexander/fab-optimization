@@ -13,7 +13,7 @@ import StreamChart from './StreamChart.jsx'
 import KpiPanel, { KPIS, Info, valueOf, isHeadline, subFor, WipSinceDay0 } from './KpiPanel.jsx'
 import ResultsPage from './ResultsPage.jsx'
 import { spanFor, fmtSpan, fmtSimTime } from './stream_geom.js'
-import { isSceneFamily, sceneKind, decisionForLot } from './etch_geom.js'
+import { isSceneFamily, sceneKind, decisionForLot, pickScenes, KIND_LABEL } from './etch_geom.js'
 
 // three.js only reaches the browser on a dry-etch tool page: the scene is a
 // separate chunk, so every other view pays nothing for it.
@@ -146,6 +146,56 @@ function useLiveState() {
 // `href` makes a tile a link to the view that explains it. A plain <a> rather
 // than an onClick so the hash router, middle-click, and copy-link all keep
 // working for free -- the tile becomes a real URL, not a click handler.
+// A way into each 3D scene without knowing a tool id to type.
+//
+// Four kinds of tool draw a bay (etch, litho, CMP, furnace) and between them
+// they are a few hundred machines out of nine hundred, so the tools tab is a
+// poor place to discover that the scenes exist at all. A fresh tool is drawn
+// on each load rather than a fixed four: the point is that any of them opens,
+// not that these particular four are special.
+function SceneLinks({ tools }) {
+  const [nonce, setNonce] = useState(0)
+  const picks = useMemo(
+    () => pickScenes(tools || {}),
+    // Redrawn when asked, and when the roster first arrives -- not on every
+    // state frame, or the links would reshuffle under the cursor twice a second.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nonce, tools ? Object.keys(tools).length : 0],
+  )
+  if (!picks.length) return null
+  return (
+    <section className="scene-links">
+      <div className="scene-links-head">
+        <h3>See a tool in 3D</h3>
+        <button className="rail-toggle" onClick={() => setNonce(n => n + 1)}
+                title="draw a different tool of each type">shuffle</button>
+      </div>
+      <p className="muted" style={{ marginTop: -4 }}>
+        These four types draw their bay: the lots waiting for the tool, its
+        load ports, and the vehicle that carries the dispatched lot over. A
+        different tool each time you land here — there are {' '}
+        {picks.reduce((n, p) => n + p.count, 0).toLocaleString()} of them.
+      </p>
+      <div className="scene-link-row">
+        {picks.map(p => (
+          <a key={p.kind} className="scene-link" href={linkTo(['tools', p.id])}>
+            <div className="scene-link-kind">{p.kind}</div>
+            <code className="scene-link-id">{p.id}</code>
+            <div className="scene-link-sub muted">{KIND_LABEL[p.kind]}</div>
+            <div className="scene-link-sub muted">
+              {p.allDown
+                // Worth saying: the scene will open with a red lamp and
+                // nothing moving, and that is the fab, not a broken page.
+                ? `all ${p.count} down right now`
+                : `${p.online} of ${p.count} online`}
+            </div>
+          </a>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function Stat({ label, value, sub, accent, href, title, info }) {
   const body = (
     <>
@@ -1497,6 +1547,8 @@ export default function App() {
           </section>
         </div>
       )}
+
+      {tab === 'live' && <SceneLinks tools={state?.tools} />}
 
       {tab === 'live' && (
         <div className="grid-wide">

@@ -550,10 +550,62 @@ export const fmtDur = (s) => {
 export const sceneKind = g => /^DE_/i.test(String(g || '')) ? 'etch' : /^Planar_/i.test(String(g || '')) ? 'cmp'
   : /^Diffusion_/i.test(String(g || '')) ? 'furnace' : /^Litho(Track)?_(FE|BE)_/i.test(String(g || '')) ? 'litho' : null
 export const isSceneFamily = g => sceneKind(g) != null
+// A tool id -> its family, mirroring tool_group() in api/main.py: strip one
+// trailing _<digits>. DE_FE_86_204 -> DE_FE_86, ETCH_11 -> ETCH. Needed
+// wherever we have an id but not the row the API would have grouped for us.
+export const groupOfTool = (id) => {
+  const s = String(id || '')
+  const i = s.lastIndexOf('_')
+  if (i <= 0) return s
+  const tail = s.slice(i + 1)
+  return (tail && /^\d+$/.test(tail)) ? s.slice(0, i) : s
+}
 export const isEtchFamily = g => sceneKind(g) === 'etch'
 export const KIND_LABEL = { etch: 'plasma etch cluster tool · 4 chambers', cmp: 'CMP polisher · 3 platens + post-clean',
   furnace: 'vertical diffusion furnace · 2 tubes · batches of 3-6 lots',
   litho: 'litho cell · coat/develop track + scanner · one setup per layer' }
+
+export const SCENE_KINDS = ['etch', 'litho', 'cmp', 'furnace']
+
+/**
+ * One tool to show off each scene kind.
+ *
+ * `tools` is the live roster as {id: {online}}, which the overview already
+ * holds -- no extra poll for a list it is being sent anyway.
+ *
+ * Random, but never deliberately unhelpful: a tool that is DOWN draws a bay
+ * with a red lamp and nothing moving, which is a poor thing to hand someone
+ * who clicked "show me a furnace". So the draw is from the online tools of
+ * the kind, and only falls back to a down one when the whole kind is down --
+ * in which case say so rather than pretend.
+ */
+export function pickScenes(tools, rand = Math.random) {
+  const byKind = {}
+  for (const [id, t] of Object.entries(tools || {})) {
+    const kind = sceneKind(groupOfTool(id))
+    if (!kind) continue
+    const b = byKind[kind] || (byKind[kind] = { on: [], off: [] })
+    ;(t && t.online === false ? b.off : b.on).push(id)
+  }
+  const out = []
+  for (const kind of SCENE_KINDS) {
+    const b = byKind[kind]
+    if (!b) continue
+    const pool = b.on.length ? b.on : b.off
+    // Sorted before drawing: Object.entries order is insertion order, which
+    // depends on the order tools announced themselves, so an unsorted draw
+    // would be subtly biased by feed timing rather than uniform.
+    pool.sort()
+    out.push({
+      kind,
+      id: pool[Math.floor(rand() * pool.length) % pool.length],
+      count: b.on.length + b.off.length,
+      online: b.on.length,
+      allDown: b.on.length === 0,
+    })
+  }
+  return out
+}
 
 // ---------------------------------------------------------------------------
 // Replaying a recorded decision
