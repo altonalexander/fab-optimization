@@ -412,24 +412,37 @@ because ADR 0012 had one too ("every machine in a group is identical") and
 fixing it did not help. A stronger q-time weight is a tuning exercise on a
 method that has now lost on four constraint classes.
 
-### 11.2 The short window said the opposite
+### 11.2 The short window looked acceptable
 
-A 20-day probe over days 90–110 read **58.1 good/day and 87.4% on-time**,
-against `qt`'s 58.5 and 83.3% on the same days — level throughput, *better*
-on-time. On that evidence `slate` wins.
+Read the SAME run over growing windows — one configuration, no confounds:
 
-Over 180 days the same configuration reads 48.1 and 24.9%.
+| `slate` a, window | throughput | on-time | WIP |
+|---|---:|---:|---:|
+| days 90–110 | 56.4/d | **82.0%** | 2181 |
+| days 90–150 | 50.2/d | 39.3% | 2351 |
+| days 90–210 | 48.6/d | 27.9% | 2643 |
+| days 90–270 (full) | 48.1/d | **23.7%** | 2942 |
+| *`qt`, days 90–110* | *58.5/d* | *83.3%* | *2205* |
 
-`slate` is fine until the backlog builds and then degrades with it; WIP climbs
-the entire window. **Had the probe been trusted, this ADR would record a win.**
-It was not trusted only because the probe's running-average throughput was not
-comparable to a trailing-day rate, and `qt` happened to dip in exactly those
-days — an objection about metric shape, not about the result.
+**At 20 days `slate` is within 2 lots/day and 1.3 on-time points of `qt`** — a
+result anyone would report as "no material difference". At 180 days it is 9
+lots/day and 58 points worse. The decay is monotonic, so it is not noise: it
+is a backlog compounding, and WIP climbs the whole way.
 
-This is the sharpest instance of the pattern this repo keeps producing, and it
-belongs in §6 of anything written next: **a window long enough to be
-convenient is not long enough to be right**, and the failure mode is not noise
-but a systematic transient that points the wrong way.
+A 20-day probe run separately at `--threads -4` read better still — 58.1/day
+and 87.4% on-time, which would have read as `slate` *winning*. That probe
+differed from the long runs in two ways, window AND worker count, so its
+margin cannot be attributed to the window alone. The gap between it and the
+long run's own early window (58.1 vs 56.4, ~3%) also sits inside the
+serial-vs-serial noise floor measured at 169–181 lots, so a thread effect and
+ordinary variance are indistinguishable at n=1 each. Recorded because the
+first draft of this section claimed the probe proved the short window
+misleading, which over-read a confounded comparison.
+
+The lesson does not need that claim. **A window long enough to be convenient
+is not long enough to be right** — and the failure mode here is not a short
+window pointing the wrong way, which would be obvious, but a short window
+looking *acceptable* while the mechanism that ruins the run is still building.
 
 ### 11.3 What it costs
 

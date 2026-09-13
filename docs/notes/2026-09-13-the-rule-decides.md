@@ -257,23 +257,35 @@ It also costs **5.7× the wall clock** — and that's *after* the 2.9× speedup.
 
 ### The part that nearly fooled us
 
-We ran a short 20-day version first, to check the pace. It said the solver was
-**winning** — level throughput and better on-time than the sort key over the
-same days.
+Take the *same* solver run and just read it over longer and longer stretches:
 
-The full run says the opposite. The solver is fine until a backlog builds, and
-then it degrades along with it; inventory climbs the entire six months.
+| first ... of the run | lots/day | on-time |
+|---|---:|---:|
+| 20 days | 56.4 | **82.0%** |
+| 60 days | 50.2 | 39.3% |
+| 120 days | 48.6 | 27.9% |
+| 180 days | 48.1 | **23.7%** |
 
-**If we had trusted the short run, this page would say the solver works.** It
-was distrusted only on a technicality — the short run reported a running
-average while the reference reported a daily rate, and the sort key happened
-to have a dip in exactly those days. That objection was about how the numbers
-were shaped, not about the answer, and it happened to save us from publishing
-the opposite of the truth.
+At twenty days the solver is within two lots a day and about one point of
+on-time of the sort key — a result anyone would write up as "no real
+difference, needs tuning". At six months it is nine lots a day and fifty-eight
+points worse. The slide is steady, not noisy: a backlog building, and
+inventory rising the whole way.
 
-That is the night's lesson in its sharpest form: **a window long enough to be
-convenient is not long enough to be right**, and when a short window is wrong
-it isn't noisy — it points confidently the wrong way.
+**A short check would not have screamed that something was wrong. It would
+have looked fine.** That is worse than being obviously wrong, because nothing
+prompts you to look harder.
+
+(We also ran a separate quick version that read better still, and briefly took
+that as evidence the solver was winning. It wasn't a fair comparison — it
+differed from the real runs in two ways, not one — and the difference was
+small enough to be ordinary run-to-run variation anyway. Worth recording
+because we nearly built a conclusion on it.)
+
+The lesson: **a window long enough to be convenient is not long enough to be
+right** — and the dangerous case isn't the short run that points the wrong
+way, it's the short run that looks acceptable while the thing that ruins it is
+still building.
 
 ## Where that leaves the project
 
