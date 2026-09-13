@@ -25,9 +25,13 @@ overturn it. Not how anything works — that lives beside the code.
 | [0017](0017-fab-conditions-analysis.md) | Fab conditions analysis: locate the cliff on a queue-time grid, then operate just past it (in progress; §8 — the cheap gate killed the first matrix, and scrap broke the WIP-stationarity criterion) |
 | [0018](0018-dashboard-assistant.md) | The dashboard assistant: one agent, two answer paths, and nothing stated from model recall (implemented; the help corpus is the fast path and is easy to break) |
 
-Plain-language write-up of how 0012 → 0013 → 0014 played out, including the
-three ways the measurements lied on the way:
-[`docs/notes/2026-09-12-does-the-solver-earn-its-place.md`](../notes/2026-09-12-does-the-solver-earn-its-place.md).
+Plain-language write-ups, for whoever picks this up next:
+
+- [2026-09-12 — does the solver earn its place?](../notes/2026-09-12-does-the-solver-earn-its-place.md)
+  how 0012 → 0013 → 0014 played out, and the three ways the measurements lied.
+- [2026-09-13 — the rule decides whether the fab survives](../notes/2026-09-13-the-rule-decides.md)
+  0016 → 0017: queue time, the rework loop that ate the fab, and the finding
+  that dispatching determines viability rather than efficiency.
 
 ## Why these are central and not filed under bench/ or dispatch/
 
