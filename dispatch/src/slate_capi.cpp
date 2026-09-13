@@ -257,6 +257,11 @@ int fabslate_plan(void* handle,
     cfg.solve_budget_s = budget_s;
     cfg.relative_gap   = relative_gap;
     cfg.threads        = threads;
+    // Negative `threads` means: solve ONE model single-threaded, and spend the
+    // parallelism across families instead (adr/0009). |threads| workers, 0 for
+    // hardware concurrency. Encoded in the sign so the ABI is unchanged.
+    if (threads < 0) { cfg.threads = 1; cfg.plan_threads = -threads; }
+    else             { cfg.plan_threads = 1; }
 
     std::set<std::string> dirty;
     const std::set<std::string>* dirty_p = nullptr;

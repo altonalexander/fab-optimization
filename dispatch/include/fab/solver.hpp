@@ -69,6 +69,15 @@ public:
     // Warm start from the previous cycle. Between two 10s cycles the fab has
     // barely moved, so this is a large win for the MIP backends.
     virtual void set_hint(const std::unordered_map<int, int>&) {}
+
+    // A fresh, independent instance of this backend, for solving families
+    // concurrently (Planner::plan_by_family). Backends carry per-solve state
+    // -- `hint_` at minimum -- so one object cannot serve several threads.
+    //
+    // Returning nullptr means "no concurrent instance available", and the
+    // planner then solves serially. That is the safe default: a backend that
+    // has not thought about it does not silently get run in parallel.
+    virtual std::unique_ptr<SolverBackend> clone() const { return nullptr; }
 };
 
 // ---------------------------------------------------------------------------
@@ -80,6 +89,9 @@ class GreedySolver : public SolverBackend {
     static inline const ReticleId kNoReticle{};
 public:
     const char* name() const override { return "greedy"; }
+    std::unique_ptr<SolverBackend> clone() const override {
+        return std::make_unique<GreedySolver>();
+    }
     bool available() const override { return true; }
 
     SolveResult solve(const AssignmentModel& m,
@@ -167,6 +179,9 @@ public:
 class CpSatSolver : public SolverBackend {
 public:
     const char* name() const override { return "cpsat"; }
+    std::unique_ptr<SolverBackend> clone() const override {
+        return std::make_unique<CpSatSolver>();
+    }
     bool available() const override {
 #ifdef FAB_HAVE_ORTOOLS
         return true;
