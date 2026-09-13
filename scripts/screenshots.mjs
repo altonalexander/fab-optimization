@@ -43,7 +43,10 @@ const { chromium } = await (async () => {
   console.error('  cd dispatch/ui && npm i -D playwright && npx playwright install chromium\n')
   process.exit(1)
 })()
-const OUT = path.join(HERE, '..', 'docs', 'screenshots')
+// FAB_SHOTS_OUT is for checking a capture before it overwrites the committed
+// set -- point it at a scratch directory, look at what came out, then run it
+// for real. Thirteen images is too many to review after the fact.
+const OUT = process.env.FAB_SHOTS_OUT || path.join(HERE, '..', 'docs', 'screenshots')
 const base = (process.argv[2] || 'http://127.0.0.1:5199').replace(/\/$/, '')
 const code = process.argv[3] || process.env.FAB_ACCESS_CODE || ''
 const W = 1440, H = 1000
@@ -125,11 +128,14 @@ for (const s of SHOTS) {
   // The paused explainer covers everything; dismiss without changing the run.
   const keep = await p.$('button:has-text("Keep it paused")')
   if (keep) { await keep.click(); await p.waitForTimeout(300) }
-  // The assistant's greeting bubble types itself in and would be caught
-  // mid-word in every image.
-  const hush = await p.$('.bubble-close, .rail-toggle')
-  if (hush) { await hush.click().catch(() => {}) }
-  await p.waitForTimeout(2500)
+  // The assistant's greeting bubble types itself in, so it would be caught
+  // mid-word in every image and it covers the bottom-right corner of the one
+  // panel most of these pages put there. Dismissed per shot rather than once:
+  // it is re-offered on navigation.
+  await p.waitForTimeout(1200)
+  const hush = await p.$('.launcher-close')
+  if (hush) { await hush.click().catch(() => {}); await p.waitForTimeout(300) }
+  await p.waitForTimeout(1800)
   if (s.prep) await s.prep(p)
   const file = path.join(OUT, `${s.name}.png`)
   await p.screenshot({ path: file, fullPage: !!s.full })
