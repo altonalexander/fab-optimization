@@ -197,6 +197,41 @@ has an error bar rather than a decimal point. That is the same mistake as
 "sized it from one seed," one level down — and we only noticed because the
 question was asked out loud.
 
+## Four hours blind
+
+The big comparison run printed **nothing** between starting and finishing.
+That turned out to matter more than it sounds.
+
+It ran for four hours and I gave three different estimates of when it would
+finish, each from a different multiplier, each wrong — because with no output
+there was nothing to correct them against. Worse: if the run had been failing,
+we would have paid the full four hours to find out.
+
+The obvious fix is to print progress, which we added — too late for the run it
+was written for, since restarting to gain visibility would have cost more than
+the visibility was worth.
+
+So we measured the pace *beside* it instead: a short instrumented run over the
+same fab, cheap enough to finish quickly. Within four minutes it answered the
+question that actually mattered, which was not "how long" but **"is the solver
+doing anything at all?"**
+
+It was: the solver decided **47%** of dispatches, scrap stayed at zero and
+inventory stayed flat. A solver run where that coverage number is near zero is
+measuring its fallback rather than the solver, and that is worth knowing at
+minute four rather than hour four.
+
+One piece of discipline held here too. The short run's early throughput looked
+far better than the sort key's — and it isn't a fair comparison, for two
+reasons: our progress figure is a running average while the reference is a
+trailing-day rate, and the sort key happens to have a dip in exactly those
+days. Comparing across that would have flattered the solver for no real
+reason. The honest comparison waits for the same window on both.
+
+**Lesson: instrument the long run before running it, not after.** A run that
+cannot be observed cannot be estimated, cannot be aborted early, and cannot
+be trusted to be measuring what you think it is.
+
 ## What's next
 
 1. Run the solver against `qt` at this operating point, twice, aimed at the
