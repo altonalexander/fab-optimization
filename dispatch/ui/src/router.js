@@ -13,7 +13,35 @@ import { useCallback, useEffect, useState } from 'react'
 // still work: they are rewritten to the path form on load.
 // ---------------------------------------------------------------------------
 
-export const TABS = ['live', 'lots', 'tools', 'floor', 'routes', 'slate', 'results', 'topology']
+// The nav, grouped by the question each view answers. Eight tabs at one level
+// read as eight equally-weighted nouns, and three of those nouns (slate, lots,
+// topology) are project jargon that nobody guesses right the first time.
+//
+// The `id` is the URL segment and is DELIBERATELY unchanged: every /slate and
+// /lots link already pasted into a chat or an ADR keeps working. Only the
+// label people read is new.
+export const NAV = [
+  { group: 'Watch', tabs: [
+    { id: 'live', label: 'Overview' },
+    { id: 'floor', label: 'Floor' },
+    { id: 'tools', label: 'Tools' },
+    { id: 'lots', label: 'Cohorts' },
+    { id: 'routes', label: 'Routes' },
+  ] },
+  { group: 'Evaluate', tabs: [
+    { id: 'results', label: 'Results' },
+    { id: 'slate', label: 'Planner' },
+  ] },
+  { group: 'System', tabs: [
+    { id: 'topology', label: 'Architecture' },
+  ] },
+]
+
+// Derived, never hand-maintained: a tab added to NAV is routable by that fact
+// alone, and one that is not in NAV cannot be reached, which is the failure
+// mode worth making impossible.
+export const TABS = NAV.flatMap(g => g.tabs.map(t => t.id))
+
 const DEFAULT = '/live'
 const CHANGE = 'routechange'
 

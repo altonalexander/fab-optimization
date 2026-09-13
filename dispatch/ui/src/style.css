@@ -48,6 +48,12 @@ button.live:not(:disabled):hover{border-color:#9ca3af}
 
 .stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
   gap:10px;margin-bottom:18px}
+/* A stats row nested inside a section already sitting on --card. Flat tiles,
+   no second border, so it reads as part of the panel rather than as another
+   copy of the headline row that lives above the nav. */
+.stats-row-inset{margin-bottom:0;justify-content:start;
+  grid-template-columns:repeat(auto-fit,minmax(150px,220px))}
+.stats-row-inset .stat{background:var(--bg);border-color:transparent}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
 .stat-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
 .stat-value{font-size:24px;font-weight:600;margin-top:2px}
@@ -61,13 +67,28 @@ button.live:not(:disabled):hover{border-color:#9ca3af}
 .stat-sub{font-size:11px;color:var(--mut);margin-top:2px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-.tabs{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+/* Grouped by the question each view answers -- watch the fab, judge the
+   dispatcher, inspect the plumbing -- because eight tabs on one line read as
+   eight things of equal weight when they are nothing of the kind. The group
+   label is the separator; no extra rule is drawn between groups. */
+.tabs{display:flex;flex-wrap:wrap;align-items:flex-end;gap:0 20px;
+  margin-bottom:16px;border-bottom:1px solid var(--line)}
+.tabs-group{display:flex;align-items:flex-end;gap:2px}
+.tabs-group-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--mut);opacity:.75;padding:0 6px 11px 0;white-space:nowrap}
 /* Tabs and tool cards are anchors now, not buttons -- they carry real hrefs so
    they can be copied, opened in a new tab and middle-clicked. */
-.tabs a{background:none;border:0;padding:8px 14px;cursor:pointer;
+.tabs a{background:none;border:0;padding:8px 12px;cursor:pointer;
   color:var(--mut);font-size:13px;border-bottom:2px solid transparent;
-  text-decoration:none}
+  text-decoration:none;white-space:nowrap}
+.tabs a:hover{color:var(--fg)}
 .tabs a.active{color:var(--fg);border-bottom-color:var(--fg);font-weight:600}
+@media(max-width:720px){
+  /* The group labels cost a line each at phone width and the tab names carry
+     the meaning on their own once they are stacked. */
+  .tabs-group-label{display:none}
+  .tabs{gap:0 8px}
+}
 
 section{background:var(--card);border:1px solid var(--line);border-radius:8px;
   padding:16px;margin-bottom:16px}
@@ -148,6 +169,29 @@ footer{margin-top:24px;padding-top:12px;border-top:1px solid var(--line)}
   gap:16px;flex-wrap:wrap}
 .tool-search{padding:7px 11px;border:1px solid var(--line);border-radius:6px;
   font-size:13px;font-family:inherit;min-width:200px}
+/* Process area -- the floor map's vocabulary, used as the tool index's
+   top level so the two pages name the cleanroom the same way. The families
+   under it keep their SMT2020 identifiers; this is the row that says what
+   those identifiers are. */
+.tarea{margin:0 0 26px}
+.tarea-head{display:flex;align-items:center;gap:10px;padding:0 2px 6px;
+  font-size:13px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.tarea-swatch{width:10px;height:10px;border-radius:2px;flex:0 0 auto}
+.tarea-metrics{margin-left:auto;display:flex;gap:14px;color:var(--mut);
+  font-size:12px;flex-wrap:wrap}
+.tarea-more{background:none;border:0;padding:2px 4px;cursor:pointer;
+  font-family:inherit;font-size:12px;color:var(--mut);text-align:left}
+.tarea-more:hover{color:var(--fg);text-decoration:underline}
+.tarea-empty{font-size:12px;margin:0 0 8px 2px}
+/* The count that decides the order, so the order is legible. */
+.tgroup-waiting{color:var(--fg);font-weight:600}
+/* A filter carried in from an old link, shown as something you can take off
+   rather than as a control you have to find and reset. */
+.tool-chip-row{margin:0 0 10px}
+.filter-chip{font:inherit;font-size:12px;padding:3px 10px;border-radius:999px;
+  border:1px solid var(--line);background:var(--card);color:var(--mut);
+  cursor:pointer}
+.filter-chip:hover{color:var(--fg);border-color:var(--mut)}
 .tgroup{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;
   background:var(--card);overflow:hidden}
 .tgroup-head{width:100%;display:flex;align-items:center;gap:10px;padding:10px 14px;
