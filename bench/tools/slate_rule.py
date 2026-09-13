@@ -45,11 +45,38 @@ from events import LotDoneEvent, MachineDoneEvent  # noqa: E402
 import fabslate
 
 
-# PySCFabSim parses queue-time constraints but does not enforce them
-# (docs/adr/0008). Feeding a real slack would have the solver optimise against
-# a signal the environment never punishes, so the q-time term in the C++ cost
-# function is deliberately held inert.
+# The sentinel that makes the C++ q-time term do nothing:
+# qtime_boost = 1 + 600/max(slack, 60) is 1.0000006 at 1e9, and the batch
+# rule (should_fire, min_qtime_slack_s <= fixed_process_s * 1.2) can never
+# trigger. Still used, but now only for lots that HAVE no live window.
+#
+# It used to be fed for every lot, correctly: "PySCFabSim parses queue-time
+# constraints but does not enforce them (docs/adr/0008). Feeding a real slack
+# would have the solver optimise against a signal the environment never
+# punishes." That premise died with ADR 0016 -- windows are enforced, a
+# violation reworks the lot, and a lot that misses too often is scrapped.
 QTIME_INERT = 1e9
+
+
+def qtime_slack_s(lot, t):
+    """Seconds until this lot's open queue-time window lapses, for the C++
+    cost term -- or QTIME_INERT when there is nothing live to protect.
+
+    A LAPSED window reports inert, not its (negative) slack, and that is the
+    whole subtlety. The C++ term clamps with max(slack, 60.0), so a lot 200
+    hours past deadline would come back as the MAXIMUM possible boost and the
+    solver would chase the most hopeless work in the fab. That is exactly the
+    bug the `qt` sort key shipped with (ADR 0017 §9): invisible on a cold fab,
+    and worth 55% of throughput on a warmed one where two thirds of open
+    windows are already blown. A blown window cannot be un-blown, so the lot
+    is priced as ordinary work.
+    """
+    w = getattr(lot, 'cqt_waiting', None)
+    d = getattr(lot, 'cqt_deadline', None)
+    if w is None or d is None:
+        return QTIME_INERT
+    slack = d - t
+    return slack if slack > 0 else QTIME_INERT
 
 
 class SlateRule:
@@ -64,7 +91,7 @@ class SlateRule:
     # information tier is a row in the results table rather than one
     # undifferentiated "slate" number.
     TIERS = ('none', 'due', 'full', 'flow')
-    FALLBACKS = ('score', 'cr')
+    FALLBACKS = ('score', 'cr', 'qt')
 
     def __init__(self, instance, solver='cpsat', cycle_s=60.0, budget_s=0.005,
                  pressure='full', threads=1, lazy=True, lib_path=None,
@@ -410,7 +437,7 @@ class SlateRule:
             'batch_max': int(step.batch_max or 1),
             'wafers': int(lot.pieces or 25),
             'priority': u,
-            'qtime_slack_s': QTIME_INERT,
+            'qtime_slack_s': qtime_slack_s(lot, t),
             # The mask this lot needs at THIS step (adr/0014). '' whenever
             # there is no library or the step is not a scanner step, which is
             # the same "empty is unconstrained" convention the qualified-part
@@ -555,9 +582,24 @@ class SlateRule:
             # No token: score with the linearized C++ cost so ordering is
             # continuous across the coverage boundary rather than snapping
             # to FIFO.
-            lot.ptuple = (gate, setup, -lot.priority, 3,
-                          lot.cr(time) if self.fallback == 'cr'
-                          else self._score(lot, time, machine, setup))
+            # Coverage is ~50%, so the fallback decides about half of a
+            # slate run and a row with a weak one measures the fallback
+            # (bench/README.md). At the ADR 0017 operating point `cr` is not
+            # merely weaker than `qt`, it DIVERGES -- WIP 2199 -> 3822 at
+            # 15.2% on-time against qt's stationary 81.7% -- so a cr-fallback
+            # row would lose on the uncovered half whatever the solver did
+            # with the covered one.
+            if self.fallback == 'cr':
+                rank = lot.cr(time)
+            elif self.fallback == 'qt':
+                # the `qt` tuple's tier, so the uncovered half is ordered by
+                # the rule slate has to beat rather than by the one it beats.
+                sl = qtime_slack_s(lot, time)
+                rank = (0, sl, lot.cr(time)) if sl < QTIME_INERT \
+                    else (1, 0.0, lot.cr(time))
+            else:
+                rank = self._score(lot, time, machine, setup)
+            lot.ptuple = (gate, setup, -lot.priority, 3, rank)
         return lot.ptuple
 
     def _score(self, lot, time, machine, setup):

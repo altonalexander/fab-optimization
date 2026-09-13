@@ -635,7 +635,8 @@ def main():
                         'it well inside 5ms, and the rest of the budget goes on '
                         'proving optimality nobody collects.')
     p.add_argument('--threads', type=int, default=1)
-    p.add_argument('--slate-fallback', default='cr', choices=['score', 'cr'],
+    p.add_argument('--slate-fallback', default='cr',
+                   choices=['score', 'cr', 'qt'],
                    help='how the slate scores a lot it holds no token for')
     p.add_argument('--slate-horizon', type=float, default=900.0,
                    help='plan lots arriving within this many fab-seconds too (ADR 0010); 0 = queue only')

@@ -314,3 +314,52 @@ different target from the one §3 anticipated.
   corrected rule, and §8.3's claim that scales 6–8 are unusable was measured
   with rules that could not protect windows. That claim should be regarded as
   unproven rather than established.
+
+---
+
+## 10. Replicated, 2026-09-13: three seeds, and a correction to §9.3
+
+§9.4 listed "one seed" as the first caveat. Seeds 1 and 2 were run identically
+— each warmed 90 days under `qt`, each resumed by all three rules, 180-day
+window at 1.00× starts.
+
+| seed | rule | good/day | on-time | scrap/day | violations/day | WIP | final-third slope |
+|---|---|---:|---:|---:|---:|---|---:|
+| 0 | `fifo` | 40.2 | 22.5% | 6.3 | 60.0 | 2199→4117 | −0.95 |
+| 0 | `cr` | 44.4 | 15.2% | 3.8 | 88.6 | 2199→3822 | **+10.38** |
+| 0 | **`qt`** | 57.5 | 81.7% | 0.0 | 1.4 | 2199→2145 | −1.13 |
+| 1 | `fifo` | 41.8 | 24.7% | 0.8 | 32.9 | 2130→4766 | **+15.40** |
+| 1 | `cr` | 46.6 | 34.0% | 2.6 | 74.1 | 2130→3567 | **+10.51** |
+| 1 | **`qt`** | 56.8 | 92.7% | 0.0 | 1.1 | 2130→2207 | +2.08 |
+| 2 | `fifo` | 41.5 | 22.4% | 0.7 | 33.4 | 2239→4934 | **+15.93** |
+| 2 | `cr` | 46.1 | 22.9% | 3.0 | 72.8 | 2239→3695 | **+10.17** |
+| 2 | **`qt`** | 57.6 | 94.0% | 0.0 | 1.3 | 2239→2164 | +0.57 |
+
+**The headline holds.** `qt` is stationary in all three (−1.13, +2.08, +0.57),
+scraps nothing in all three, and holds violations near one a day. `cr` diverges
+in all three at a strikingly consistent +10.2 to +10.5 lots/day. `fifo` diverges
+in two and saturates at WIP 4117 in the third. The §9.2 claim — that the
+dispatching rule decides whether this fab is viable — is replicated.
+
+### 10.1 What this corrects
+
+§9.3 sized the solver's remaining opportunity from seed 0's per-part spread:
+`part_9` at 66.4% against `part_4` at 99.3%, a 33-point gap. **Seed 0 is the
+pessimistic outlier.**
+
+| seed | worst part | best part | spread | fab on-time |
+|---|---:|---:|---:|---:|
+| 0 | 66.4% | 99.3% | **32.9** | 81.7% |
+| 1 | 83.6% | 99.7% | 16.1 | 92.7% |
+| 2 | 84.5% | 99.7% | 15.3 | 94.0% |
+
+The *structure* is reproducible — `part_9` is the worst part in all three seeds
+and `part_4` among the best — but the *magnitude* is roughly half what seed 0
+showed, and fab on-time at a typical seed is ~93%, not ~82%.
+
+So the honest target for `slate` is **~7% of lots late with a 15-point per-part
+spread**, not 18% and 33 points. That is still a real and well-shaped
+opportunity — a due-date allocation problem, with slack-rich parts to borrow
+from, on a fab with zero scrap — but it is a narrower one than §9.3 claimed,
+and the claim was made from a single seed after that seed's own caveat had
+been written down.
