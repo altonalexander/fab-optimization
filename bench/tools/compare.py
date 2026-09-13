@@ -129,7 +129,7 @@ def kpis(instance, warm_from):
     }
 
 
-def make_sampler(rule_name, warm_from):
+def make_sampler(rule_name, warm_from, total_s=None):
     """Hourly KPI series, taken by the FEED'S OWN plugin.
 
     The dashboard's Results page lays a benchmark row over the live run, and
@@ -164,9 +164,49 @@ def make_sampler(rule_name, warm_from):
             # and another at 5%.
             self._fam_busy = {}
             self._fam_n = 0
+            # Progress. A slate run on a 180-day window is hours long and used
+            # to print NOTHING until it wrote its result, which meant a wrong
+            # estimate could not be corrected and a run that was obviously
+            # failing still had to be paid for in full. Cheap to emit: this
+            # sampler already fires hourly.
+            self._next_progress = None
+            self._t0 = time.time()
+
+        def _progress(self, instance, t):
+            day = t / sim_runner.SECONDS_PER_DAY
+            if self._next_progress is None:
+                self._next_progress = day + PROGRESS_EVERY_DAYS
+                return
+            if day < self._next_progress:
+                return
+            self._next_progress = day + PROGRESS_EVERY_DAYS
+            done = sum(1 for l in instance.done_lots
+                       if l.done_at is not None and l.done_at >= warm_from)
+            span = max(day - warm_from / sim_runner.SECONDS_PER_DAY, 1e-9)
+            el = time.time() - self._t0
+            eta = ''
+            if total_s:
+                frac = max((t - warm_from) / max(total_s - warm_from, 1e-9),
+                           1e-9)
+                eta = '  ~%5.1fm left' % (el / frac * (1 - frac) / 60)
+            cq = getattr(instance, 'counter_cqt_scrapped', 0)
+            # Coverage is the one that says whether the SOLVER is working at
+            # all: a slate row with coverage near zero is measuring its
+            # fallback, not the solver (bench/README.md).
+            cov = ''
+            r = getattr(instance, '_rule_obj', None)
+            if r is not None and getattr(r, 'decisions', 0):
+                cov = ('  cov %5.1f%%' %
+                       (100.0 * r.decisions_covered / r.decisions))
+            print(f'    day {day:6.1f}  wip {len(instance.active_lots):5d}'
+                  f'  good/d {done / span:5.1f}  scrap {cq:5d}{cov}'
+                  f'  {el / 60:5.1f}m elapsed' + eta,
+                  file=sys.stderr, flush=True)
 
         def _kpi_sample(self, instance, t):
             row = super()._kpi_sample(instance, t)
+            if t >= warm_from:
+                self._progress(instance, t)
             if t >= warm_from:
                 self._fam_n += 1
                 for tool in self._busy:
@@ -215,6 +255,12 @@ class _Fingerprint:
 
     def hexdigest(self):
         return self._h.hexdigest()
+
+
+# How often a long run reports itself, in SIMULATED days. 10 gives ~18 lines
+# on a 180-day window -- enough to see the trend and spot a run that is going
+# nowhere, few enough to read.
+PROGRESS_EVERY_DAYS = float(os.getenv('COMPARE_PROGRESS_DAYS', '10'))
 
 
 def make_rule(spec, instance, args):
@@ -364,7 +410,7 @@ def run_one(spec, args):
 
     use_reset = args.days > 365
     warm_from = RESET_AT if use_reset else args.warmup_days * SECONDS_PER_DAY
-    sampler = make_sampler(spec, warm_from)
+    sampler = make_sampler(spec, warm_from, args.days * SECONDS_PER_DAY)
     if args.warmup_days and not use_reset:
         instance, run_to = load_warm(args, sampler)
     else:
@@ -434,6 +480,10 @@ def run_one(spec, args):
     scale_starts(instance, getattr(args, 'starts_scale', 1.0),
                  None if resumed else getattr(args, 'starts_part_map', None))
     rule = make_rule(spec, instance, args)
+    # So the progress line can report solver coverage. A slate row whose
+    # coverage is near zero is measuring its fallback rather than the solver,
+    # and that is worth seeing at minute 10 rather than at hour four.
+    instance._rule_obj = rule
     banner = rule.banner() if hasattr(rule, 'banner') else f'  rule: {spec}'
     print(f'\n=== {spec} ===', flush=True)
     print(banner, flush=True)
