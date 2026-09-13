@@ -148,12 +148,60 @@ The pattern from yesterday's notes held again: **every wrong answer came from
 a number that couldn't respond to the thing being changed**, and every fix was
 a control or a conservation check, never a cleverer metric.
 
+## Making the solver faster, and the thing that fell out of it
+
+Before running the solver in anger we made it faster. Everyone "knew" the
+bottleneck was the cost of shuttling data between Python and C++. Measured, it
+isn't: **60% of the time is inside the solver, 13% is the data shuttling.**
+Removing all of the shuttling would buy 15%. That belief was true once — in the
+first version, which sent every waiting lot across the boundary every cycle —
+and a later fix moved the bottleneck without moving the folklore.
+
+The real opportunity was sitting in a comment. The solver handles each machine
+group separately, the groups are independent, and the code said so in as many
+words — then solved them one after another. Doing them at once: **2.9× faster**,
+a little better than predicted.
+
+Then we tried to prove it still computed the same thing, and couldn't.
+
+## The bar that turned out to be wrong
+
+The plan was simple: the run produces a fingerprint, so run it before and
+after and check the fingerprints match. They didn't. So the parallel version
+was buggy — except the lot counts and on-time were identical, which is a
+strange way for a bug to present.
+
+Alton asked whether "close enough" might be the right standard instead.
+
+The test that settles it: run the *unchanged* version twice and see if it
+agrees with itself. It doesn't. **181 lots one time, 176 the next, from
+identical inputs.**
+
+The reason is that the solver is given 5 milliseconds to think, measured in
+real time. How much thinking fits in 5ms depends on how busy the machine is,
+so two identical runs explore different amounts and return different — equally
+valid — answers. The code says it is configured for exact replayability, and
+it fixes the random seed, but the deadline is wall-clock. The promise isn't
+kept. (There is a setting that would fix it; we haven't changed it yet because
+it would shift the effective budget mid-experiment.)
+
+So bit-identical was never achievable, and reaching for it was convenience
+rather than rigour: it's a one-run check with an unambiguous answer. The
+honest test is **does the change differ from the original by more than the
+original differs from itself?** Original: 169–181 lots. Parallel: 173. Inside
+the range, on every metric. Passes.
+
+The part that matters beyond this one change: **if runs vary, a single result
+can't be read.** The big comparison coming up therefore gets run twice, so it
+has an error bar rather than a decimal point. That is the same mistake as
+"sized it from one seed," one level down — and we only noticed because the
+question was asked out loud.
+
 ## What's next
 
-1. Make the solver faster. It spends 60% of its time in the solver itself and
-   only 13% talking to Python — the opposite of what everyone remembers — and
-   it solves each machine group one after another when they're independent and
-   could go at once. Worth about 2×.
-2. Run the solver against `qt` at this operating point, aimed at the due-date
-   imbalance rather than at queue time.
-3. Tune `qt` first if it wins, because beating a weak baseline proves nothing.
+1. Run the solver against `qt` at this operating point, twice, aimed at the
+   due-date imbalance rather than at queue time.
+2. Tune `qt` first if the solver wins, because beating a weak baseline proves
+   nothing.
+3. Give the solver a deterministic deadline, so runs replay. The code already
+   claims this.
