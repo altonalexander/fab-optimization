@@ -42,6 +42,13 @@ export const NAV = [
 // mode worth making impossible.
 export const TABS = NAV.flatMap(g => g.tabs.map(t => t.id))
 
+// The name a view is called on screen, for anything that has to talk ABOUT a
+// view rather than link to it -- an error boundary naming the panel that
+// failed, say. Falls back to the id so an unknown segment still reads as
+// something rather than as "undefined".
+const LABELS = Object.fromEntries(NAV.flatMap(g => g.tabs.map(t => [t.id, t.label])))
+export const labelFor = id => LABELS[id] || id
+
 const DEFAULT = '/live'
 const CHANGE = 'routechange'
 

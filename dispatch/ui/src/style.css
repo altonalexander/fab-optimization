@@ -138,6 +138,19 @@ section h3{margin:0 0 12px;font-size:14px}
 .err{margin-top:12px;padding:9px;background:#fef2f2;color:#991b1b;border-radius:6px;
   font-size:12px}
 
+/* A panel that threw. Deliberately quiet -- amber, not red, and no icon: the
+   rest of the page is fine, and shouting about it would make a working
+   dashboard look broken. It has to be legible in the rail as well as in a
+   full-width tab, hence the compact variant. */
+.boundary{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
+  padding:14px 16px;margin-bottom:16px;font-size:13px}
+.boundary strong{display:block;margin-bottom:4px}
+.boundary .muted{font-size:12px}
+.boundary-hint{margin-top:6px}
+.boundary button{margin-top:10px}
+.boundary-compact{padding:10px 12px;margin:8px 0;font-size:12px}
+.boundary-compact strong{font-size:12px}
+
 .tag{font-size:10px;padding:1px 7px;border-radius:999px;margin-left:auto}
 .tag-ok{background:#dcfce7;color:#166534}
 .tag-warn{background:#fef3c7;color:#92400e}

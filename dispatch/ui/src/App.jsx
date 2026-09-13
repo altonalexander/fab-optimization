@@ -1,11 +1,12 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
+import ErrorBoundary from './ErrorBoundary.jsx'
 import { AvatarLauncher } from './Avatar.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
 import { RouteIndex, RouteProduct } from './RoutePages.jsx'
 import SlatePage from './SlatePage.jsx'
-import { useRoute, linkTo, NAV, TABS } from './router.js'
+import { useRoute, linkTo, labelFor, NAV, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
 import ToolFlow from './ToolFlow.jsx'
 import StreamChart from './StreamChart.jsx'
@@ -1368,8 +1369,12 @@ export default function App() {
         {/* The live pill and, when the rail is closed, the only way back into
             the assistant -- kept together in the top-right corner. */}
         <div className="header-right">
-          <TimelineBadge state={state} navigate={navigate} />
-          <SpeedControl connected={connected} />
+          {/* The clock reads straight off the feed, so a malformed frame here
+              would have blanked every tab at once. */}
+          <ErrorBoundary name="The clock" compact>
+            <TimelineBadge state={state} navigate={navigate} />
+            <SpeedControl connected={connected} />
+          </ErrorBoundary>
           {!assistantOpen && (
             <button className="rail-reopen" onClick={() => setAssistantOpen(true)}
                     title="Open the assistant">
@@ -1380,6 +1385,7 @@ export default function App() {
         </div>
       </header>
 
+      <ErrorBoundary name="The headline KPIs" compact>
       {/* The fab's condition, on every page: how much work is in it, how fast
           it comes out, how long it takes, whether it was on time, and what is
           broken. WIP is live from the mirror (ready + in flight); the rest are
@@ -1408,6 +1414,7 @@ export default function App() {
               href={linkTo('/tools')}
               title={offline.length ? offline.join(', ') : 'open the tool index'} />
       </div>
+      </ErrorBoundary>
 
       <div className="shell">
         <div className="shell-main">
@@ -1426,6 +1433,15 @@ export default function App() {
           </div>
         ))}
       </nav>
+
+      {/* Everything a tab renders, behind one boundary. Keyed by the tab and
+          the open tool or product, so a panel that throws on one tool does not
+          keep the next one from drawing -- and so "click somewhere else",
+          which is what a viewer does anyway, is the recovery. The nav above is
+          deliberately OUTSIDE it: a crashed tab must still leave you a way to
+          leave it. */}
+      <ErrorBoundary name={`The ${labelFor(tab)} view`}
+                     resetKey={`${tab}|${openTool || ''}|${openProduct || ''}`}>
 
       {tab === 'lots' && (
         <div className="grid-wide">
@@ -1604,6 +1620,8 @@ export default function App() {
         </>
       )}
 
+      </ErrorBoundary>
+
       <footer className="muted">
         No write path exists from this page to the dispatcher. Scenario runs use
         a cloned registry in the same C++ planner binary.
@@ -1622,14 +1640,22 @@ export default function App() {
             <button className="rail-toggle" onClick={() => setAssistantOpen(false)}
                     title="Hide assistant">×</button>
           </div>
-          <ChatPanel context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
-                     pending={assistantOpen ? pendingAsk : null}
-                     onPendingSent={() => setPendingAsk(null)} />
+          {/* The rail is the one region that survives tab changes by design,
+              which also means a crash in it used to be permanent. No resetKey:
+              the panel's own Try again is the way back, since navigating does
+              not remount it. */}
+          <ErrorBoundary name="The assistant" compact>
+            <ChatPanel context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
+                       pending={assistantOpen ? pendingAsk : null}
+                       onPendingSent={() => setPendingAsk(null)} />
+          </ErrorBoundary>
         </aside>
         {!assistantOpen && (
-          <AvatarLauncher context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
-                          onOpen={() => setAssistantOpen(true)}
-                          onAsk={askFromLauncher} />
+          <ErrorBoundary name="The assistant launcher" compact>
+            <AvatarLauncher context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
+                            onOpen={() => setAssistantOpen(true)}
+                            onAsk={askFromLauncher} />
+          </ErrorBoundary>
         )}
       </div>
     </div>
