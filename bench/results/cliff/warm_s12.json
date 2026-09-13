@@ -1,0 +1,1764 @@
+{
+  "dataset": "SMT2020_LVHM",
+  "days": 92,
+  "seed": 0,
+  "batch_strat": "Demand",
+  "solver": "cpsat",
+  "overlay": null,
+  "overlay_hash": null,
+  "overlay_pairs": 0,
+  "starts_scale": 1.0,
+  "warmup_days": 90.0,
+  "warmup_dispatcher": "fifo",
+  "cycle_s": 60.0,
+  "budget_s": 0.005,
+  "rows": [
+    {
+      "rule": "fifo",
+      "wall_s": 35.1,
+      "decisions": 43145,
+      "fingerprint": "506b9e6777841fc0",
+      "throughput": 78,
+      "cycle_time_days": 53.1063,
+      "on_time_pct": 11.54,
+      "tardiness_lot_days": 1263.74,
+      "by_part": {
+        "part_1": {
+          "throughput": 16,
+          "cycle_time_days": 57.8643,
+          "on_time_pct": 0.0,
+          "tardiness_lot_days": 129.37
+        },
+        "part_10": {
+          "throughput": 8,
+          "cycle_time_days": 61.9544,
+          "on_time_pct": 0.0,
+          "tardiness_lot_days": 174.87
+        },
+        "part_2": {
+          "throughput": 3,
+          "cycle_time_days": 80.9402,
+          "on_time_pct": 0.0,
+          "tardiness_lot_days": 85.43
+        },
+        "part_3": {
+          "throughput": 5,
+          "cycle_time_days": 74.7135,
+          "on_time_pct": 20.0,
+          "tardiness_lot_days": 112.31
+        },
+        "part_4": {
+          "throughput": 12,
+          "cycle_time_days": 54.1029,
+          "on_time_pct": 0.0,
+          "tardiness_lot_days": 262.98
+        },
+        "part_5": {
+          "throughput": 14,
+          "cycle_time_days": 33.7039,
+          "on_time_pct": 7.14,
+          "tardiness_lot_days": 148.58
+        },
+        "part_6": {
+          "throughput": 8,
+          "cycle_time_days": 59.2979,
+          "on_time_pct": 0.0,
+          "tardiness_lot_days": 234.7
+        },
+        "part_7": {
+          "throughput": 7,
+          "cycle_time_days": 30.7027,
+          "on_time_pct": 100.0,
+          "tardiness_lot_days": 0.0
+        },
+        "part_8": {
+          "throughput": 4,
+          "cycle_time_days": 66.539,
+          "on_time_pct": 0.0,
+          "tardiness_lot_days": 114.37
+        },
+        "part_9": {
+          "throughput": 1,
+          "cycle_time_days": 27.8889,
+          "on_time_pct": 0.0,
+          "tardiness_lot_days": 1.13
+        }
+      },
+      "util_pct": 81.02,
+      "scanner_util_pct": 89.3,
+      "starts_scale": 1.0,
+      "overlay": null,
+      "overlay_hash": null,
+      "overlay_pairs": 0,
+      "trim": null,
+      "trim_hash": null,
+      "trim_families": 0,
+      "family_util": {
+        "DE_BE_11": {
+          "tools": 9,
+          "busy_mean": 6.94,
+          "util_pct": 77.1
+        },
+        "DE_BE_12": {
+          "tools": 7,
+          "busy_mean": 5.89,
+          "util_pct": 84.2
+        },
+        "DE_BE_13": {
+          "tools": 13,
+          "busy_mean": 11.36,
+          "util_pct": 87.4
+        },
+        "DE_BE_48": {
+          "tools": 11,
+          "busy_mean": 8.51,
+          "util_pct": 77.4
+        },
+        "DE_BE_50": {
+          "tools": 10,
+          "busy_mean": 8.74,
+          "util_pct": 87.4
+        },
+        "DE_BE_65": {
+          "tools": 11,
+          "busy_mean": 9.0,
+          "util_pct": 81.8
+        },
+        "DE_BE_66": {
+          "tools": 17,
+          "busy_mean": 14.02,
+          "util_pct": 82.5
+        },
+        "DE_BE_67": {
+          "tools": 11,
+          "busy_mean": 8.68,
+          "util_pct": 78.9
+        },
+        "DE_BE_69": {
+          "tools": 3,
+          "busy_mean": 1.32,
+          "util_pct": 44.0
+        },
+        "DE_FE_1": {
+          "tools": 5,
+          "busy_mean": 3.79,
+          "util_pct": 75.7
+        },
+        "DE_FE_51": {
+          "tools": 20,
+          "busy_mean": 17.21,
+          "util_pct": 86.1
+        },
+        "DE_FE_53": {
+          "tools": 5,
+          "busy_mean": 3.57,
+          "util_pct": 71.5
+        },
+        "DE_FE_54": {
+          "tools": 3,
+          "busy_mean": 2.45,
+          "util_pct": 81.6
+        },
+        "DE_FE_56": {
+          "tools": 2,
+          "busy_mean": 1.49,
+          "util_pct": 74.5
+        },
+        "DE_FE_58": {
+          "tools": 2,
+          "busy_mean": 1.7,
+          "util_pct": 85.1
+        },
+        "DE_FE_59": {
+          "tools": 8,
+          "busy_mean": 5.81,
+          "util_pct": 72.6
+        },
+        "DE_FE_62": {
+          "tools": 17,
+          "busy_mean": 13.06,
+          "util_pct": 76.8
+        },
+        "DE_FE_70": {
+          "tools": 11,
+          "busy_mean": 8.43,
+          "util_pct": 76.6
+        },
+        "DE_FE_71": {
+          "tools": 18,
+          "busy_mean": 14.53,
+          "util_pct": 80.7
+        },
+        "DE_FE_72": {
+          "tools": 11,
+          "busy_mean": 8.34,
+          "util_pct": 75.8
+        },
+        "DE_FE_86": {
+          "tools": 118,
+          "busy_mean": 100.13,
+          "util_pct": 84.9
+        },
+        "DefMet_BE_33": {
+          "tools": 2,
+          "busy_mean": 0.6,
+          "util_pct": 29.8
+        },
+        "DefMet_BE_42": {
+          "tools": 1,
+          "busy_mean": 0.36,
+          "util_pct": 36.2
+        },
+        "DefMet_FE_10": {
+          "tools": 2,
+          "busy_mean": 1.62,
+          "util_pct": 80.9
+        },
+        "DefMet_FE_106": {
+          "tools": 1,
+          "busy_mean": 0.04,
+          "util_pct": 4.3
+        },
+        "DefMEt_FE_118": {
+          "tools": 2,
+          "busy_mean": 1.6,
+          "util_pct": 79.8
+        },
+        "DefMet_FE_34": {
+          "tools": 2,
+          "busy_mean": 0.81,
+          "util_pct": 40.4
+        },
+        "DefMet_FE_43": {
+          "tools": 5,
+          "busy_mean": 3.81,
+          "util_pct": 76.2
+        },
+        "Dielectric_BE_20": {
+          "tools": 5,
+          "busy_mean": 3.15,
+          "util_pct": 63.0
+        },
+        "Dielectric_BE_21": {
+          "tools": 6,
+          "busy_mean": 4.62,
+          "util_pct": 77.0
+        },
+        "Dielectric_BE_27": {
+          "tools": 12,
+          "busy_mean": 9.13,
+          "util_pct": 76.1
+        },
+        "Dielectric_BE_28": {
+          "tools": 3,
+          "busy_mean": 2.62,
+          "util_pct": 87.2
+        },
+        "Dielectric_BE_60": {
+          "tools": 6,
+          "busy_mean": 3.49,
+          "util_pct": 58.2
+        },
+        "Dielectric_FE_112": {
+          "tools": 9,
+          "busy_mean": 6.68,
+          "util_pct": 74.2
+        },
+        "Dielectric_FE_130": {
+          "tools": 4,
+          "busy_mean": 2.49,
+          "util_pct": 62.2
+        },
+        "Dielectric_FE_29": {
+          "tools": 3,
+          "busy_mean": 1.98,
+          "util_pct": 66.0
+        },
+        "Dielectric_FE_30": {
+          "tools": 2,
+          "busy_mean": 1.36,
+          "util_pct": 68.1
+        },
+        "Dielectric_FE_31": {
+          "tools": 4,
+          "busy_mean": 2.91,
+          "util_pct": 72.9
+        },
+        "Diffusion_BE_123": {
+          "tools": 9,
+          "busy_mean": 7.43,
+          "util_pct": 82.5
+        },
+        "Diffusion_FE_100": {
+          "tools": 3,
+          "busy_mean": 2.64,
+          "util_pct": 87.9
+        },
+        "Diffusion_FE_101": {
+          "tools": 10,
+          "busy_mean": 8.45,
+          "util_pct": 84.5
+        },
+        "Diffusion_FE_120": {
+          "tools": 8,
+          "busy_mean": 6.36,
+          "util_pct": 79.5
+        },
+        "Diffusion_FE_122": {
+          "tools": 6,
+          "busy_mean": 4.6,
+          "util_pct": 76.6
+        },
+        "Diffusion_FE_125": {
+          "tools": 5,
+          "busy_mean": 4.02,
+          "util_pct": 80.4
+        },
+        "Diffusion_FE_126": {
+          "tools": 4,
+          "busy_mean": 3.34,
+          "util_pct": 83.5
+        },
+        "Diffusion_FE_127": {
+          "tools": 8,
+          "busy_mean": 6.66,
+          "util_pct": 83.2
+        },
+        "Diffusion_FE_44": {
+          "tools": 7,
+          "busy_mean": 5.98,
+          "util_pct": 85.4
+        },
+        "Diffusion_FE_94": {
+          "tools": 13,
+          "busy_mean": 10.77,
+          "util_pct": 82.8
+        },
+        "EPI_36": {
+          "tools": 2,
+          "busy_mean": 0.38,
+          "util_pct": 19.1
+        },
+        "EPI_38": {
+          "tools": 1,
+          "busy_mean": 0.43,
+          "util_pct": 42.6
+        },
+        "Implant_119": {
+          "tools": 2,
+          "busy_mean": 1.28,
+          "util_pct": 63.8
+        },
+        "Implant_128": {
+          "tools": 11,
+          "busy_mean": 8.79,
+          "util_pct": 79.9
+        },
+        "Implant_132": {
+          "tools": 7,
+          "busy_mean": 5.02,
+          "util_pct": 71.7
+        },
+        "Implant_74": {
+          "tools": 2,
+          "busy_mean": 0.38,
+          "util_pct": 19.1
+        },
+        "Implant_88": {
+          "tools": 2,
+          "busy_mean": 0.62,
+          "util_pct": 30.9
+        },
+        "Implant_90": {
+          "tools": 2,
+          "busy_mean": 1.55,
+          "util_pct": 77.7
+        },
+        "Implant_91": {
+          "tools": 7,
+          "busy_mean": 5.28,
+          "util_pct": 75.4
+        },
+        "Litho_BE_110": {
+          "tools": 23,
+          "busy_mean": 21.17,
+          "util_pct": 92.0
+        },
+        "Litho_BE_93": {
+          "tools": 4,
+          "busy_mean": 3.09,
+          "util_pct": 77.1
+        },
+        "Litho_BE_99": {
+          "tools": 3,
+          "busy_mean": 1.89,
+          "util_pct": 63.1
+        },
+        "Litho_FE_111": {
+          "tools": 20,
+          "busy_mean": 19.04,
+          "util_pct": 95.2
+        },
+        "Litho_FE_35": {
+          "tools": 2,
+          "busy_mean": 1.51,
+          "util_pct": 75.5
+        },
+        "Litho_FE_92": {
+          "tools": 26,
+          "busy_mean": 23.55,
+          "util_pct": 90.6
+        },
+        "Litho_FE_98": {
+          "tools": 4,
+          "busy_mean": 2.98,
+          "util_pct": 74.5
+        },
+        "Litho_REG_BE_63": {
+          "tools": 8,
+          "busy_mean": 7.0,
+          "util_pct": 87.5
+        },
+        "Litho_REG_FE_64": {
+          "tools": 12,
+          "busy_mean": 11.04,
+          "util_pct": 92.0
+        },
+        "LithoMet_BE_18": {
+          "tools": 11,
+          "busy_mean": 10.19,
+          "util_pct": 92.6
+        },
+        "LithoMet_FE_19": {
+          "tools": 14,
+          "busy_mean": 13.32,
+          "util_pct": 95.1
+        },
+        "LithoTrack_BE_117": {
+          "tools": 5,
+          "busy_mean": 3.66,
+          "util_pct": 73.2
+        },
+        "LithoTrack_FE_115": {
+          "tools": 41,
+          "busy_mean": 36.81,
+          "util_pct": 89.8
+        },
+        "LithoTrack_FE_95": {
+          "tools": 40,
+          "busy_mean": 35.7,
+          "util_pct": 89.3
+        },
+        "LithoTrack_FE_96": {
+          "tools": 2,
+          "busy_mean": 1.36,
+          "util_pct": 68.1
+        },
+        "Planar_BE_75": {
+          "tools": 14,
+          "busy_mean": 10.34,
+          "util_pct": 73.9
+        },
+        "Planar_FE_76": {
+          "tools": 2,
+          "busy_mean": 0.96,
+          "util_pct": 47.9
+        },
+        "Planar_FE_77": {
+          "tools": 2,
+          "busy_mean": 0.98,
+          "util_pct": 48.9
+        },
+        "Planar_FE_78": {
+          "tools": 2,
+          "busy_mean": 1.09,
+          "util_pct": 54.3
+        },
+        "Planar_FE_79": {
+          "tools": 4,
+          "busy_mean": 2.66,
+          "util_pct": 66.5
+        },
+        "Planar_FE_80": {
+          "tools": 2,
+          "busy_mean": 0.87,
+          "util_pct": 43.6
+        },
+        "TF_BE_2": {
+          "tools": 4,
+          "busy_mean": 2.77,
+          "util_pct": 69.1
+        },
+        "TF_BE_23": {
+          "tools": 14,
+          "busy_mean": 11.19,
+          "util_pct": 79.9
+        },
+        "TF_BE_24": {
+          "tools": 4,
+          "busy_mean": 2.66,
+          "util_pct": 66.5
+        },
+        "TF_BE_26": {
+          "tools": 13,
+          "busy_mean": 9.62,
+          "util_pct": 74.0
+        },
+        "TF_BE_40": {
+          "tools": 17,
+          "busy_mean": 13.55,
+          "util_pct": 79.7
+        },
+        "TF_FE_103": {
+          "tools": 7,
+          "busy_mean": 5.62,
+          "util_pct": 80.2
+        },
+        "TF_FE_104": {
+          "tools": 5,
+          "busy_mean": 3.87,
+          "util_pct": 77.4
+        },
+        "TF_FE_113": {
+          "tools": 3,
+          "busy_mean": 1.89,
+          "util_pct": 63.1
+        },
+        "TF_FE_131": {
+          "tools": 6,
+          "busy_mean": 4.53,
+          "util_pct": 75.5
+        },
+        "TF_FE_3": {
+          "tools": 3,
+          "busy_mean": 3.0,
+          "util_pct": 100.0
+        },
+        "TF_FE_5": {
+          "tools": 3,
+          "busy_mean": 1.83,
+          "util_pct": 61.0
+        },
+        "TF_Met_FE_45": {
+          "tools": 2,
+          "busy_mean": 0.55,
+          "util_pct": 27.7
+        },
+        "TF_Met_FE_61": {
+          "tools": 2,
+          "busy_mean": 1.45,
+          "util_pct": 72.3
+        },
+        "WE_BE_14": {
+          "tools": 5,
+          "busy_mean": 3.98,
+          "util_pct": 79.6
+        },
+        "WE_BE_16": {
+          "tools": 8,
+          "busy_mean": 6.72,
+          "util_pct": 84.0
+        },
+        "WE_BE_17": {
+          "tools": 2,
+          "busy_mean": 1.45,
+          "util_pct": 72.3
+        },
+        "WE_BE_7": {
+          "tools": 1,
+          "busy_mean": 0.49,
+          "util_pct": 48.9
+        },
+        "WE_BE_81": {
+          "tools": 3,
+          "busy_mean": 2.45,
+          "util_pct": 81.6
+        },
+        "WE_BE_82": {
+          "tools": 9,
+          "busy_mean": 7.32,
+          "util_pct": 81.3
+        },
+        "WE_BE_9": {
+          "tools": 5,
+          "busy_mean": 4.55,
+          "util_pct": 91.1
+        },
+        "WE_FE_108": {
+          "tools": 29,
+          "busy_mean": 25.13,
+          "util_pct": 86.6
+        },
+        "WE_FE_41": {
+          "tools": 5,
+          "busy_mean": 4.32,
+          "util_pct": 86.4
+        },
+        "WE_FE_47": {
+          "tools": 5,
+          "busy_mean": 4.51,
+          "util_pct": 90.2
+        },
+        "WE_FE_8": {
+          "tools": 2,
+          "busy_mean": 0.91,
+          "util_pct": 45.7
+        },
+        "WE_FE_83": {
+          "tools": 6,
+          "busy_mean": 4.87,
+          "util_pct": 81.2
+        },
+        "WE_FE_84": {
+          "tools": 17,
+          "busy_mean": 13.83,
+          "util_pct": 81.4
+        },
+        "WE_FE_85": {
+          "tools": 2,
+          "busy_mean": 1.21,
+          "util_pct": 60.6
+        }
+      },
+      "cqt": {
+        "enforced": true,
+        "scale": 12.0,
+        "violations": 1942,
+        "reworks": 1941,
+        "rework_enabled": true,
+        "max_rework": 3,
+        "scrapped": 0
+      },
+      "idle_qualified_wip_tool_h_per_day": 321.7,
+      "idle_family_wip_tool_h_per_day": 360.5,
+      "final_queues": [
+        [
+          "Dielectric_BE_28",
+          1340
+        ],
+        [
+          "Implant_128",
+          65
+        ],
+        [
+          "WE_FE_47",
+          50
+        ],
+        [
+          "Diffusion_FE_94",
+          39
+        ],
+        [
+          "Diffusion_FE_101",
+          35
+        ],
+        [
+          "Diffusion_FE_122",
+          31
+        ],
+        [
+          "Litho_BE_110",
+          31
+        ],
+        [
+          "Implant_91",
+          27
+        ],
+        [
+          "Diffusion_FE_100",
+          26
+        ],
+        [
+          "LithoTrack_FE_115",
+          25
+        ]
+      ],
+      "wip_first": 3246,
+      "wip_last": 3290,
+      "interrupted": false,
+      "samples": [
+        {
+          "t": 7779600,
+          "wip": 3246,
+          "running": 1101,
+          "util": 77.7,
+          "sutil": 90.2,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 36,
+          "ct": 55.986,
+          "otd": 8.3,
+          "tard": 16.805,
+          "dec": 19080,
+          "opt": 0,
+          "wq": 48623.4,
+          "wb": 5622.6,
+          "wp": 21346.2,
+          "starts": 50,
+          "wd": 2123.2,
+          "iq": 17,
+          "iw": 17,
+          "warmup": false
+        },
+        {
+          "t": 7783200,
+          "wip": 3243,
+          "running": 1076,
+          "util": 78.1,
+          "sutil": 92.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 37,
+          "ct": 57.534,
+          "otd": 2.7,
+          "tard": 17.106,
+          "dec": 19087,
+          "opt": 0,
+          "wq": 49946.7,
+          "wb": 5889.0,
+          "wp": 21640.3,
+          "starts": 50,
+          "wd": 2134.2,
+          "iq": 26,
+          "iw": 26,
+          "warmup": false
+        },
+        {
+          "t": 7786800,
+          "wip": 3251,
+          "running": 1089,
+          "util": 80.0,
+          "sutil": 90.2,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 36,
+          "ct": 57.335,
+          "otd": 2.8,
+          "tard": 17.529,
+          "dec": 19140,
+          "opt": 0,
+          "wq": 50980.9,
+          "wb": 6099.5,
+          "wp": 21831.0,
+          "starts": 60,
+          "wd": 2168.4,
+          "iq": 29,
+          "iw": 29,
+          "warmup": false
+        },
+        {
+          "t": 7790400,
+          "wip": 3248,
+          "running": 1100,
+          "util": 78.8,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 38,
+          "ct": 57.651,
+          "otd": 0.0,
+          "tard": 18.087,
+          "dec": 19181,
+          "opt": 0,
+          "wq": 52136.8,
+          "wb": 6039.5,
+          "wp": 21774.5,
+          "starts": 60,
+          "wd": 2180.5,
+          "iq": 26,
+          "iw": 26,
+          "warmup": false
+        },
+        {
+          "t": 7794000,
+          "wip": 3245,
+          "running": 1138,
+          "util": 81.7,
+          "sutil": 89.0,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 39,
+          "ct": 57.823,
+          "otd": 0.0,
+          "tard": 18.562,
+          "dec": 19138,
+          "opt": 0,
+          "wq": 52463.5,
+          "wb": 5948.7,
+          "wp": 21696.5,
+          "starts": 50,
+          "wd": 2182.8,
+          "iq": 19,
+          "iw": 19,
+          "warmup": false
+        },
+        {
+          "t": 7797600,
+          "wip": 3242,
+          "running": 1117,
+          "util": 81.9,
+          "sutil": 89.0,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 40,
+          "ct": 58.046,
+          "otd": 0.0,
+          "tard": 18.763,
+          "dec": 19137,
+          "opt": 0,
+          "wq": 52586.7,
+          "wb": 5718.7,
+          "wp": 21637.2,
+          "starts": 50,
+          "wd": 2220.2,
+          "iq": 19,
+          "iw": 19,
+          "warmup": false
+        },
+        {
+          "t": 7801200,
+          "wip": 3250,
+          "running": 1134,
+          "util": 83.0,
+          "sutil": 89.0,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 38,
+          "ct": 59.062,
+          "otd": 0.0,
+          "tard": 18.547,
+          "dec": 19117,
+          "opt": 0,
+          "wq": 52743.1,
+          "wb": 5788.0,
+          "wp": 21611.7,
+          "starts": 60,
+          "wd": 2241.0,
+          "iq": 17,
+          "iw": 18,
+          "warmup": false
+        },
+        {
+          "t": 7804800,
+          "wip": 3249,
+          "running": 1138,
+          "util": 81.1,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 37,
+          "ct": 59.097,
+          "otd": 0.0,
+          "tard": 17.761,
+          "dec": 19137,
+          "opt": 0,
+          "wq": 52464.1,
+          "wb": 5735.9,
+          "wp": 21729.2,
+          "starts": 60,
+          "wd": 2218.3,
+          "iq": 22,
+          "iw": 22,
+          "warmup": false
+        },
+        {
+          "t": 7808400,
+          "wip": 3247,
+          "running": 1151,
+          "util": 82.8,
+          "sutil": 92.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 39,
+          "ct": 59.034,
+          "otd": 0.0,
+          "tard": 17.265,
+          "dec": 19131,
+          "opt": 0,
+          "wq": 52677.2,
+          "wb": 5625.5,
+          "wp": 21619.9,
+          "starts": 60,
+          "wd": 2224.4,
+          "iq": 20,
+          "iw": 20,
+          "warmup": false
+        },
+        {
+          "t": 7812000,
+          "wip": 3246,
+          "running": 1153,
+          "util": 82.3,
+          "sutil": 90.2,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 38,
+          "ct": 59.247,
+          "otd": 0.0,
+          "tard": 17.406,
+          "dec": 19157,
+          "opt": 0,
+          "wq": 52502.0,
+          "wb": 5367.9,
+          "wp": 21442.5,
+          "starts": 50,
+          "wd": 2200.2,
+          "iq": 19,
+          "iw": 20,
+          "warmup": false
+        },
+        {
+          "t": 7815600,
+          "wip": 3246,
+          "running": 1137,
+          "util": 82.6,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 38,
+          "ct": 59.247,
+          "otd": 0.0,
+          "tard": 17.406,
+          "dec": 19147,
+          "opt": 0,
+          "wq": 52325.5,
+          "wb": 5520.1,
+          "wp": 21606.6,
+          "starts": 50,
+          "wd": 2213.0,
+          "iq": 16,
+          "iw": 16,
+          "warmup": false
+        },
+        {
+          "t": 7819200,
+          "wip": 3253,
+          "running": 1123,
+          "util": 79.8,
+          "sutil": 86.6,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 41,
+          "ct": 59.729,
+          "otd": 0.0,
+          "tard": 17.241,
+          "dec": 19217,
+          "opt": 0,
+          "wq": 51531.4,
+          "wb": 5414.8,
+          "wp": 21757.4,
+          "starts": 60,
+          "wd": 2230.9,
+          "iq": 15,
+          "iw": 16,
+          "warmup": false
+        },
+        {
+          "t": 7822800,
+          "wip": 3250,
+          "running": 1104,
+          "util": 79.6,
+          "sutil": 85.4,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 44,
+          "ct": 58.116,
+          "otd": 0.0,
+          "tard": 16.904,
+          "dec": 19167,
+          "opt": 0,
+          "wq": 50949.5,
+          "wb": 5483.1,
+          "wp": 21710.8,
+          "starts": 60,
+          "wd": 2259.0,
+          "iq": 13,
+          "iw": 13,
+          "warmup": false
+        },
+        {
+          "t": 7826400,
+          "wip": 3249,
+          "running": 1099,
+          "util": 76.6,
+          "sutil": 82.9,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 45,
+          "ct": 57.501,
+          "otd": 2.2,
+          "tard": 16.904,
+          "dec": 19088,
+          "opt": 0,
+          "wq": 50374.1,
+          "wb": 5427.7,
+          "wp": 21664.1,
+          "starts": 50,
+          "wd": 2292.1,
+          "iq": 15,
+          "iw": 15,
+          "warmup": false
+        },
+        {
+          "t": 7830000,
+          "wip": 3247,
+          "running": 1116,
+          "util": 80.4,
+          "sutil": 81.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 46,
+          "ct": 57.238,
+          "otd": 2.2,
+          "tard": 16.77,
+          "dec": 19104,
+          "opt": 0,
+          "wq": 50025.2,
+          "wb": 5278.4,
+          "wp": 21474.0,
+          "starts": 50,
+          "wd": 2298.1,
+          "iq": 16,
+          "iw": 20,
+          "warmup": false
+        },
+        {
+          "t": 7833600,
+          "wip": 3257,
+          "running": 1112,
+          "util": 80.1,
+          "sutil": 81.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 46,
+          "ct": 57.238,
+          "otd": 2.2,
+          "tard": 16.77,
+          "dec": 19051,
+          "opt": 0,
+          "wq": 49257.7,
+          "wb": 5399.8,
+          "wp": 21588.4,
+          "starts": 60,
+          "wd": 2330.9,
+          "iq": 20,
+          "iw": 22,
+          "warmup": false
+        },
+        {
+          "t": 7837200,
+          "wip": 3256,
+          "running": 1148,
+          "util": 82.4,
+          "sutil": 91.5,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 45,
+          "ct": 57.748,
+          "otd": 2.2,
+          "tard": 17.282,
+          "dec": 19038,
+          "opt": 0,
+          "wq": 49364.2,
+          "wb": 5446.4,
+          "wp": 21515.4,
+          "starts": 60,
+          "wd": 2332.9,
+          "iq": 14,
+          "iw": 17,
+          "warmup": false
+        },
+        {
+          "t": 7840800,
+          "wip": 3255,
+          "running": 1136,
+          "util": 82.6,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 42,
+          "ct": 57.385,
+          "otd": 2.4,
+          "tard": 17.612,
+          "dec": 19060,
+          "opt": 0,
+          "wq": 48173.3,
+          "wb": 5342.4,
+          "wp": 21327.8,
+          "starts": 50,
+          "wd": 2385.6,
+          "iq": 17,
+          "iw": 20,
+          "warmup": false
+        },
+        {
+          "t": 7844400,
+          "wip": 3255,
+          "running": 1107,
+          "util": 80.8,
+          "sutil": 84.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 40,
+          "ct": 56.973,
+          "otd": 2.5,
+          "tard": 17.595,
+          "dec": 19003,
+          "opt": 0,
+          "wq": 47953.7,
+          "wb": 5470.2,
+          "wp": 21407.5,
+          "starts": 50,
+          "wd": 2420.6,
+          "iq": 15,
+          "iw": 24,
+          "warmup": false
+        },
+        {
+          "t": 7848000,
+          "wip": 3264,
+          "running": 1120,
+          "util": 81.7,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 38,
+          "ct": 55.804,
+          "otd": 2.6,
+          "tard": 17.631,
+          "dec": 18990,
+          "opt": 0,
+          "wq": 47243.8,
+          "wb": 5488.1,
+          "wp": 21377.9,
+          "starts": 60,
+          "wd": 2398.3,
+          "iq": 13,
+          "iw": 18,
+          "warmup": false
+        },
+        {
+          "t": 7851600,
+          "wip": 3263,
+          "running": 1084,
+          "util": 79.3,
+          "sutil": 81.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 38,
+          "ct": 55.471,
+          "otd": 2.6,
+          "tard": 17.702,
+          "dec": 18945,
+          "opt": 0,
+          "wq": 46547.5,
+          "wb": 5340.3,
+          "wp": 21327.8,
+          "starts": 60,
+          "wd": 2346.0,
+          "iq": 14,
+          "iw": 20,
+          "warmup": false
+        },
+        {
+          "t": 7855200,
+          "wip": 3261,
+          "running": 1064,
+          "util": 77.7,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 39,
+          "ct": 54.334,
+          "otd": 2.6,
+          "tard": 17.225,
+          "dec": 18904,
+          "opt": 0,
+          "wq": 45725.8,
+          "wb": 5150.8,
+          "wp": 21166.7,
+          "starts": 60,
+          "wd": 2367.0,
+          "iq": 13,
+          "iw": 17,
+          "warmup": false
+        },
+        {
+          "t": 7858800,
+          "wip": 3260,
+          "running": 1074,
+          "util": 77.3,
+          "sutil": 92.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 37,
+          "ct": 53.673,
+          "otd": 2.7,
+          "tard": 17.673,
+          "dec": 18829,
+          "opt": 0,
+          "wq": 46735.1,
+          "wb": 5120.5,
+          "wp": 20997.1,
+          "starts": 50,
+          "wd": 2407.1,
+          "iq": 12,
+          "iw": 17,
+          "warmup": false
+        },
+        {
+          "t": 7862400,
+          "wip": 3280,
+          "running": 1099,
+          "util": 78.4,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 36,
+          "ct": 53.561,
+          "otd": 2.8,
+          "tard": 17.952,
+          "dec": 18846,
+          "opt": 0,
+          "wq": 46386.0,
+          "wb": 5460.8,
+          "wp": 21230.0,
+          "starts": 60,
+          "wd": 2386.5,
+          "iq": 11,
+          "iw": 19,
+          "warmup": false
+        },
+        {
+          "t": 7866000,
+          "wip": 3279,
+          "running": 1137,
+          "util": 81.2,
+          "sutil": 91.5,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 37,
+          "ct": 53.899,
+          "otd": 2.7,
+          "tard": 18.234,
+          "dec": 18871,
+          "opt": 0,
+          "wq": 46098.1,
+          "wb": 5513.4,
+          "wp": 21233.1,
+          "starts": 70,
+          "wd": 2384.7,
+          "iq": 9,
+          "iw": 13,
+          "warmup": false
+        },
+        {
+          "t": 7869600,
+          "wip": 3278,
+          "running": 1146,
+          "util": 82.9,
+          "sutil": 97.6,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 35,
+          "ct": 52.533,
+          "otd": 5.7,
+          "tard": 18.035,
+          "dec": 18885,
+          "opt": 0,
+          "wq": 46349.1,
+          "wb": 5345.8,
+          "wp": 21053.1,
+          "starts": 70,
+          "wd": 2377.7,
+          "iq": 7,
+          "iw": 7,
+          "warmup": false
+        },
+        {
+          "t": 7873200,
+          "wip": 3278,
+          "running": 1166,
+          "util": 84.4,
+          "sutil": 96.3,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 33,
+          "ct": 52.448,
+          "otd": 6.1,
+          "tard": 17.796,
+          "dec": 18928,
+          "opt": 0,
+          "wq": 46386.8,
+          "wb": 5383.2,
+          "wp": 21068.7,
+          "starts": 60,
+          "wd": 2369.8,
+          "iq": 10,
+          "iw": 10,
+          "warmup": false
+        },
+        {
+          "t": 7876800,
+          "wip": 3277,
+          "running": 1152,
+          "util": 84.0,
+          "sutil": 95.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 31,
+          "ct": 51.907,
+          "otd": 6.5,
+          "tard": 16.894,
+          "dec": 18926,
+          "opt": 0,
+          "wq": 46588.9,
+          "wb": 5271.2,
+          "wp": 21036.9,
+          "starts": 60,
+          "wd": 2349.7,
+          "iq": 11,
+          "iw": 11,
+          "warmup": false
+        },
+        {
+          "t": 7880400,
+          "wip": 3285,
+          "running": 1129,
+          "util": 80.7,
+          "sutil": 96.3,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 30,
+          "ct": 50.212,
+          "otd": 6.7,
+          "tard": 15.418,
+          "dec": 18918,
+          "opt": 0,
+          "wq": 47074.6,
+          "wb": 5377.1,
+          "wp": 21167.0,
+          "starts": 70,
+          "wd": 2287.6,
+          "iq": 11,
+          "iw": 11,
+          "warmup": false
+        },
+        {
+          "t": 7884000,
+          "wip": 3285,
+          "running": 1113,
+          "util": 80.9,
+          "sutil": 95.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 27,
+          "ct": 48.923,
+          "otd": 7.4,
+          "tard": 14.663,
+          "dec": 18862,
+          "opt": 0,
+          "wq": 47297.4,
+          "wb": 5514.4,
+          "wp": 21289.4,
+          "starts": 70,
+          "wd": 2245.7,
+          "iq": 11,
+          "iw": 11,
+          "warmup": false
+        },
+        {
+          "t": 7887600,
+          "wip": 3283,
+          "running": 1172,
+          "util": 82.8,
+          "sutil": 92.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 27,
+          "ct": 47.083,
+          "otd": 7.4,
+          "tard": 13.435,
+          "dec": 18902,
+          "opt": 0,
+          "wq": 46750.1,
+          "wb": 5205.2,
+          "wp": 21163.5,
+          "starts": 60,
+          "wd": 2252.7,
+          "iq": 11,
+          "iw": 11,
+          "warmup": false
+        },
+        {
+          "t": 7891200,
+          "wip": 3282,
+          "running": 1192,
+          "util": 83.6,
+          "sutil": 90.2,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 27,
+          "ct": 48.057,
+          "otd": 7.4,
+          "tard": 14.224,
+          "dec": 18947,
+          "opt": 0,
+          "wq": 47233.4,
+          "wb": 5307.4,
+          "wp": 21174.1,
+          "starts": 60,
+          "wd": 2305.4,
+          "iq": 6,
+          "iw": 6,
+          "warmup": false
+        },
+        {
+          "t": 7894800,
+          "wip": 3291,
+          "running": 1183,
+          "util": 84.1,
+          "sutil": 81.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 26,
+          "ct": 48.685,
+          "otd": 7.7,
+          "tard": 15.295,
+          "dec": 18967,
+          "opt": 0,
+          "wq": 47575.6,
+          "wb": 5597.1,
+          "wp": 21471.2,
+          "starts": 70,
+          "wd": 2279.3,
+          "iq": 8,
+          "iw": 13,
+          "warmup": false
+        },
+        {
+          "t": 7898400,
+          "wip": 3285,
+          "running": 1157,
+          "util": 81.1,
+          "sutil": 90.2,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 31,
+          "ct": 50.64,
+          "otd": 6.5,
+          "tard": 16.152,
+          "dec": 18940,
+          "opt": 0,
+          "wq": 47290.0,
+          "wb": 5632.2,
+          "wp": 21487.1,
+          "starts": 70,
+          "wd": 2284.1,
+          "iq": 7,
+          "iw": 7,
+          "warmup": false
+        },
+        {
+          "t": 7902000,
+          "wip": 3281,
+          "running": 1143,
+          "util": 81.6,
+          "sutil": 95.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 35,
+          "ct": 51.452,
+          "otd": 5.7,
+          "tard": 15.693,
+          "dec": 18949,
+          "opt": 0,
+          "wq": 47404.3,
+          "wb": 5689.3,
+          "wp": 21498.4,
+          "starts": 70,
+          "wd": 2259.0,
+          "iq": 9,
+          "iw": 9,
+          "warmup": false
+        },
+        {
+          "t": 7905600,
+          "wip": 3280,
+          "running": 1146,
+          "util": 81.6,
+          "sutil": 93.9,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 33,
+          "ct": 51.14,
+          "otd": 6.1,
+          "tard": 16.14,
+          "dec": 18950,
+          "opt": 0,
+          "wq": 47747.3,
+          "wb": 5687.5,
+          "wp": 21508.7,
+          "starts": 60,
+          "wd": 2223.1,
+          "iq": 10,
+          "iw": 12,
+          "warmup": false
+        },
+        {
+          "t": 7909200,
+          "wip": 3290,
+          "running": 1180,
+          "util": 82.8,
+          "sutil": 95.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 30,
+          "ct": 52.647,
+          "otd": 6.7,
+          "tard": 16.552,
+          "dec": 19027,
+          "opt": 0,
+          "wq": 48502.6,
+          "wb": 5681.7,
+          "wp": 21452.4,
+          "starts": 70,
+          "wd": 2221.9,
+          "iq": 5,
+          "iw": 5,
+          "warmup": false
+        },
+        {
+          "t": 7912800,
+          "wip": 3289,
+          "running": 1185,
+          "util": 83.2,
+          "sutil": 95.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 30,
+          "ct": 53.511,
+          "otd": 3.3,
+          "tard": 16.209,
+          "dec": 19047,
+          "opt": 0,
+          "wq": 48404.3,
+          "wb": 5573.1,
+          "wp": 21403.3,
+          "starts": 70,
+          "wd": 2184.0,
+          "iq": 3,
+          "iw": 3,
+          "warmup": false
+        },
+        {
+          "t": 7916400,
+          "wip": 3287,
+          "running": 1181,
+          "util": 83.2,
+          "sutil": 92.7,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 30,
+          "ct": 54.028,
+          "otd": 3.3,
+          "tard": 16.453,
+          "dec": 19109,
+          "opt": 0,
+          "wq": 49114.6,
+          "wb": 5666.9,
+          "wp": 21701.8,
+          "starts": 70,
+          "wd": 2190.4,
+          "iq": 5,
+          "iw": 5,
+          "warmup": false
+        },
+        {
+          "t": 7920000,
+          "wip": 3285,
+          "running": 1204,
+          "util": 82.9,
+          "sutil": 86.6,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 32,
+          "ct": 54.225,
+          "otd": 3.1,
+          "tard": 17.076,
+          "dec": 19175,
+          "opt": 0,
+          "wq": 49423.7,
+          "wb": 5763.3,
+          "wp": 21739.9,
+          "starts": 60,
+          "wd": 2166.9,
+          "iq": 9,
+          "iw": 10,
+          "warmup": false
+        },
+        {
+          "t": 7923600,
+          "wip": 3283,
+          "running": 1165,
+          "util": 82.4,
+          "sutil": 86.6,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 33,
+          "ct": 54.058,
+          "otd": 3.0,
+          "tard": 17.308,
+          "dec": 19183,
+          "opt": 0,
+          "wq": 49729.1,
+          "wb": 5849.1,
+          "wp": 21980.5,
+          "starts": 60,
+          "wd": 2165.5,
+          "iq": 11,
+          "iw": 11,
+          "warmup": false
+        },
+        {
+          "t": 7927200,
+          "wip": 3289,
+          "running": 1115,
+          "util": 79.4,
+          "sutil": 84.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 36,
+          "ct": 53.998,
+          "otd": 2.8,
+          "tard": 17.427,
+          "dec": 19167,
+          "opt": 0,
+          "wq": 50599.1,
+          "wb": 5716.3,
+          "wp": 21961.1,
+          "starts": 70,
+          "wd": 2143.9,
+          "iq": 8,
+          "iw": 8,
+          "warmup": false
+        },
+        {
+          "t": 7930800,
+          "wip": 3288,
+          "running": 1114,
+          "util": 78.3,
+          "sutil": 82.9,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 37,
+          "ct": 54.238,
+          "otd": 2.7,
+          "tard": 17.576,
+          "dec": 19173,
+          "opt": 0,
+          "wq": 50506.7,
+          "wb": 5692.9,
+          "wp": 21974.6,
+          "starts": 70,
+          "wd": 2115.9,
+          "iq": 12,
+          "iw": 12,
+          "warmup": false
+        },
+        {
+          "t": 7934400,
+          "wip": 3285,
+          "running": 1104,
+          "util": 78.6,
+          "sutil": 87.8,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 39,
+          "ct": 53.691,
+          "otd": 5.1,
+          "tard": 17.497,
+          "dec": 19204,
+          "opt": 0,
+          "wq": 50557.0,
+          "wb": 5647.6,
+          "wp": 21957.9,
+          "starts": 60,
+          "wd": 2124.7,
+          "iq": 12,
+          "iw": 12,
+          "warmup": false
+        },
+        {
+          "t": 7938000,
+          "wip": 3284,
+          "running": 1104,
+          "util": 78.0,
+          "sutil": 89.0,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 39,
+          "ct": 53.711,
+          "otd": 7.7,
+          "tard": 17.67,
+          "dec": 19243,
+          "opt": 0,
+          "wq": 51330.1,
+          "wb": 5774.4,
+          "wp": 21987.7,
+          "starts": 60,
+          "wd": 2154.0,
+          "iq": 11,
+          "iw": 17,
+          "warmup": false
+        },
+        {
+          "t": 7941600,
+          "wip": 3292,
+          "running": 1125,
+          "util": 81.2,
+          "sutil": 84.1,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 39,
+          "ct": 54.49,
+          "otd": 10.3,
+          "tard": 18.459,
+          "dec": 19304,
+          "opt": 0,
+          "wq": 51340.5,
+          "wb": 5713.7,
+          "wp": 21832.9,
+          "starts": 70,
+          "wd": 2163.5,
+          "iq": 10,
+          "iw": 16,
+          "warmup": false
+        },
+        {
+          "t": 7945200,
+          "wip": 3290,
+          "running": 1118,
+          "util": 82.3,
+          "sutil": 91.5,
+          "nscan": 82,
+          "rlock": null,
+          "thr": 40,
+          "ct": 53.827,
+          "otd": 15.0,
+          "tard": 18.689,
+          "dec": 19424,
+          "opt": 0,
+          "wq": 51376.2,
+          "wb": 6051.9,
+          "wp": 22180.2,
+          "starts": 70,
+          "wd": 2141.8,
+          "iq": 16,
+          "iw": 16,
+          "warmup": false
+        }
+      ]
+    }
+  ]
+}

@@ -235,3 +235,82 @@ both of them mine:
 The general rule this repo keeps rediscovering: **decide which quantities a
 window can support before reading any of them**, and write that down first.
 
+
+---
+
+## 9. Answered, 2026-09-13: the cliff is the rule, not the conditions
+
+§1 set out to find *conditions* under which dispatching matters — a load, a
+window tightness, a cell on a grid. Both axes were swept and neither produced
+one. The answer was on an axis the design never contained: **whether the rule
+protects queue-time windows at all.**
+
+### 9.1 The measurement
+
+One fab, warmed 90 days under `qt`, resumed by all three rules. 180-day
+window, 1.00× starts, windows at scale 10, rework on, scrap cap 3. Every row
+conserves: releases 57.2/day against a 56.6 control.
+
+| rule | good/day | punctual/day | on-time | cycle time | scrap/day | violations/day | WIP 2199 → | slope by third |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `fifo` | 40.2 | 9.1 | 22.5% | 59.4 d | 6.3 | 60.0 | 4117 | +14.7 / +18.4 / −1.0 |
+| `cr` | 44.4 | 6.7 | 15.2% | 48.9 d | 3.8 | 88.6 | 3822 | +6.2 / +10.6 / **+10.4** |
+| **`qt`** | **57.5** | **46.9** | **81.7%** | **38.4 d** | **0.0** | **1.4** | **2145** | +1.5 / −1.2 / −1.1 |
+
+`qt` wins every column simultaneously — throughput, punctuality, cycle time,
+scrap, violations — and is the only rule that leaves the fab stationary.
+Tardiness makes the gap plainest: **1,925 lot-days against `cr`'s 82,296 and
+`fifo`'s 154,688**, a factor of 43 and 80.
+
+### 9.2 What it means, and what it retracts
+
+**This fab is not capacity-limited under queue-time enforcement.** It absorbs
+enforcement, rework and scrap at *full* load, with zero scrapped material,
+81.7% on-time and flat WIP — provided the dispatcher protects windows that can
+still be saved.
+
+Which retracts the reading recorded in §8.3 and stated during the matrix: that
+rework is re-entrant demand exceeding what ~5% of slack can absorb, and that no
+operating point exists at 0.85–1.00× load. That conclusion was drawn from
+`fifo` and `cr` alone, and both of them diverge here for a reason that is not
+capacity. `cr` is *still* diverging at +10.4 lots/day in its final third while
+sitting on the same tools that `qt` holds flat.
+
+The mechanism is a backlog of unrecoverable work. A missed window reworks the
+lot; the rework competes with fresh work; more windows lapse. `cr` and `fifo`
+never break the loop because neither can see a window. `qt` breaks it by
+spending capacity only where it still buys something.
+
+### 9.3 Consequence for the question this project exists to answer
+
+The headline is not that a sort key beat two other sort keys. It is that
+**the dispatching decision determines whether the fab is viable, not merely
+how efficient it is.** ADR 0013 and 0014 moved percentages; this is the
+difference between a fab that runs and one that buries itself.
+
+For the solver, the news is mixed and mostly bad. `qt` reaches **zero scrap
+and 1.4 violations/day** with a five-element sort tuple. The loss function
+[ADR 0016](0016-queue-time-enforcement.md) introduced to give CP-SAT something
+to optimise is, at this operating point, already optimised away by a sort key.
+That is the third constraint class in a row to end this way.
+
+What remains is narrower but real: **18.3% of lots are still late**, and the
+lateness is concentrated — `part_9` at 66.4% and `part_6` at 66.7% against
+`part_4` and `part_10` above 99%. A per-part gap of 33 points on a fab with no
+scrap is a due-date problem, not a queue-time one, and it is the kind of
+imbalance an assignment across a set could address where a single sort key
+cannot. That is where `slate` should be pointed, and it is a materially
+different target from the one §3 anticipated.
+
+### 9.4 The honest caveats
+
+- **One seed.** Every row here is LVHM seed 0. The effect is far larger than
+  seed-to-seed noise has ever been in this repo, but it is one seed.
+- **`qt` is not tuned.** Slack-ordered, ahead of setup, cap at "can it still
+  be made". No threshold, no lookahead, no hold decision. A better q-time rule
+  probably exists, which makes it a *stronger* baseline for `slate`, not a
+  weaker one.
+- **The window scale is 10.** Tighter windows were not re-tested with the
+  corrected rule, and §8.3's claim that scales 6–8 are unusable was measured
+  with rules that could not protect windows. That claim should be regarded as
+  unproven rather than established.
