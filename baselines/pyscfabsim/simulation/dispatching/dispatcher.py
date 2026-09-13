@@ -103,9 +103,21 @@ class Dispatchers:
             changeover. It is also the choice that makes the tradeoff visible
             rather than muffling it, which is the point of the rule.
         """
+        # Only a lot that can STILL make its window is worth prioritising.
+        # Measured on the warmed fab: of 978 lots holding an open window, 650
+        # -- 66.5% -- were already past deadline, median -67h and the worst
+        # -262h. Sorting by ascending slack put those at the FRONT of every
+        # queue, so the rule spent the fab's capacity on work already
+        # guaranteed to rework or scrap, ahead of lots that could be saved.
+        # That is why qt cost nothing over 12 cold days (low WIP, few lapsed)
+        # and 55% of throughput on a warmed fab.
+        #
+        # A blown window cannot be un-blown, so a lapsed lot has nothing left
+        # to protect and takes its turn by cr like any other.
         slack = Dispatchers.qt_slack(lot, time)
-        at_risk = 0 if slack is not None else 1
-        rank = slack if slack is not None else 0.0
+        saveable = slack is not None and slack > 0
+        at_risk = 0 if saveable else 1
+        rank = slack if saveable else 0.0
         if machine is not None:
             lot.ptuple = (
                 0 if machine.min_runs_left is None or machine.min_runs_setup == lot.actual_step.setup_needed else 1,
