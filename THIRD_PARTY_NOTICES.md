@@ -105,8 +105,16 @@ Dataset, not software, and NOT covered by this project's Apache-2.0 licence. Cit
 | `gevent` | `24.2.1` | MIT | Copyright gevent contributors |
 | `confluent-kafka` | `2.5.3` | Apache-2.0 | Copyright Confluent, Inc. |
 | `PyYAML` | `6.0.2` | MIT | Copyright Ingy dot Net, Kirill Simonov |
-| `anthropic` | `0.40.0` | MIT | Copyright Anthropic, PBC |
-| `google-auth` | `2.35.0` | Apache-2.0 | Copyright Google LLC |
+| `google-adk` | `2.8.0` | Apache-2.0 | Copyright Google LLC |
+| `psycopg` | `3.2.3` | LGPL-3.0-or-later | Copyright The Psycopg Team |
+
+Note **`psycopg`**: LGPL-3.0-or-later, the only copyleft dependency in
+the service and a stronger obligation than everything above it. The API
+imports it as a separate library and does not modify it, which is the
+case the LGPL is written for -- but redistributing an image containing
+it carries the licence's terms, including the recipient's right to
+replace that library. LGPL-3.0 is drafted as a set of additional
+permissions on top of GPL-3.0, so both texts are in `licenses/`.
 
 ## JavaScript — UI
 
@@ -114,7 +122,9 @@ Dataset, not software, and NOT covered by this project's Apache-2.0 licence. Cit
 |---|---|---|---|
 | `react` | `18.3.1` | MIT | Copyright Meta Platforms, Inc. and affiliates |
 | `react-dom` | `18.3.1` | MIT | Copyright Meta Platforms, Inc. and affiliates |
+| `three` | `0.186.0` | MIT | Copyright the three.js authors |
 | `@vitejs/plugin-react` | `4.3.1` | MIT | Copyright Evan You and Vite contributors |
+| `playwright` | `1.63.0` | Apache-2.0 | Copyright Microsoft Corporation |
 | `vite` | `5.4.8` | MIT | Copyright Evan You and Vite contributors |
 
 ## Baseline Python environment

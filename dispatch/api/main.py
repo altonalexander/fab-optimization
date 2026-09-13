@@ -2850,11 +2850,39 @@ def scenario_compare():
                                  "Start a feed, or set DEMO_LOTS=1 for a local "
                                  "stand-in pool."}), 400
 
+    # The binary is a build artifact, not part of the image's Python, so the
+    # ordinary way to meet this endpoint is with SCENARIO_BIN pointing at
+    # something that was never built. That used to raise FileNotFoundError out
+    # of subprocess and hand the caller a 500 with a stack trace -- which reads
+    # as "the scenario engine is broken" rather than "run `make scenario`".
+    # Reported separately from a run that started and failed, because the two
+    # need completely different things done about them.
+    if not os.path.exists(SCENARIO_BIN):
+        return jsonify({
+            "error": f"scenario binary not built: {SCENARIO_BIN}",
+            "fix": "make -C dispatch scenario (or scripts/dev-up.sh, which builds it)",
+        }), 503
+
     def run(payload):
-        proc = subprocess.run(
-            [SCENARIO_BIN, "--config", TOOL_CONFIG, "--solver", SOLVER],
-            input=json.dumps(payload), capture_output=True, text=True, timeout=30)
-        return json.loads(proc.stdout) if proc.returncode == 0 else None
+        try:
+            proc = subprocess.run(
+                [SCENARIO_BIN, "--config", TOOL_CONFIG, "--solver", SOLVER],
+                input=json.dumps(payload), capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            app.logger.warning("scenario run failed: %s", e)
+            return None
+        if proc.returncode != 0:
+            # stderr is where the C++ side says what it disliked; without this
+            # every failure looked identical from the browser.
+            app.logger.warning("scenario exited %s: %s",
+                               proc.returncode, (proc.stderr or "").strip()[:400])
+            return None
+        try:
+            return json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            app.logger.warning("scenario emitted non-JSON: %s",
+                               (proc.stdout or "").strip()[:200])
+            return None
 
     base_body = dict(body, tool_overrides=[])
     what_body = dict(body, tool_overrides=overrides)
@@ -2862,7 +2890,8 @@ def scenario_compare():
     base = run(base_body)
     what = run(what_body)
     if base is None or what is None:
-        return jsonify({"error": "one or both scenario runs failed"}), 500
+        return jsonify({"error": "one or both scenario runs failed; "
+                                 "see the API log for the binary's stderr"}), 500
 
     base_map = {a["lot_id"]: a["tool"] for a in base["assignments"]}
     what_map = {a["lot_id"]: a["tool"] for a in what["assignments"]}
