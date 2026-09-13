@@ -23,11 +23,18 @@
 # reviewed by disturbing the thing it was meant to improve.
 #
 # This starts a SECOND, disposable API beside the real one -- same image build,
-# same zone 2 + zone 3 networks, its own Kafka consumer group (they are keyed
-# by pid, so it cannot steal partitions from the live mirror) -- and points a
-# Vite dev server at it. Nothing the running stack owns is rebuilt, recreated
-# or written to. Edit a .jsx, the browser hot-reloads; when the API changes,
-# re-run this script.
+# same zone 2 + zone 3 networks -- and points a Vite dev server at it. Nothing
+# the running stack owns is rebuilt, recreated or written to. Edit a .jsx, the
+# browser hot-reloads; when the API changes, re-run this script.
+#
+# It must be an image whose consumer group is unique PER PROCESS, not per pid.
+# This script was written believing pid was enough; it is not, because PID
+# namespaces give two containers of the same image the same worker pid, so the
+# preview joined the live mirror's group and Kafka split the topic-partitions
+# between them. Both dashboards then looked healthy while each held half the
+# fab. The preflight below refuses to start against an API image that still
+# keys its group on the pid, because the damage is silent and lands on the
+# stack this script exists to protect.
 #
 # What it deliberately does NOT share
 # -----------------------------------
@@ -258,6 +265,20 @@ if [[ -n "$(vite_pid)" ]] && [[ "$(port_pid "$UI_PORT")" == "$(vite_pid)" ]]; th
 fi
 
 # ----------------------------------------------------------------- build ----
+# A preview whose mirror shares a consumer group with the live one takes half
+# the live dashboard's feed and neither side reports anything wrong. Checked
+# against the source rather than the built image, since that is what is about
+# to be built.
+if grep -q 'group.id.*os\.getpid()' "$DISPATCH/api/main.py"; then
+  c_bad 'api/main.py still keys its Kafka group.id on os.getpid()'
+  echo "        Two containers of one image share a pid namespace position, so"
+  echo "        this preview would join the LIVE mirror's group and Kafka would"
+  echo "        split the partitions between them -- silently, on both sides."
+  echo "        Make the group id unique per process before previewing."
+  exit 1
+fi
+c_ok 'api consumer groups are unique per process'
+
 info "building $IMAGE"
 if docker build -f "$DISPATCH/infra/Dockerfile.api" -t "$IMAGE" "$REPO" \
      >"$RUN/preview-build.log" 2>&1; then

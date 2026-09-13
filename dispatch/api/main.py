@@ -14,6 +14,7 @@ import queue
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque, Counter, defaultdict
 from datetime import datetime, timezone
 
@@ -873,7 +874,7 @@ def rescan_kpi_history(run):
     try:
         from confluent_kafka import Consumer, TopicPartition, OFFSET_BEGINNING
         c = Consumer({"bootstrap.servers": KAFKA_BROKERS,
-                      "group.id": f"fab-api-kpi-rescan-{os.getpid()}-{time.time():.0f}",
+                      "group.id": _consumer_group(f"kpi-rescan-{time.time():.0f}"),
                       "auto.offset.reset": "earliest", "enable.auto.commit": False})
         tp = TopicPartition("fab.kpi.state", 0)
         _lo, hi = c.get_watermark_offsets(tp, timeout=10)
@@ -970,6 +971,26 @@ def apply_state_record(topic, ev):
     return 1
 
 
+# Every consumer here wants the WHOLE feed, never a share of it, so each one
+# must be alone in its group. This used to be keyed on os.getpid(), which is
+# unique among processes on one host and NOT unique across containers: PID
+# namespaces mean two containers from the same image start their workers at the
+# same pid, so a second API instance -- a replica, a preview, a restart that
+# lands on the same number -- silently joined the first one's group, and Kafka
+# split the topic-partitions between them. Both mirrors then looked healthy
+# while each held half the fab: the dashboard behind the tunnel quietly stopped
+# seeing LOT_STARTED and LOT_COMPLETE, so WIP read as entirely queued with
+# nothing on a tool, and nothing anywhere said why.
+#
+# A random id per process has no such collision, and costs nothing: these are
+# `latest`-reset mirrors, so there is no committed offset worth resuming.
+_RUN_ID = uuid.uuid4().hex[:12]
+
+
+def _consumer_group(role):
+    return f"fab-api-{role}-{_RUN_ID}"
+
+
 def bootstrap_from_state(Consumer):
     """Rebuild WIP from the compacted state topics before tailing events.
 
@@ -991,7 +1012,7 @@ def bootstrap_from_state(Consumer):
         "bootstrap.servers": KAFKA_BROKERS,
         # A fresh group every time: this is a rebuild, not a resumable read, so
         # it must not inherit a committed offset from a previous process.
-        "group.id": f"fab-api-bootstrap-{os.getpid()}",
+        "group.id": _consumer_group("bootstrap"),
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     })
@@ -1084,7 +1105,7 @@ def kafka_consumer_loop():
 
     c = Consumer({
         "bootstrap.servers": KAFKA_BROKERS,
-        "group.id": f"fab-api-mirror-{os.getpid()}",
+        "group.id": _consumer_group("mirror"),
         "auto.offset.reset": "latest",
         "enable.auto.commit": True,      # a mirror may lose its place safely
     })

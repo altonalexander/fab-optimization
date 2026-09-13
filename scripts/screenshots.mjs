@@ -51,9 +51,13 @@ const base = (process.argv[2] || 'http://127.0.0.1:5199').replace(/\/$/, '')
 const code = process.argv[3] || process.env.FAB_ACCESS_CODE || ''
 const W = 1440, H = 1000
 
-// One entry per README image. `full` captures the whole scrolling page (the
-// index pages earn it; a live chart does not). `prep` runs before the shot for
-// the images that are of a particular STATE rather than a particular page.
+// One entry per README image. `h` is the capture height in CSS pixels: these
+// are bounded deliberately rather than captured fullPage, because under real
+// load almost nothing on the tool index folds away and a full capture of it
+// runs to five thousand pixels -- an image nobody scrolls and a file nobody
+// wants in a git history. Pick a height that shows the point of the page.
+// `prep` runs before the shot for the images that are of a particular STATE
+// rather than a particular page.
 const SHOTS = [
   { name: 'live',      path: '/live' },
   { name: 'live-controls', path: '/live', prep: async p => {
@@ -66,7 +70,7 @@ const SHOTS = [
       const lots = await p.$('button:has-text("lots")')
       if (lots) { await lots.click(); await p.waitForTimeout(1200) }
     } },
-  { name: 'tools',     path: '/tools', full: true },
+  { name: 'tools',     path: '/tools', h: 1500 },
   { name: 'tool',      path: null, resolve: async p => {
       // Whichever tool the fab is actually leaning on, rather than a hardcoded
       // id that may not exist in another dataset.
@@ -74,32 +78,39 @@ const SHOTS = [
       const d = await r.json()
       const fam = (d.groups || [])[0]
       return fam && fam.tools && fam.tools[0] ? `/tools/${fam.tools[0].id}` : '/tools'
-    }, full: true },
+    }, h: 1400 },
   { name: 'tool-changeovers', path: null, resolve: async p => {
-      // A tool from a family that actually changes setup, since that is what
-      // the image is meant to show.
+      // The family that changes setup MOST, and its busiest tool -- changeovers
+      // are a family total spread over its machines, so the first tool of the
+      // first matching family is usually one that has never changed at all,
+      // which is the opposite of what this image is for.
       const r = await p.request.get(`${base}/api/tools`)
       const d = await r.json()
-      const fam = (d.groups || []).find(g => g.setups && g.changeovers > 0)
-                || (d.groups || []).find(g => g.setups)
-      return fam && fam.tools && fam.tools[0] ? `/tools/${fam.tools[0].id}` : '/tools'
-    }, full: true },
-  { name: 'floor',     path: '/floor?bay=8,2', full: true },
-  { name: 'products',  path: '/routes', full: true },
+      const fams = (d.groups || []).filter(g => g.setups && (g.changeovers || 0) > 0)
+      if (!fams.length) {
+        console.warn('  ! no family has changed setup yet -- let the feed run longer')
+        return '/tools'
+      }
+      const fam = fams.reduce((a, g) => (g.changeovers > a.changeovers ? g : a))
+      const tool = (fam.tools || []).reduce((a, t) => (t.dispatches > a.dispatches ? t : a))
+      return `/tools/${tool.id}`
+    }, h: 1900 },
+  { name: 'floor',     path: '/floor?bay=8,2', h: 1400 },
+  { name: 'products',  path: '/routes', h: 1200 },
   { name: 'routes',    path: null, resolve: async p => {
       const r = await p.request.get(`${base}/api/routes`)
       const d = await r.json().catch(() => ({}))
       const first = (d.products || d.routes || [])[0]
       const id = typeof first === 'string' ? first : first && (first.product || first.id)
       return id ? `/routes/${encodeURIComponent(id)}` : '/routes'
-    }, full: true },
-  { name: 'slate',     path: '/slate', full: true },
-  { name: 'results',   path: '/results', full: true },
-  { name: 'topology',  path: '/topology', full: true },
+    }, h: 1500 },
+  { name: 'slate',     path: '/slate', h: 1100 },
+  { name: 'results',   path: '/results', h: 1600 },
+  { name: 'topology',  path: '/topology', h: 1700 },
 ]
 
 const b = await chromium.launch()
-const ctx = await b.newContext({ viewport: { width: W, height: H }, deviceScaleFactor: 2 })
+const ctx = await b.newContext({ viewport: { width: W, height: H } })
 
 if (code) {
   const r = await ctx.request.post(`${base}/auth/code`, { data: { code } })
@@ -138,7 +149,12 @@ for (const s of SHOTS) {
   await p.waitForTimeout(1800)
   if (s.prep) await s.prep(p)
   const file = path.join(OUT, `${s.name}.png`)
-  await p.screenshot({ path: file, fullPage: !!s.full })
+  if (s.h && s.h !== H) {
+    await p.setViewportSize({ width: W, height: s.h })
+    await p.waitForTimeout(700)   // charts re-measure on resize
+  }
+  await p.screenshot({ path: file })
+  if (s.h && s.h !== H) await p.setViewportSize({ width: W, height: H })
   console.log(`  ${s.name.padEnd(18)} ${target}`)
 }
 
