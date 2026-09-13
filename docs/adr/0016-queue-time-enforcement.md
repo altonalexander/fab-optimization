@@ -226,3 +226,88 @@ exists, because it sets the exchange rate between rework and scrap and
 therefore how much a violation costs — which is exactly what the solver would
 be optimising against.
 
+
+---
+
+## 7. The baseline the solver actually has to beat: `qt`
+
+§3.5 said "the real comparison is **`cr` against `slate`** — ADR 0014's lesson
+is that beating `fifo` is easy and uninformative." That was right about `fifo`
+and wrong about `cr`, for the same reason: **neither rule knows queue times
+exist.**
+
+`fifo` sorts by age. `cr` sorts by due-date urgency. The windows are **hours**
+while due dates are **days**, so the two timescales barely interact — a lot two
+hours from lapsing waits its turn behind a lot that is merely old. Judging the
+solver against rules that ignore scrap would make "slate scraps less" trivially
+true, which is precisely the failure §3.5 was trying to avoid, one rung up.
+
+### 7.1 What it is
+
+`qt` is **`cr` with a queue-time tier inserted ahead of setup**, ordered by
+slack to the open window — identical to `cr` in every other element, so
+`qt` − `cr` isolates the cost of protecting windows and nothing else.
+
+Upstream had already written this tier into all five rules and left it
+commented out:
+
+```python
+#0 if lot.cqt_waiting is not None else 1,
+```
+
+in `fifo`, both `lifo` variants, `cr` and `random`. Reasonable while CQT was
+parsed and never enforced (ADR 0008 §2) — it had nothing to act on. Two
+departures from their version:
+
+- **Ordered by slack, not binary.** Theirs put every at-risk lot ahead of
+  every safe one and stopped there, which says nothing about *which* of
+  several hundred open windows is about to lapse.
+- **Registered as a new rule** rather than switched on inside the existing
+  ones, so every published `fifo` and `cr` row stays byte-identical and the
+  commented lines stay exactly as upstream wrote them.
+
+Placing the tier **ahead of setup** is the aggressive choice — it treats saving
+a window as worth a changeover, thrashing included. It is where upstream put
+it, and it is the choice that makes the tradeoff visible rather than muffled,
+which is the whole purpose of the rule.
+
+### 7.2 First measurement
+
+A 3-day cold run at window scale 10, `cr` against `qt`:
+
+| rule | violations | good lots | on-time |
+|---|---:|---:|---:|
+| `cr` | 20 | 112 | 77.68 |
+| `qt` | **1** | 111 | 75.68 |
+
+**95% of violations removed for one lot of throughput and two points of
+on-time.** Three days cold is far too short to price that trade properly — it
+is reported here only as evidence the tier is live and the direction is the
+predicted one.
+
+### 7.3 Why this sharpens the question rather than just adding a row
+
+A sort key can only **rank**. To protect a window it must move that lot up the
+queue, and something else moves down — so `qt` buys scrap reduction *with*
+on-time, and cannot buy both.
+
+The solver's entire claim, since ADR 0009, is that it decides about a **set**
+rather than an ordering. This is the first constraint where that difference
+has somewhere to show up:
+
+- `slate` **saves the same scrap for a materially smaller on-time loss** than
+  `qt` → the set formulation does something a ranking cannot, and the case is
+  made on the constraint class that was always the best candidate.
+- `slate` lands **on the `qt`–`cr` line** → it is a sort key with extra steps,
+  at 14.4× the compute, and ADR 0014's verdict stands on all three constraint
+  classes rather than two.
+
+Either way the comparison is now against the best simple rule for the thing
+being optimised, which is the only version of it worth reporting.
+
+### 7.4 Consequence for §3.2
+
+Un-inerting the solver's q-time term is no longer only gated on "enforcement
+punishes." It is gated on having `qt` priced at an admissible operating point,
+because `qt` is the number the un-inerted solver has to beat. Beating `cr` on
+scrap would prove nothing it does not already get for free.
