@@ -195,6 +195,9 @@ class Lot:
         #                 Instance.free_up_lots on the next step transition
         self.cqt_waiting = None
         self.cqt_deadline = None
+        #   cqt_window_s  the window's full length, so a consumer can express
+        #                 slack RELATIVE to it rather than in raw seconds
+        self.cqt_window_s = None
         self.cqt_open_step = None
         self.cqt_violated = False
 

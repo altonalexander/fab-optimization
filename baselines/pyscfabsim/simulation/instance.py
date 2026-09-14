@@ -357,8 +357,9 @@ class Instance:
                 fs = getattr(st, 'cqt_for_step', None)
                 if isinstance(fs, (int, float)) and st.cqt_time:
                     lot.cqt_waiting = fs
+                    lot.cqt_window_s = st.cqt_time * self.cqt_scale
                     lot.cqt_deadline = (self.current_time
-                                        + st.cqt_time * self.cqt_scale)
+                                        + lot.cqt_window_s)
                     lot.cqt_open_step = st
         # compute times for lot and machine
         lot_time, machine_time, setup_time = self.get_times(self.setups, lots, machine)

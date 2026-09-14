@@ -76,7 +76,26 @@ def qtime_slack_s(lot, t):
     if w is None or d is None:
         return QTIME_INERT
     slack = d - t
-    return slack if slack > 0 else QTIME_INERT
+    if slack <= 0:
+        return QTIME_INERT
+    # NORMALISED, not raw seconds. Both C++ q-time terms are hardcoded in
+    # MINUTES -- 1 + 600/slack in cost(), 1 + 3600/slack in the CP-SAT
+    # objective -- while this fab's windows are 10 to 240 HOURS. Feeding raw
+    # slack gave a lot with 16h remaining (the measured p75 of saveable
+    # at-risk lots) a boost of 1.010x and 1.063x respectively: numerically
+    # switched off, against due-date urgency that reaches 50x. That is why
+    # un-inerting the term changed nothing and slate kept cr's divergence
+    # signature (adr/0017 §11.1).
+    #
+    # Passing 600 * (slack / window) makes both formulas window-RELATIVE:
+    #     cost()   1 + 1/frac  -> 11x at 10% of the window left, 2x at 100%
+    #     CP-SAT   1 + 6/frac  -> 61x at 10%, 7x at 100%
+    # so a lot near the end of a 10-hour window and one near the end of a
+    # 240-hour window are treated alike, which is what the constraint means.
+    window = getattr(lot, 'cqt_window_s', None)
+    if not window or window <= 0:
+        return slack
+    return 600.0 * slack / window
 
 
 class SlateRule:
