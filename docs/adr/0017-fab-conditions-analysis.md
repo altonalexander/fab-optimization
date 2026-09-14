@@ -702,3 +702,45 @@ numbers — both rows look complete and neither reports which `qt` it contained.
 
 A `slate` run with the tuned fallback is in flight; §12.8's verdict stands as
 the conservative version in the meantime.
+
+---
+
+## 12.10 The symmetric comparison, 2026-09-14
+
+§12.9 predicted the §12.8 margin was a lower bound, because the measured
+`slate` rows carried the *untuned* `qt` on ~54% of their decisions while being
+compared against the tuned rule. Re-run with both sides tuned:
+
+| run | good/day | on-time | CT (d) | tardiness | viol/day | per-part spread |
+|---|---:|---:|---:|---:|---:|---:|
+| `qt` untuned | 57.5 | 81.66% | 38.4 | 1,925 | 1.4 | 32.9 |
+| `qt` tuned (promote < 50%) | 57.4 | 89.60% | 38.3 | 524 | 1.1 | 15.8 |
+| `slate`, untuned fallback | 57.4/57.7 | 92.89/93.02% | 36.9 | 114/122 | 1.4/1.7 | 14.4/16.3 |
+| **`slate`, tuned fallback** | 57.3 | **96.10%** | 37.2 | **77** | 1.6 | **10.1** |
+
+The prediction holds. `slate` improves from 92.95% to **96.10%** when its own
+fallback is fixed, so the symmetric margin against the strongest baseline is
+**+6.5 on-time points and 6.8× less tardiness**, not §12.8's +3.3 and 4.3×.
+
+### And it partially restores §12.4
+
+§12.4's set-rebalancing claim was withdrawn in §12.8 because a tuned `qt`
+matched `slate`'s per-part spread — 15.8 against 14.4. With **both** sides
+tuned, `slate` reaches **10.1 against `qt`'s 15.8**.
+
+So the withdrawal was correct on the evidence then available, and the
+symmetric comparison puts a weaker version of the claim back: the solver does
+rebalance across products better than a ranking, but by about six points of
+spread rather than by being uniquely able to do it at all. Both cells are
+n=1 and should be held loosely.
+
+### Why this is easy to get wrong
+
+`slate` is a solver *plus* a fallback, so it contains the baseline. Any
+comparison must tune both or neither; tuning one silently measures the
+handicap. Nothing in a result file records which `qt` a `slate` row contained,
+so the error is invisible after the fact — the only defence is to re-run both
+sides whenever either changes.
+
+**v0.2.0 was released with the §12.8 numbers.** They are not wrong, they are
+conservative; §12.9 already said so. The figures here supersede them.
