@@ -680,3 +680,25 @@ That is a narrower result than §12.4 claimed and a real one. The route to it
 is the more useful record: the solver spent four constraint classes losing,
 and the last of those losses was caused by a constant off by two orders of
 magnitude relative to the data it was applied to.
+
+### 12.9 The comparison in §12.8 is unfair to `slate`, and understates it
+
+Coverage is ~46%, so **the `qt` fallback decides more than half of a `slate`
+run**. The `slate` rows in §12.8 were produced before the promotion threshold
+existed, so they ran the *untuned* sort key on that majority of decisions —
+while being measured against the *tuned* one.
+
+Both halves of `slate` should improve when the baseline does, because one of
+those halves **is** the baseline. So the +3.3 on-time points and 4.3× tardiness
+margin in §12.8 are a **lower bound** on the tuned-against-tuned comparison,
+not an estimate of it.
+
+This is a general property of the design rather than an oversight in one run:
+`slate` is a solver *plus* a fallback rule, so every improvement to the rule
+raises the solver's floor too. Any future baseline change requires re-running
+`slate` against the same baseline, or the comparison silently favours whichever
+side was tuned last. Recorded here because the failure mode is invisible in the
+numbers — both rows look complete and neither reports which `qt` it contained.
+
+A `slate` run with the tuned fallback is in flight; §12.8's verdict stands as
+the conservative version in the meantime.
