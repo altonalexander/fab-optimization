@@ -175,6 +175,48 @@ is out: too large, stale before it returns, and unnecessary below the knee.
       columns (setup share, starvation share) per family.
 - [ ] `burndown_geom.test.mjs` is data-dependent and flaky; pin its fixture.
 
+## 5a. Layout-derived transport (new; the positioning half is done)
+
+Tools now have a position: each family takes a contiguous run of its zone's
+cells and each tool a slot within one (`Floorplan.reassign`, `cell_template`
+in `config/floorplan.json`). Nothing outside the API reads it yet, which is
+the point of the rest of this section — ADR 0008 §2 is the standing account
+of what is missing.
+
+- [ ] **Cell-level distance.** Build a distance matrix from `x_m`/`y_m` plus
+      the `track` topology already in `floorplan.json` (`interbay_segs`,
+      `intrabay` — authored, currently read by nothing) and emit a real
+      multi-row `fromto.txt`. The mechanism is already live and degenerate:
+      `file_instance.py:28-45` keys transport on `(FROMLOC, TOLOC)` and every
+      family's `STNFAMLOC` is `Fab`, so all 22,000 moves a day draw the same
+      U(5, 10) min.
+- [ ] **Decompose, do not replace.** Manhattan track distance over the 72
+      non-stocker cells is mean 108 m, max 217 m — 0.45 min at 4 m/s against
+      a 7.5 min draw, ~6%. So `t = handling + distance/speed + contention`,
+      calibrated so the mean still lands near 7.5 min **at slate @ 1.03×
+      starts** (ADR 0012's operating point). Swapping in distance ÷ speed
+      alone cuts transport ~94% and every cycle-time KPI "improves": an
+      artifact. The tail is deliberately unconstrained — congestion's whole
+      signature is excursions above the mean, and U(5, 10) has none.
+- [ ] **Per-candidate travel in the dispatcher.** `instance.get_times()`
+      charges `remaining_steps[0].transport_time` *after* the decision and
+      keys it on the route step pair, so no policy can prefer a nearer tool.
+      Location has to move from family to machine (the slots above) and the
+      cost has to be computable per candidate inside the ranking loop.
+      `DE_FE_86` has 118 machines over four cells: a family-keyed matrix
+      cannot express two of them being 40 m apart.
+- [ ] **Transport as a contended resource.** Finite vehicles, moves that
+      queue. Note transport time then becomes *endogenous* — it depends on
+      the policy — so any calibration must name both policy and starts scale.
+- [ ] **Bug, independent of the above**: `generator_instance.py:75` reads
+      `{('Fab', 'Fav'): ...}` — `Fav`. The key never matches, so generated
+      (non-file) instances get **zero** transport time, not 5 min.
+- [ ] Revisit cell capacity if the above lands: slotting at a real 4.5 m
+      footprint overruns the synthetic cells (ETC 6.9×, CLN and LIT 4.6×).
+      Reported on `/api/layout` as `capacity` rather than hidden behind a
+      shrunken pitch, but a transport model that takes metres seriously will
+      want a grid that is physically credible.
+
 ## 6. Environment
 
 - [ ] `scripts/dev-up.sh` resolves `npm` to the Windows npm via WSL interop
