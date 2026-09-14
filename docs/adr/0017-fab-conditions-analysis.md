@@ -568,10 +568,16 @@ exactly where the gain appears:
 
 **Per-part spread falls from 32.9 points to 14.4.** Every laggard rises 12–22
 points and not one leader is sacrificed — `part_4`, `part_7` and `part_10` all
-hold at 99%. A single sort key can only rank, so it cannot move slack between
-products; an assignment over a set can, and here it did. That is the
-[ADR 0009](0009-slate-rule-hybrid-split.md) claim demonstrated rather than
-asserted, for the first time in this repo.
+hold at 99%.
+
+> **CORRECTION, later the same day (§12.8).** The sentence that stood here —
+> that a sort key cannot move slack between products and this was therefore
+> the ADR 0009 set-assignment claim demonstrated at last — is **wrong**. A
+> `qt` with a promotion threshold reaches a spread of 15.8, statistically
+> indistinguishable from `slate`'s. The rebalancing was not a property of
+> assignment over a set; it was a property of not promoting lots that were
+> never in danger, and one threshold buys it. The margin that survives is
+> real but smaller and differently shaped — see §12.8.
 
 ### 12.5 What this does and does not overturn
 
@@ -609,3 +615,68 @@ decisions are still the `qt` fallback.
 - **Other seeds.** One seed (0), two replicates.
 - **The audit.** If the remaining objective constants are as miscalibrated as
   this one was, the tuned result could move again in either direction.
+
+---
+
+## 12.8 Calibrating against a tuned baseline, and what the win actually is
+
+§12.7 named a tuned `qt` as the live overturn condition, on the grounds that
+the published baseline promoted *any* saveable at-risk lot — twenty minutes or
+two hundred hours of slack alike — which is the same species of unchosen
+parameter as the constant §12.1 is about. It was run.
+
+| run | good/day | on-time | CT (d) | tardiness | viol/day | per-part spread | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `qt` promote-all (as published) | 57.5 | 81.66% | 38.4 | 1,925 | 1.4 | 32.9 | 3,113 s |
+| **`qt` promote < 50% of window** | 57.4 | **89.60%** | 38.3 | **524** | 1.1 | **15.8** | 3,067 s |
+| `qt` promote < 25% of window | 57.2 | 88.82% | 38.4 | 809 | 1.4 | 16.0 | 3,045 s |
+| `slate` fixed a | 57.4 | 92.89% | **36.9** | **114** | 1.4 | 14.4 | 14,739 s |
+| `slate` fixed b | 57.7 | 93.02% | **36.9** | **122** | 1.7 | 16.3 | 14,781 s |
+
+### What this removes
+
+**The mechanism claim.** §12.4 attributed `slate`'s win to rebalancing across
+a set — something a ranking supposedly could not do. A thresholded `qt` gets
+the same spread. So the per-part rebalancing is available to a sort key, and
+the ADR 0009 claim remains **undemonstrated** rather than proven. That was the
+most interesting sentence in §12 and it does not survive.
+
+**Most of the magnitude.** The on-time margin against the best `qt` is
+**+3.3 points**, not the +11.3 reported against the untuned one.
+
+### What remains
+
+Against the strongest baseline we have:
+
+- **on-time 92.95% vs 89.60%** — +3.3 points
+- **tardiness 118 vs 524 lot-days** — 4.3× less
+- **cycle time 36.9 d vs 38.3 d** — 1.4 days shorter
+- matched on throughput, violations, scrap and WIP stationarity
+
+at **4.8× the wall clock**.
+
+Tardiness is the most interesting of these, because it is the only one where
+the gap stayed large after the baseline was tuned: `slate` is not just missing
+fewer dates, it is missing them by far less when it misses. That is a
+different claim from §12.4's and it has not been explained.
+
+### The honest asymmetry
+
+`slate` has two replicates agreeing to 0.13 on-time points. Each `qt` variant
+has **one run**. A two-replicate mean against a single run is not a balanced
+comparison, and the 3.3-point margin should be read with that in mind. The
+replicates were not run because the object of this work is a **minimum viable
+solver**, not a fully characterised sort key — but the asymmetry is recorded
+rather than left for a reader to notice.
+
+### Verdict
+
+**A minimum viable solver is demonstrated.** On a fab with enforced queue
+times, rework and scrap, at full load, `slate` matches the best sort key on
+every stability and volume measure and beats it on lateness — decisively on
+tardiness, modestly on on-time — for roughly five times the compute.
+
+That is a narrower result than §12.4 claimed and a real one. The route to it
+is the more useful record: the solver spent four constraint classes losing,
+and the last of those losses was caused by a constant off by two orders of
+magnitude relative to the data it was applied to.
