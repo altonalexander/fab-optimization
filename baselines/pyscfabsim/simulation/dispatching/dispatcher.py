@@ -1,7 +1,14 @@
+import os
+
 from classes import Lot, Machine
 from randomizer import Randomizer
 
 r = Randomizer()
+
+# Fraction of its window a lot must have burned through before `qt` promotes
+# it. 1.0 = promote any saveable at-risk lot (the original, and the default,
+# so published rows are unchanged).
+QT_PROMOTE_FRAC = float(os.getenv('QT_PROMOTE_FRAC', '1.0'))
 
 
 class Dispatchers:
@@ -116,6 +123,17 @@ class Dispatchers:
         # to protect and takes its turn by cr like any other.
         slack = Dispatchers.qt_slack(lot, time)
         saveable = slack is not None and slack > 0
+        # Promote only lots that are actually CLOSE to lapsing. The first
+        # version promoted any saveable lot, whether it had twenty minutes or
+        # two hundred hours left -- indiscriminate, and it disrupts setup and
+        # batch grouping for lots that were never in danger. That is the same
+        # defect found in the solver's q-time term (adr/0017 §12): a parameter
+        # nobody chose. 1.0 reproduces the original behaviour exactly, so
+        # every published qt row stands.
+        if saveable and QT_PROMOTE_FRAC < 1.0:
+            w = getattr(lot, 'cqt_window_s', None)
+            if w:
+                saveable = slack < QT_PROMOTE_FRAC * w
         at_risk = 0 if saveable else 1
         rank = slack if saveable else 0.0
         if machine is not None:

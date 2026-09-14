@@ -366,7 +366,16 @@ been written down.
 
 ---
 
-## 11. The answer, 2026-09-13: `slate` loses to a sort key, decisively
+## 11. ~~The answer, 2026-09-13: `slate` loses to a sort key, decisively~~
+
+> **FALSIFIED 2026-09-14 — see [§12](#12-the-actual-answer-2026-09-14-slate-wins-once-its-q-time-term-is-on-the-right-scale).**
+> Everything below was measured against an objective whose queue-time term was
+> arithmetically inert at this fab's scale. It is kept unedited, because the
+> reasoning is sound given the numbers and the numbers were real — what was
+> wrong was a constant nobody had checked, and that is the useful part of the
+> record.
+
+### 11.0 The original section follows
 
 §10.1 named the target: ~7% of lots late with a 15-point per-part spread, on a
 fab with zero scrap and slack sitting in the products that finish early. A
@@ -482,3 +491,121 @@ that *which* sort key decides whether the fab is viable at all.
   LVHM, where reticles never bind and tools within a family are identical. The
   HVLM scenario is the remaining place the assignment formulation could earn
   its cost, and nothing here speaks to it.
+
+---
+
+## 12. The actual answer, 2026-09-14: `slate` wins, once its q-time term is on the right scale
+
+§11 is wrong, and the way it is wrong is worth more than the conclusion it
+reached.
+
+### 12.1 What was actually measured in §11
+
+Both C++ queue-time terms are hardcoded in **minutes**:
+
+```cpp
+cost()            qtime_boost = 1.0 + 600.0  / max(lot.qtime_slack_s, 60.0)
+CP-SAT objective  urgency    *= 1.0 + 3600.0 / max(m.lot_slack_s[l],  60.0)
+```
+
+This fab's windows are **10 to 240 hours** — the dataset's 1–24 h at
+`--cqt-scale 10`. The measured p75 of *saveable* at-risk lots is **+16 hours**
+of slack, which those expressions price at **1.010×** and **1.063×** — against
+a due-date term in the same product that reaches **50×**.
+
+The term was not weak. It was arithmetically absent. So §11 did not measure a
+solver that handles queue time badly; it measured a solver that had, in
+effect, never been told about queue time. `1aa5428` replaced the `1e9`
+sentinel with real slack and changed nothing, for this reason.
+
+(The two constants also disagree with each other, where
+[ADR 0009](0009-slate-rule-hybrid-split.md) says the CP-SAT objective should be
+"the linearized form of `SolverExporter::cost`". Left as found and flagged.)
+
+### 12.2 The fix
+
+One line of data, no C++ change: pass `600 * (slack / window)` rather than raw
+slack, making both expressions **window-relative** — `cost()` becomes
+`1 + 1/frac`, the CP-SAT objective `1 + 6/frac`. A lot near the end of a
+10-hour window and one near the end of a 240-hour window are then treated
+alike, which is what the constraint means. Lapsed windows still report inert
+(§11.1's other lesson). `instance.py` stores `cqt_window_s` so the length is
+available at the point of use.
+
+### 12.3 The result, two replicates
+
+| run | good/day | on-time | CT (d) | scrap/day | tardiness | viol/day | end WIP | final 3rd | wall |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `qt` | 57.5 | 81.66% | 38.4 | 0.0 | 1,925 | 1.4 | 2145 | −1.13 | 3,113 s |
+| `slate` §11 a | 48.1 | 24.91% | 48.8 | 0.0 | 91,889 | 22.2 | 3843 | +10.40 | 17,776 s |
+| `slate` §11 b | 48.5 | 24.17% | 48.6 | 0.0 | 91,583 | 23.1 | 3765 | +8.95 | 17,626 s |
+| **`slate` fixed a** | **57.4** | **92.89%** | **36.9** | 0.0 | **114** | 1.4 | 2154 | +0.43 | 14,739 s |
+| **`slate` fixed b** | **57.7** | **93.02%** | **36.9** | 0.0 | **122** | 1.7 | 2106 | +0.68 | 14,781 s |
+
+The replicates agree to **0.13 on-time points** and an identical cycle time —
+far inside the noise floor of §11.2 — so the reversal is not a run-to-run
+artefact. Conservation holds at 57.2 releases/day.
+
+Against `qt`: **+11.3 on-time points, 16× less tardiness, 1.5 days shorter
+cycle time**, at the same throughput, the same violation rate, the same zero
+scrap, and stationary WIP.
+
+### 12.4 It wins by rebalancing a set, which is the claim
+
+§10.1 named the target as a due-date **allocation** problem, and that is
+exactly where the gain appears:
+
+| part | `qt` | `slate` §11 | `slate` fixed | Δ vs `qt` |
+|---|---:|---:|---:|---:|
+| part_9 | 66.41% | 11.67% | **84.88%** | **+18.5** |
+| part_6 | 66.73% | 13.64% | **88.57%** | **+21.8** |
+| part_3 | 77.38% | 14.75% | 93.15% | +15.8 |
+| part_2 | 78.03% | 15.24% | 93.80% | +15.8 |
+| part_1 | 76.97% | 14.10% | 92.34% | +15.4 |
+| part_7 | 98.55% | 99.43% | 99.32% | +0.8 |
+| part_10 | 99.32% | 18.07% | 98.74% | −0.6 |
+| part_4 | 99.33% | 19.62% | 99.32% | −0.0 |
+
+**Per-part spread falls from 32.9 points to 14.4.** Every laggard rises 12–22
+points and not one leader is sacrificed — `part_4`, `part_7` and `part_10` all
+hold at 99%. A single sort key can only rank, so it cannot move slack between
+products; an assignment over a set can, and here it did. That is the
+[ADR 0009](0009-slate-rule-hybrid-split.md) claim demonstrated rather than
+asserted, for the first time in this repo.
+
+### 12.5 What this does and does not overturn
+
+**Does not:** ADR 0013 (qualification is a filter) and ADR 0014 (reticles
+never bind on LVHM) rest on different mechanisms and are untouched. ADR 0016's
+finding that a sort key takes scrap to zero also stands — `slate` matches it
+rather than beating it.
+
+**Does:** §11's verdict, and the "four negatives" framing built on it. It also
+weakens the standing of the other negatives *as evidence*, without
+contradicting them: if one unchecked constant, wrong by two orders of
+magnitude relative to the data, could inverse a result that had been measured,
+replicated and written up, then "we tested it and the solver lost" is a weaker
+claim than it reads. Nobody has audited the remaining coefficients the same
+way.
+
+**§9 is untouched and remains the larger result**: which sort key you run
+decides whether the fab is viable at all, replicated on three seeds. `slate`'s
+win sits *on top of* a rule that keeps the fab alive — it is warmed from, and
+falls back to, `qt`.
+
+### 12.6 Cost
+
+**4.7× the wall clock** against `qt` (14,739 s vs 3,113 s) with the
+family-parallel path of `dd65189`. Coverage is ~46%, so roughly half the
+decisions are still the `qt` fallback.
+
+### 12.7 What would overturn *this*
+
+- **A tuned `qt`.** The baseline is a first draft: it promotes *any* saveable
+  at-risk lot, whether it has twenty minutes or two hundred hours of slack —
+  the same species of unchosen parameter this section is about. A `qt` that
+  promotes only lots below a fraction of their window may close some of the
+  gap. Running at the time of writing.
+- **Other seeds.** One seed (0), two replicates.
+- **The audit.** If the remaining objective constants are as miscalibrated as
+  this one was, the tuned result could move again in either direction.
