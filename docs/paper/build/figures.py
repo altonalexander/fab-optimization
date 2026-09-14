@@ -259,5 +259,47 @@ def fig6():
     save(fig, 'fig6_tardiness')
 
 
-for f in (fig1, fig2, fig3, fig4, fig5, fig6):
+# -- Fig 7: the headline -- per seed, QT tuned vs three SLATE replicates -----
+def fig7():
+    seeds = [0, 1, 2]
+    def reps(sd):
+        return [DATA[k] for k in (f'slate_s{sd}_a', f'slate_s{sd}_b', f'slate_s{sd}_c')
+                if k in DATA]
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.9))
+    panels = [('on_time_pct', 'on-time, %', False),
+              ('tardiness_lot_days', 'total tardiness, lot-days', False),
+              ('part_spread', 'per-product spread, pts', False)]
+    for ax, (key, ylab, logy) in zip(axes, panels):
+        for sd in seeds:
+            q = DATA.get(f'qt50_s{sd}')
+            rs = [r[key] for r in reps(sd) if r.get(key) is not None]
+            if q:
+                ax.plot([sd - 0.12], [q[key]], marker='D', markersize=6, linestyle='',
+                        color=SLOT['QT_tuned'][1], markeredgecolor=SURFACE,
+                        label=LABEL['QT_tuned'] if sd == 0 else None)
+            if rs:
+                ax.plot([sd + 0.12] * len(rs), rs, marker='o', markersize=5, linestyle='',
+                        color=SLOT['SLATE_sym'][1], markeredgecolor=SURFACE, alpha=0.9,
+                        label=LABEL['SLATE_sym'] if sd == 0 else None)
+                if len(rs) > 1:
+                    ax.plot([sd + 0.12] * 2, [min(rs), max(rs)], color=SLOT['SLATE_sym'][1],
+                            lw=1.2, alpha=0.6)
+        ax.set_xticks(seeds)
+        ax.set_xticklabels([str(s) for s in seeds])
+        ax.set_xlabel('seed')
+        ax.set_xlim(-0.6, 2.6)
+        ax.set_ylabel(ylab)
+        if key == 'tardiness_lot_days':
+            ax.set_ylim(bottom=0)
+        ax.grid(axis='x', visible=False)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='lower center', ncol=2, fontsize=7.5,
+               bbox_to_anchor=(0.5, -0.04), frameon=False)
+    fig.suptitle('Tuned sort key against the solver: three seeds, three solver '
+                 'replicates per seed', x=0.02, ha='left', fontsize=10)
+    fig.tight_layout(rect=[0, 0.06, 1, 0.92], w_pad=2.0)
+    save(fig, 'fig7_headline')
+
+
+for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7):
     f()
