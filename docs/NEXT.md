@@ -152,6 +152,26 @@ tool **and** planned start; the slate stays the real-time layer and the
 fallback. Coverage becomes the schedule-adherence metric. Fab-wide scheduling
 is out: too large, stale before it returns, and unnecessary below the knee.
 
+## 3b. Learn the objective online (opened 2026-09-14)
+
+The one unchecked constant that inverted ADR 0017's verdict is the argument
+for this: the solver's objective was hand-guessed, and a fab whose mix and
+tool set evolve will make any one-off fit stale the same way.
+
+- **Signals at the 60-second cadence**, not the 180-day one: whether a
+  promoted lot made its queue-time window; which families the `qt` fallback
+  handled as well as the solver; and a learned state value `V(state)` so a
+  per-solve decision carries its longer-horizon cost (the ADP route; the
+  vendored PPO scaffold is the seed).
+- **The learner evolves; the gate never does.** Conservation, trailing WIP
+  slope and scrap rate run continuously; parameters may move only while
+  they hold, with bounded step sizes and rollback to the last admissible
+  set. The short-window trap (0017 §11.2) is exactly what this guards.
+- **Prerequisite:** a deterministic CP-SAT budget, so any parameter move
+  can be replayed and audited.
+- **Freeze only for benchmarks.** A comparison needs a fixed object on each
+  side; production does not.
+
 ## 4. Dispatcher hygiene
 
 - [ ] `slate:flow` tier (2026-09-09): stronger downstream term, 1.3× batch
