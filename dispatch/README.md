@@ -276,8 +276,8 @@ event volume; the lots view then reports that it has no points.
 
 ### Live charts scroll, they do not redraw
 
-The WIP chart on the live tab and the event-rate chart on the topology tab are
-rolling windows fed one sample at a time. They are drawn by `StreamChart.jsx`
+The playback-resolution WIP chart and the event-rate chart, both on the
+Architecture tab, are rolling windows fed one sample at a time. They are drawn by `StreamChart.jsx`
 over `stream_geom.js` rather than by a charting library, because a library
 redraws the series on every sample and tweens each vertex to its new position:
 an arriving point makes the whole line wobble in place, which reads as data

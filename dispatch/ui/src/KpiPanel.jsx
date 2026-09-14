@@ -38,6 +38,31 @@ export const KPIS = [
     info: 'Dispatch decisions in the trailing day (real tools only; Delay_* pseudo-tools are not decisions) that came from the optimizing dispatcher rather than falling back to the default rule. The baseline runs the default rule (fifo) for everything, so this reads 0% until the dispatcher runs inside the simulator; then it is the first number to watch.' },
 ]
 
+// The four that belong on every page, and the three that do not.
+//
+// A tile costs attention on every view whether or not that view is about it,
+// and eight of them across the top taught the reader that none of them was
+// worth stopping on. These four are the fab's condition -- how much work is in
+// it, how fast it comes out, how long it takes, whether it was on time -- and
+// they are the four a reader should be able to glance at from any tab.
+// Starts, utilization and optimized-share are diagnostics: they explain the
+// four above, they are read next to their own charts, and they live on the
+// Overview beside them.
+const HEADLINE = ['wip', 'thr', 'ct', 'otd']
+export const isHeadline = k => HEADLINE.includes(k.key)
+
+// Sub-line for a KPI tile. Two KPIs carry a second fact worth the row -- how
+// late the late lots were, and the decision counts behind the percentage --
+// and they are written here so the headline row and the Overview's diagnostic
+// row cannot render the same tile two different ways.
+export function subFor(kpi, sample) {
+  if (sample) {
+    if (kpi.key === 'otd') return `late lots avg ${Number(sample.tard || 0).toFixed(1)}d late`
+    if (kpi.key === 'optpct') return `${Math.round(sample.opt)} of ${Math.round(sample.dec)} decisions/day`
+  }
+  return kpi.unit
+}
+
 // Where a lot's time goes, as shares of the lot-hours in the trailing day.
 export const SPLIT = [
   { key: 'wq', label: 'queueing for a tool', color: '#6b7280' },

@@ -152,9 +152,15 @@ ENRICH = {
     },
     "GET /api/tools": {
         "responses": {"200": {"description": "Tools grouped by type, ranked by "
-                                             "dispatch count.",
+                                             "lots waiting now (dispatch count "
+                                             "breaks ties). Each group carries "
+                                             "the `area` it sits in; `areas` "
+                                             "rolls those up, named and "
+                                             "coloured as the floor map names "
+                                             "them, most lots waiting first.",
                               **_json({"type": "object", "properties": {
                                   "groups": _ARR_OBJ,
+                                  "areas": _ARR_OBJ,
                                   "total": {"type": "integer"}}})}},
     },
     "GET /api/tools/availability": {

@@ -1,15 +1,16 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import ChatPanel from './ChatPanel.jsx'
+import ErrorBoundary from './ErrorBoundary.jsx'
 import { AvatarLauncher } from './Avatar.jsx'
 import FloorMap from './FloorMap.jsx'
 import CohortBurndown from './CohortBurndown.jsx'
 import { RouteIndex, RouteProduct } from './RoutePages.jsx'
 import SlatePage from './SlatePage.jsx'
-import { useRoute, linkTo, TABS } from './router.js'
+import { useRoute, linkTo, labelFor, NAV, TABS } from './router.js'
 import ToolAvailability from './ToolAvailability.jsx'
 import ToolFlow from './ToolFlow.jsx'
 import StreamChart from './StreamChart.jsx'
-import KpiPanel, { KPIS, Info, valueOf, WipSinceDay0 } from './KpiPanel.jsx'
+import KpiPanel, { KPIS, Info, valueOf, isHeadline, subFor, WipSinceDay0 } from './KpiPanel.jsx'
 import ResultsPage from './ResultsPage.jsx'
 import { spanFor, fmtSpan, fmtSimTime } from './stream_geom.js'
 import { isSceneFamily, sceneKind, decisionForLot } from './etch_geom.js'
@@ -157,53 +158,30 @@ function Stat({ label, value, sub, accent, href, title, info }) {
   return <a className="stat stat-link" href={href} title={title}>{body}</a>
 }
 
-// Derives the flow graph from the boundary policy itself, so these counts
+// Derives the flow graph from the boundary policy itself, so the table below
 // cannot drift from zones.yaml: an edge is an entry under boundaries[].allowed,
-// and a node is whatever that entry names (a zone, or the dual-homed service
-// that mediates it). Source = emits but never receives, sink = the reverse,
-// relay = both. Nothing here is hand-maintained.
+// carrying the dual-homed service that mediates it.
+//
+// This used to derive node roles (source / sink / relay) and the tightest
+// latency budget as well, for a row of tiles that counted them. The diagram
+// draws all of it -- a zone with only outgoing arrows IS a source, and each
+// band carries its own budget -- so the counts were a worse copy of the
+// picture directly beneath them, and they are gone along with the tiles.
 function analyzeTopology(zones) {
   if (!zones || !zones.zones) return null
-  const out = new Map(), inn = new Map()
-  const touch = (m, k) => m.set(k, (m.get(k) || 0) + 1)
   const edges = []
   for (const b of zones.boundaries || []) {
     for (const a of b.allowed || []) {
       if (!a.from || !a.to) continue
       edges.push({ ...a, service: b.service })
-      touch(out, a.from); touch(inn, a.to)
-      if (!inn.has(a.from)) inn.set(a.from, 0)
-      if (!out.has(a.to)) out.set(a.to, 0)
     }
   }
-  const nodes = [...new Set([...out.keys(), ...inn.keys()])]
-  const roleOf = (n) => {
-    const o = out.get(n) || 0, i = inn.get(n) || 0
-    if (o && !i) return 'source'
-    if (i && !o) return 'sink'
-    return 'relay'
-  }
-  const roles = Object.fromEntries(nodes.map(n => [n, roleOf(n)]))
-  const protocols = new Set()
-  for (const z of zones.zones) (z.protocols || []).forEach(p => protocols.add(p))
-  const budget = zones.zones
-    .map(z => z.latency_budget_ms)
-    .filter(v => typeof v === 'number')
-  return {
-    edges,
-    roles,
-    sources: nodes.filter(n => roles[n] === 'source'),
-    sinks: nodes.filter(n => roles[n] === 'sink'),
-    relays: nodes.filter(n => roles[n] === 'relay'),
-    dualHomed: (zones.boundaries || []).map(b => b.service),
-    protocols: [...protocols],
-    tightestBudgetMs: budget.length ? Math.min(...budget) : null,
-  }
+  return { edges }
 }
 
 const fmtMs = (v) => v == null ? '—' : v < 10 ? v.toFixed(1) : Math.round(v)
 
-function TopologyMetrics({ zones, state, link, connected }) {
+function TopologyMetrics({ zones, link, connected }) {
   const g = useMemo(() => analyzeTopology(zones), [zones])
   if (!g) return null
 
@@ -212,47 +190,35 @@ function TopologyMetrics({ zones, state, link, connected }) {
   // paths, so they are labelled separately rather than compared.
   const lagAccent = link.lagMs != null && link.lagMs > 2000 ? '#b91c1c' : undefined
 
+  // Measured, four ways. The shape of the graph -- how many sources, sinks,
+  // relays and boundary crossings -- used to be eight more tiles here, but the
+  // diagram below draws every one of them: a node you can count in the picture
+  // does not need a tile that says how many there are, and twelve tiles above
+  // a diagram taught people to skip both. What is left is the link itself,
+  // which the diagram cannot show because it is not policy, it is behaviour.
   return (
     <>
       <div className="stats-row">
+        <Stat label="mirror lag" value={fmtMs(link.lagMs)}
+              accent={lagAccent} sub="ms · zone 2→3→browser"
+              info="Wall-clock time between the API stamping a state frame and this browser parsing it: the measured cost of the enterprise-side mirror path. Red past 2 s. The zone 1 realtime budget on the diagram below is a different path and a policy number, not this." />
+        <Stat label="heartbeat" value={fmtMs(link.heartbeatMs)}
+              sub="ms between state frames"
+              info="Observed interval between consecutive state frames on this connection. Steady is healthy; a growing number with the stream still up means the producer is falling behind." />
         <Stat label="event throughput"
               value={link.eventRate == null ? '—' : link.eventRate.toFixed(1)}
-              sub="envelopes/s · 10s window"
-              info="Envelopes reaching this browser per wall second. Scales with playback speed: at 200x the fab emits ten times the events of 20x. Read it against the sim clock rate below." />
-        <Stat label="sim clock rate"
-              value={link.simRate == null ? '—' : `${link.simRate.toFixed(1)}x`}
-              accent={link.simRate != null && link.simSpeed && !link.simPaused
-                      && link.simRate < 0.5 * link.simSpeed ? '#b45309' : undefined}
-              sub={link.simPaused ? 'paused' : link.simSpeed != null
-                     ? `measured · ${link.simSpeed}x requested` : 'sim-seconds per wall-second'}
-              info="Simulated seconds advanced per wall-clock second, measured from the clock stamped on state frames over the last 10 s. The requested speed is a setting; this is what the feed actually keeps up with. Amber when it falls below half the request." />
-        <Stat label="events per fab-hour"
-              value={link.eventRate != null && link.simRate
-                     ? Math.round(link.eventRate / link.simRate * 3600).toLocaleString() : '—'}
-              sub="envelopes per simulated hour"
-              info="Event throughput divided by the measured clock rate: the fab's own event density, independent of playback speed. Roughly constant for a given fab; use it to compare loads across speeds or runs." />
-        <Stat label="lot throughput"
-              value={state?.kpi ? Math.round(state.kpi.thr) : '—'}
-              sub="lots per fab-day · trailing simulated day"
-              info={KPIS[1].info} />
-        <Stat label="mirror lag" value={fmtMs(link.lagMs)}
-              accent={lagAccent} sub="ms · zone 2→3→browser" />
-        <Stat label="heartbeat" value={fmtMs(link.heartbeatMs)}
-              sub="ms between state frames" />
-        <Stat label="sources" value={g.sources.length}
-              sub={g.sources.join(', ') || '—'} />
-        <Stat label="sinks" value={g.sinks.length}
-              sub={g.sinks.join(', ') || '—'} />
-        <Stat label="relays" value={g.relays.length}
-              sub={g.relays.join(', ') || '—'} />
-        <Stat label="boundary crossings" value={g.edges.length}
-              sub={`${g.dualHomed.length} dual-homed services`} />
-        <Stat label="rt budget"
-              value={g.tightestBudgetMs == null ? '—' : g.tightestBudgetMs}
-              sub="ms · zone 1 policy, not measured" />
-        <Stat label="frames seen" value={link.totalMsgs}
+              sub={link.eventRate != null && link.simRate
+                   ? `envelopes/s · ${Math.round(link.eventRate / link.simRate * 3600).toLocaleString()} per fab-hour`
+                   : 'envelopes/s · 10s window'}
+              info="Envelopes reaching this browser per wall second, over a 10 s window. It scales with playback speed: at 200x the fab emits ten times the events of 20x, with nothing in the fab changing. The sub-line divides it by the measured clock rate to give the fab's own event density, which is roughly constant for a given load and is the figure to compare across speeds or runs." />
+        <Stat label="frames seen" value={link.totalMsgs.toLocaleString()}
               accent={connected ? undefined : '#b91c1c'}
-              sub={connected ? 'stream live' : 'stream down'} />
+              sub={connected
+                   ? link.simPaused ? 'stream live · fab paused'
+                     : link.simRate != null ? `stream live · clock ${link.simRate.toFixed(1)}x of ${fmtSpeed(link.simSpeed)}`
+                       : 'stream live'
+                   : 'stream down'}
+              info="Event and decision envelopes counted on this connection since the page loaded, and what the clock is doing behind them: the measured playback rate against the one requested. A measured rate well under the request means the feed cannot keep up, and every rate above is being throttled by that, not by the fab." />
       </div>
 
       <section>
@@ -472,7 +438,14 @@ function ZoneDiagram({ zones }) {
 // above, one zone at a time. What the diagram cannot show is the CI contract,
 // so that is all this renders now.
 function ZoneInvariants({ zones }) {
+  // `!zones` alone was not enough: /api/zones answers a missing or unreadable
+  // zones.yaml with {"error": ...}, which is truthy, so this read .invariants
+  // off it and threw. There is no error boundary above this, so that took the
+  // whole dashboard white -- every tab, not just this one. The failure worth
+  // rendering is the error itself.
   if (!zones) return <div className="muted">loading topology…</div>
+  if (zones.error) return <div className="err">topology policy unavailable: {zones.error}</div>
+  if (!Array.isArray(zones.invariants)) return null
   return (
     <div className="invariants">
       <strong>Enforced invariants</strong>
@@ -753,13 +726,32 @@ function ToolDetail({ id, backHref, query }) {
 // Filters live in the URL rather than in component state: "the ETCH tools
 // that are down" is the thing people actually want to send to someone, and a
 // tab that forgets its filter on every visit is a tab you re-type into.
+//
+// The index is grouped by PROCESS AREA, named the way the floor map names it,
+// because `WE_FE_108` and `LithoTrack_FE_115` are SMT2020's identifiers and
+// mean nothing to a reader who has not memorised the dataset -- while the same
+// reader can find Photolithography or Wet clean on the map two tabs over. The
+// mapping is the API's (`area_for_group`, over the floorplan's own zones), so
+// the two pages cannot end up with two taxonomies.
+//
+// Within an area, families are ordered by lots waiting RIGHT NOW. Cumulative
+// dispatch count -- the old order -- answers "what has run the most since the
+// run started", which is dominated by the fast plentiful families that were
+// never a constraint. Families with nothing waiting are folded away rather
+// than deleted: the page's job is to answer "where are lots waiting" first and
+// "what exists" second, not to pick one.
 function ToolIndex({ query, setQuery, toolHref }) {
   const [data, setData] = useState(null)
   const [open, setOpen] = useState({})
+  const [showIdle, setShowIdle] = useState({})
   const q = query.q || ''
   const setQ = v => setQuery({ q: v || undefined })
-  const type = query.type || 'all'
-  const setType = v => setQuery({ type: v === 'all' ? undefined : v })
+  // `?area=LIT` is the filter now. `?type=<family>` is still honoured so links
+  // already pasted somewhere keep resolving; it renders as a removable chip
+  // rather than as a control of its own.
+  const area = query.area || 'all'
+  const setArea = v => setQuery({ area: v === 'all' ? undefined : v })
+  const type = query.type || null
   // Delay_* are queue-time placeholders pinned near 100% busy. Left in, they
   // top the ranking by dispatch count and bury the real constraint.
   const showDelay = query.delay === '1'
@@ -777,32 +769,128 @@ function ToolIndex({ query, setQuery, toolHref }) {
   if (!data) return <div className="muted">loading tools…</div>
 
   const needle = q.trim().toLowerCase()
-  const isDelay = g => g.toLowerCase().startsWith('delay')
+  const isDelay = g => (g.area ? g.area === 'DLY' : g.group.toLowerCase().startsWith('delay'))
 
+  // The filter matches the family name as well as the tool id: "LithoTrack"
+  // and "ETCH_11" are both things people type, and only one of them was
+  // findable before.
   const groups = data.groups
-    .filter(g => showDelay || !isDelay(g.group))
-    .filter(g => type === 'all' || g.group === type)
-    .map(g => ({ ...g, tools: needle ? g.tools.filter(t => t.id.toLowerCase().includes(needle)) : g.tools }))
+    .filter(g => showDelay || !isDelay(g))
+    .filter(g => area === 'all' || g.area === area)
+    .filter(g => !type || g.group === type)
+    .map(g => needle && !g.group.toLowerCase().includes(needle)
+      ? { ...g, tools: g.tools.filter(t => t.id.toLowerCase().includes(needle)) }
+      : g)
     .filter(g => g.tools.length > 0)
 
-  const delayCount = data.groups.filter(g => isDelay(g.group)).length
+  // Two lists, deliberately: what the picker offers is everything the reader
+  // could switch to, while the body is what survives the filters. Deriving
+  // both from one list is how the picker ends up offering only the area
+  // already selected.
+  const selectable = (data.areas || []).filter(a => showDelay || a.id !== 'DLY')
+  // An area's counts are recomputed from the families actually on screen, not
+  // taken from the API's fab-wide rollup: under a filter the rollup says
+  // "8 types · 187 tools" over a list showing one, and a header that disagrees
+  // with the rows beneath it is worse than no header. The fold-away of quiet
+  // families does not touch this -- those are in `fams`, just not rendered.
+  const areas = selectable
+    .map(a => {
+      const fams = groups.filter(g => g.area === a.id)
+      return {
+        ...a, fams,
+        groups: fams.length,
+        tools: fams.reduce((n, g) => n + g.count, 0),
+        waiting: fams.reduce((n, g) => n + (g.waiting || 0), 0),
+        offline: fams.reduce((n, g) => n + (g.offline || 0), 0),
+      }
+    })
+    .filter(a => a.fams.length > 0)
+  const delay = (data.areas || []).find(a => a.id === 'DLY')
+  const delayCount = delay?.groups || 0
+  const delayTools = delay?.tools || 0
+  const waitingNow = groups.reduce((n, g) => n + (g.waiting || 0), 0)
+  const shownTools = groups.reduce((n, g) => n + g.count, 0)
+  const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`
+
+  const Family = ({ g }) => {
+    // Searching implies you want to see matches, so a filtered group opens
+    // itself rather than making you expand every one.
+    const isOpen = needle ? true : !!open[g.group]
+    return (
+      <div className="tgroup">
+        <button className="tgroup-head" onClick={() => setOpen(o => ({ ...o, [g.group]: !o[g.group] }))}>
+          <span className="tgroup-caret">{isOpen ? '▾' : '▸'}</span>
+          <strong>{g.group}</strong>
+          {/* What this type asks of a dispatcher: whether its tools load
+              several lots at once, and whether they switch setups. */}
+          {g.batches && <span className="chip chip-batch" title="tools of this type load several lots at once">batches</span>}
+          {isSceneFamily(g.group) && <span className="chip chip-3d" title="tool pages of this type draw the bay in 3D: waiting lots, load ports and the vehicle that delivers the dispatched lot">3D</span>}
+          {g.setups && (
+            <span className="chip chip-setup"
+                  title={g.changeovers ? `${g.changeovers.toLocaleString()} changeovers seen` : 'runs with a setup; no changeover seen yet'}>
+              changeovers{g.changeovers ? ` ${g.changeovers.toLocaleString()}` : ''}
+            </span>
+          )}
+          <span className="muted">{g.count} tools</span>
+          <span className="tgroup-metrics">
+            {/* The sort key, stated. A row ordered by something invisible is
+                a row whose order reads as arbitrary. */}
+            <span className={g.waiting ? 'tgroup-waiting' : 'muted'}>
+              {g.waiting ? `${g.waiting.toLocaleString()} waiting` : 'none waiting'}
+            </span>
+            <span>{g.dispatches.toLocaleString()} dispatches</span>
+            {g.queue_max != null && <span>queue max {g.queue_max}</span>}
+            {g.offline > 0 && <span className="danger">{g.offline} down</span>}
+          </span>
+        </button>
+        {isOpen && (
+          <div className="tgroup-body">
+            {g.tools.map(t => (
+              <a key={t.id} className={t.online ? 'tcard' : 'tcard tcard-down'}
+                 href={toolHref(t.id)}>
+                <div className="tcard-id">{t.id}</div>
+                <div className="tcard-row">
+                  <span>q {t.queue ?? '—'}</span>
+                  <span>{t.dispatches} disp</span>
+                  {!t.online && <span className="danger">down</span>}
+                </div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div>
       <ToolAvailability />
       <div className="tool-index-head">
         <p className="muted">
-          {data.total} tools in {data.groups.length} groups, busiest first.
-          A high queue with the tool online is where lots are waiting.
+          {plural(shownTools, 'process tool')} in {plural(groups.length, 'type')} across{' '}
+          {plural(areas.length, 'area')}, and {waitingNow.toLocaleString()} lots
+          waiting on them right now. Ordered by where those lots are: a type
+          with a long queue and its tools online is where the fab is
+          constrained.
+          {!showDelay && delayTools > 0 && (
+            /* The chart above counts every station the dataset defines; this
+               line counts the ones lots actually queue at. Two different
+               totals on one screen are worth one sentence of explanation. */
+            <> The {delayTools.toLocaleString()} <code>Delay_*</code> stations in the
+               count above are route-prescribed waits, not machines.</>
+          )}
         </p>
         <div className="tool-filters">
-          <select className="tool-search" value={type} onChange={e => setType(e.target.value)}>
-            <option value="all">all types ({data.groups.length})</option>
-            {data.groups.map(g => (
-              <option key={g.group} value={g.group}>{g.group} ({g.count})</option>
+          <select className="tool-search" value={area}
+                  onChange={e => setArea(e.target.value)}>
+            <option value="all">all areas ({selectable.length})</option>
+            {selectable.map(a => (
+              <option key={a.id || 'none'} value={a.id || ''}>
+                {a.label} ({a.tools})
+              </option>
             ))}
           </select>
-          <input className="tool-search" placeholder="filter tools…"
+          <input className="tool-search" placeholder="filter by tool or type…"
                  value={q} onChange={e => setQ(e.target.value)} />
           {delayCount > 0 && (
             <label className="heat-toggle">
@@ -814,46 +902,52 @@ function ToolIndex({ query, setQuery, toolHref }) {
         </div>
       </div>
 
-      {groups.map(g => {
-        // Searching implies you want to see matches, so a filtered group opens
-        // itself rather than making you expand every one.
-        const isOpen = needle ? true : !!open[g.group]
+      {type && (
+        <p className="tool-chip-row">
+          <button type="button" className="filter-chip"
+                  onClick={() => setQuery({ type: undefined })}
+                  title="remove this filter">
+            type {type} <span aria-hidden="true">×</span>
+          </button>
+        </p>
+      )}
+
+      {areas.length === 0 && (
+        <p className="muted">Nothing matches that filter.</p>
+      )}
+
+      {areas.map(a => {
+        const busy = a.fams.filter(g => g.waiting > 0)
+        const idle = a.fams.filter(g => !g.waiting)
+        // A search or an explicit area pick means the reader asked for
+        // everything under it; only the unfiltered overview folds the quiet
+        // families away.
+        const expanded = !!showIdle[a.id] || !!needle || area !== 'all'
+        const shown = expanded ? [...busy, ...idle] : busy
         return (
-          <div key={g.group} className="tgroup">
-            <button className="tgroup-head" onClick={() => setOpen(o => ({ ...o, [g.group]: !o[g.group] }))}>
-              <span className="tgroup-caret">{isOpen ? '▾' : '▸'}</span>
-              <strong>{g.group}</strong>
-              {/* What this type asks of a dispatcher: whether its tools load
-                  several lots at once, and whether they switch setups. */}
-              {g.batches && <span className="chip chip-batch" title="tools of this type load several lots at once">batches</span>}
-              {isSceneFamily(g.group) && <span className="chip chip-3d" title="tool pages of this type draw the bay in 3D: waiting lots, load ports and the vehicle that delivers the dispatched lot">3D</span>}
-              {g.setups && (
-                <span className="chip chip-setup"
-                      title={g.changeovers ? `${g.changeovers.toLocaleString()} changeovers seen` : 'runs with a setup; no changeover seen yet'}>
-                  changeovers{g.changeovers ? ` ${g.changeovers.toLocaleString()}` : ''}
-                </span>
-              )}
-              <span className="muted">{g.count} tools</span>
-              <span className="tgroup-metrics">
-                <span>{g.dispatches.toLocaleString()} dispatches</span>
-                {g.queue_max != null && <span>queue max {g.queue_max}</span>}
-                {g.offline > 0 && <span className="danger">{g.offline} down</span>}
+          <div key={a.id || 'none'} className="tarea">
+            <div className="tarea-head">
+              <span className="tarea-swatch" style={{ background: a.color || '#9ca3af' }} />
+              <strong>{a.label}</strong>
+              <span className="muted">
+                {plural(a.groups, 'type')} · {plural(a.tools, 'tool')}
               </span>
-            </button>
-            {isOpen && (
-              <div className="tgroup-body">
-                {g.tools.map(t => (
-                  <a key={t.id} className={t.online ? 'tcard' : 'tcard tcard-down'}
-                     href={toolHref(t.id)}>
-                    <div className="tcard-id">{t.id}</div>
-                    <div className="tcard-row">
-                      <span>q {t.queue ?? '—'}</span>
-                      <span>{t.dispatches} disp</span>
-                      {!t.online && <span className="danger">down</span>}
-                    </div>
-                  </a>
-                ))}
-              </div>
+              <span className="tarea-metrics">
+                <span className={a.waiting ? 'tgroup-waiting' : 'muted'}>
+                  {a.waiting.toLocaleString()} waiting
+                </span>
+                {a.offline > 0 && <span className="danger">{a.offline} down</span>}
+              </span>
+            </div>
+            {!expanded && busy.length === 0 && (
+              <p className="muted tarea-empty">Nothing is waiting anywhere in this area.</p>
+            )}
+            {shown.map(g => <Family key={g.group} g={g} />)}
+            {!expanded && idle.length > 0 && (
+              <button type="button" className="tarea-more"
+                      onClick={() => setShowIdle(s => ({ ...s, [a.id]: true }))}>
+                + {plural(idle.length, 'type')} with nothing waiting
+              </button>
             )}
           </div>
         )
@@ -1191,8 +1285,8 @@ function PausedModal({ state, onResumed }) {
           Every time a tool frees up, a dispatcher decides which waiting lot runs
           next. Here that decision comes from a CP-SAT optimizer that plans a
           "slate" for each tool family every simulated minute, and the dashboard
-          shows the consequences live: WIP and cycle time on <b>Live</b>, cohorts
-          burning down on <b>Lots</b>, each machine's queue and setups on
+          shows the consequences live: WIP and cycle time on <b>Overview</b>,
+          lots burning down on <b>Cohorts</b>, each machine's queue and setups on{' '}
           <b>Tools</b>, the cleanroom as a map on <b>Floor</b>, and the optimizer
           compared against FIFO and critical-ratio rules on <b>Results</b>.
         </p>
@@ -1275,8 +1369,12 @@ export default function App() {
         {/* The live pill and, when the rail is closed, the only way back into
             the assistant -- kept together in the top-right corner. */}
         <div className="header-right">
-          <TimelineBadge state={state} navigate={navigate} />
-          <SpeedControl connected={connected} />
+          {/* The clock reads straight off the feed, so a malformed frame here
+              would have blanked every tab at once. */}
+          <ErrorBoundary name="The clock" compact>
+            <TimelineBadge state={state} navigate={navigate} />
+            <SpeedControl connected={connected} />
+          </ErrorBoundary>
           {!assistantOpen && (
             <button className="rail-reopen" onClick={() => setAssistantOpen(true)}
                     title="Open the assistant">
@@ -1287,41 +1385,63 @@ export default function App() {
         </div>
       </header>
 
-      {/* The fab KPIs, on every page. WIP is live from the mirror (ready +
-          in flight); the rest are the producer's hourly samples, so a tile
-          moves once per simulated hour and matches the KPI charts exactly. */}
+      <ErrorBoundary name="The headline KPIs" compact>
+      {/* The fab's condition, on every page: how much work is in it, how fast
+          it comes out, how long it takes, whether it was on time, and what is
+          broken. WIP is live from the mirror (ready + in flight); the rest are
+          the producer's hourly samples, so a tile moves once per simulated
+          hour and matches the KPI charts exactly. The three diagnostics that
+          used to sit here (starts, utilization, optimized share) are on the
+          Overview, next to the charts that explain them. */}
       <div className="stats-row">
         <Stat label="WIP" value={state ? (state.ready + state.in_flight).toLocaleString() : '—'}
               sub={state ? `${state.ready} waiting · ${state.in_flight} on a tool` : undefined}
               info={KPIS[0].info} />
-        {KPIS.slice(1).map(k => {
+        {KPIS.filter(k => isHeadline(k) && k.key !== 'wip').map(k => {
           const v = valueOf(k, state?.kpi)
-          const sub = k.key === 'otd' && state?.kpi
-            ? `late lots avg ${Number(state.kpi.tard || 0).toFixed(1)}d late`
-            : k.key === 'optpct' && state?.kpi
-              ? `${Math.round(state.kpi.opt)} of ${Math.round(state.kpi.dec)} decisions/day`
-              : k.unit
           return <Stat key={k.key} label={k.label} value={v == null ? '—' : k.fmt(v)}
-                       sub={sub} info={k.info} />
+                       sub={subFor(k, state?.kpi)} info={k.info} />
         })}
+        {/* A comma list of 25 tool ids truncates to "DE_BE_67_78, DE_FE_5…",
+            which names one tool at random and hides the rest. The count is the
+            fact; the list is one click away on the page built to show it. */}
         <Stat label="tools down" value={offline.length}
-              info="Tools currently reported offline by a breakdown or PM event and not yet recovered. Click for the tool index."
+              info="Tools currently reported offline by a breakdown or PM event and not yet recovered. Click for the tool index, where they are listed by type."
               accent={offline.length ? '#b91c1c' : undefined}
-              sub={offline.join(', ') || 'all up'}
+              sub={offline.length === 0 ? 'all up'
+                   : offline.length === 1 ? offline[0]
+                     : `${offline[0]} and ${(offline.length - 1).toLocaleString()} more`}
               href={linkTo('/tools')}
-              title="open the tool index" />
+              title={offline.length ? offline.join(', ') : 'open the tool index'} />
       </div>
+      </ErrorBoundary>
 
       <div className="shell">
         <div className="shell-main">
 
-      <nav className="tabs">
-        {TABS.map(t => (
-          <a key={t} className={tab === t ? 'active' : ''} href={linkTo(`/${t}`)}>
-            {t}
-          </a>
+      <nav className="tabs" aria-label="Views">
+        {NAV.map(g => (
+          <div key={g.group} className="tabs-group" role="group" aria-label={g.group}>
+            <span className="tabs-group-label">{g.group}</span>
+            {g.tabs.map(t => (
+              <a key={t.id} className={tab === t.id ? 'active' : ''}
+                 href={linkTo(`/${t.id}`)}
+                 aria-current={tab === t.id ? 'page' : undefined}>
+                {t.label}
+              </a>
+            ))}
+          </div>
         ))}
       </nav>
+
+      {/* Everything a tab renders, behind one boundary. Keyed by the tab and
+          the open tool or product, so a panel that throws on one tool does not
+          keep the next one from drawing -- and so "click somewhere else",
+          which is what a viewer does anyway, is the recovery. The nav above is
+          deliberately OUTSIDE it: a crashed tab must still leave you a way to
+          leave it. */}
+      <ErrorBoundary name={`The ${labelFor(tab)} view`}
+                     resetKey={`${tab}|${openTool || ''}|${openProduct || ''}`}>
 
       {tab === 'lots' && (
         <div className="grid-wide">
@@ -1354,12 +1474,11 @@ export default function App() {
               the warm-up is drawn too. For one tool, use the tools or floor tab.
             </p>
             <WipSinceDay0 />
-            <details style={{ marginTop: 10 }}>
-              <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
-                last few fab-hours at playback resolution (mirror samples)
-              </summary>
-              <WipChart history={history} />
-            </details>
+            {/* The playback-resolution version of this chart moved to
+                Architecture. Its subject is the mirror's sampling and the
+                speed changes marked on it, not WIP -- and with the tile, this
+                chart and the KPI small-multiple below, Overview was drawing
+                total WIP three times before it drew anything else. */}
           </section>
           <section>
             <h3>Event feed</h3>
@@ -1381,6 +1500,22 @@ export default function App() {
 
       {tab === 'live' && (
         <div className="grid-wide">
+          <section>
+            <h3>Diagnostics</h3>
+            <p className="muted" style={{ marginTop: -4 }}>
+              The three numbers that explain the headline four above: what is
+              being released into the fab, how much of the installed base is
+              busy, and how many decisions the optimizer actually made. Each is
+              charted below with the rest.
+            </p>
+            <div className="stats-row stats-row-inset">
+              {KPIS.filter(k => !isHeadline(k)).map(k => {
+                const v = valueOf(k, state?.kpi)
+                return <Stat key={k.key} label={k.label} value={v == null ? '—' : k.fmt(v)}
+                             sub={subFor(k, state?.kpi)} info={k.info} />
+              })}
+            </div>
+          </section>
           <section>
             <h3>KPIs since day 0</h3>
             <p className="muted" style={{ marginTop: -4 }}>
@@ -1462,8 +1597,21 @@ export default function App() {
 
       {tab === 'topology' && (
         <>
-          <TopologyMetrics zones={zones} state={state} link={link}
-                           connected={connected} />
+          <TopologyMetrics zones={zones} link={link} connected={connected} />
+          {/* Moved off Overview. Its subject is the mirror's own sampling --
+              what the browser received, and where the playback speed changed
+              under it -- which is this page's subject, not WIP's. */}
+          <section>
+            <h3>WIP at playback resolution</h3>
+            <p className="muted" style={{ marginTop: -4 }}>
+              The last few fab-hours as this browser received them, one point
+              per state frame rather than one per simulated hour, with the
+              points where playback speed changed marked. Overview draws the
+              same WIP from the producer&apos;s hourly samples; this one shows
+              the mirror.
+            </p>
+            <WipChart history={history} />
+          </section>
           <section>
             <h3>Network segmentation</h3>
             <ZoneDiagram zones={zones} />
@@ -1471,6 +1619,8 @@ export default function App() {
           </section>
         </>
       )}
+
+      </ErrorBoundary>
 
       <footer className="muted">
         No write path exists from this page to the dispatcher. Scenario runs use
@@ -1490,14 +1640,22 @@ export default function App() {
             <button className="rail-toggle" onClick={() => setAssistantOpen(false)}
                     title="Hide assistant">×</button>
           </div>
-          <ChatPanel context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
-                     pending={assistantOpen ? pendingAsk : null}
-                     onPendingSent={() => setPendingAsk(null)} />
+          {/* The rail is the one region that survives tab changes by design,
+              which also means a crash in it used to be permanent. No resetKey:
+              the panel's own Try again is the way back, since navigating does
+              not remount it. */}
+          <ErrorBoundary name="The assistant" compact>
+            <ChatPanel context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
+                       pending={assistantOpen ? pendingAsk : null}
+                       onPendingSent={() => setPendingAsk(null)} />
+          </ErrorBoundary>
         </aside>
         {!assistantOpen && (
-          <AvatarLauncher context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
-                          onOpen={() => setAssistantOpen(true)}
-                          onAsk={askFromLauncher} />
+          <ErrorBoundary name="The assistant launcher" compact>
+            <AvatarLauncher context={{ tab, openTool, openProduct, offline, cohort: query.cohort || null }}
+                            onOpen={() => setAssistantOpen(true)}
+                            onAsk={askFromLauncher} />
+          </ErrorBoundary>
         )}
       </div>
     </div>

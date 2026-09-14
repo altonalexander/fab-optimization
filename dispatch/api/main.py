@@ -14,6 +14,7 @@ import queue
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque, Counter, defaultdict
 from datetime import datetime, timezone
 
@@ -873,7 +874,7 @@ def rescan_kpi_history(run):
     try:
         from confluent_kafka import Consumer, TopicPartition, OFFSET_BEGINNING
         c = Consumer({"bootstrap.servers": KAFKA_BROKERS,
-                      "group.id": f"fab-api-kpi-rescan-{os.getpid()}-{time.time():.0f}",
+                      "group.id": _consumer_group(f"kpi-rescan-{time.time():.0f}"),
                       "auto.offset.reset": "earliest", "enable.auto.commit": False})
         tp = TopicPartition("fab.kpi.state", 0)
         _lo, hi = c.get_watermark_offsets(tp, timeout=10)
@@ -970,6 +971,26 @@ def apply_state_record(topic, ev):
     return 1
 
 
+# Every consumer here wants the WHOLE feed, never a share of it, so each one
+# must be alone in its group. This used to be keyed on os.getpid(), which is
+# unique among processes on one host and NOT unique across containers: PID
+# namespaces mean two containers from the same image start their workers at the
+# same pid, so a second API instance -- a replica, a preview, a restart that
+# lands on the same number -- silently joined the first one's group, and Kafka
+# split the topic-partitions between them. Both mirrors then looked healthy
+# while each held half the fab: the dashboard behind the tunnel quietly stopped
+# seeing LOT_STARTED and LOT_COMPLETE, so WIP read as entirely queued with
+# nothing on a tool, and nothing anywhere said why.
+#
+# A random id per process has no such collision, and costs nothing: these are
+# `latest`-reset mirrors, so there is no committed offset worth resuming.
+_RUN_ID = uuid.uuid4().hex[:12]
+
+
+def _consumer_group(role):
+    return f"fab-api-{role}-{_RUN_ID}"
+
+
 def bootstrap_from_state(Consumer):
     """Rebuild WIP from the compacted state topics before tailing events.
 
@@ -991,7 +1012,7 @@ def bootstrap_from_state(Consumer):
         "bootstrap.servers": KAFKA_BROKERS,
         # A fresh group every time: this is a rebuild, not a resumable read, so
         # it must not inherit a committed offset from a previous process.
-        "group.id": f"fab-api-bootstrap-{os.getpid()}",
+        "group.id": _consumer_group("bootstrap"),
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     })
@@ -1084,7 +1105,7 @@ def kafka_consumer_loop():
 
     c = Consumer({
         "bootstrap.servers": KAFKA_BROKERS,
-        "group.id": f"fab-api-mirror-{os.getpid()}",
+        "group.id": _consumer_group("mirror"),
         "auto.offset.reset": "latest",
         "enable.auto.commit": True,      # a mirror may lose its place safely
     })
@@ -1499,6 +1520,32 @@ def zone_for_group(group):
     return None
 
 
+# The process area a family belongs to, named the way the floor map names it.
+# One mapping, one set of labels: the tool index and the cleanroom map must
+# agree about what "LithoTrack_FE_115" is, and the only way to guarantee that
+# is for both to read zone_for_group and the floorplan's own zone labels.
+# Delay_* has no area because it has no equipment; it is given a section of
+# its own so it is visible without being asserted onto the floor.
+DELAY_AREA = {"id": "DLY", "label": "Queue-time delays", "color": "#9ca3af"}
+UNMAPPED_AREA = {"id": None, "label": "Unmapped", "color": "#9ca3af"}
+
+
+def area_for_group(group):
+    """(id, label, color) for a family. Never raises: an unmapped family is
+    reported as such rather than dropped, because that is a gap in FAMILY_ZONE
+    and hiding it would make the index quietly incomplete."""
+    if is_delay_group(group):
+        return DELAY_AREA
+    zid = zone_for_group(group)
+    if zid is None:
+        return UNMAPPED_AREA
+    for z in (floorplan.doc or {}).get("zones", []):
+        if z["id"] == zid:
+            return {"id": zid, "label": z.get("label") or zid,
+                    "color": z.get("color")}
+    return {"id": zid, "label": zid, "color": None}
+
+
 class Floorplan:
     """Geometry plus a stable tool -> cell assignment.
 
@@ -1813,6 +1860,10 @@ def tools_index():
             # once (seen in a decision, or waiting lots say so). `setups`:
             # decisions name a setup; `changeovers` counts the switches.
             "batches": r["group"] in fam_batch, "setups": False, "changeovers": 0,
+            # The process area, resolved once here rather than by pattern
+            # matching on the family name in the browser -- the floor map and
+            # this index would otherwise drift into two different taxonomies.
+            "area": area_for_group(r["group"])["id"],
         })
         g["tools"].append(r)
         g["count"] += 1
@@ -1828,11 +1879,48 @@ def tools_index():
             g["setups"] = True
         g["changeovers"] += r.get("changeovers", 0)
 
-    # Busiest group first: the index should answer "where is the constraint"
-    # before it answers "what exists".
+    # Where lots are waiting NOW, first. Cumulative dispatches answers "what
+    # has run the most since the run began", which is a different question and
+    # is dominated by fast, plentiful families that were never a constraint;
+    # the waiting count is the one the page's own subtitle promises. Dispatches
+    # stay as the tie-break so an idle fab still has a stable order.
     ordered = sorted(groups.values(),
-                     key=lambda g: (g["dispatches"], g["count"]), reverse=True)
-    return jsonify({"groups": ordered, "total": len(rows)})
+                     key=lambda g: (g["waiting"], g["dispatches"], g["count"]),
+                     reverse=True)
+
+    # Area rollup: the process areas the floor map names, so the two pages
+    # cannot end up describing the cleanroom with two different vocabularies.
+    zone_order = [z["id"] for z in (floorplan.doc or {}).get("zones", [])]
+    areas, seen = [], {}
+    for g in ordered:
+        a = seen.get(g["area"])
+        if a is None:
+            meta = area_for_group(g["group"])
+            a = seen[g["area"]] = {
+                "id": meta["id"], "label": meta["label"], "color": meta["color"],
+                "groups": 0, "tools": 0, "offline": 0, "waiting": 0,
+                "dispatches": 0,
+            }
+            areas.append(a)
+        a["groups"] += 1
+        a["tools"] += g["count"]
+        a["offline"] += g["offline"]
+        a["waiting"] += g["waiting"]
+        a["dispatches"] += g["dispatches"]
+
+    def area_rank(a):
+        try:
+            physical = zone_order.index(a["id"])
+        except ValueError:
+            physical = len(zone_order)      # DLY and any unmapped family, last
+        # Same rule as the families inside them: most lots waiting first, so
+        # the page does not order one level by the constraint and the level
+        # above it by cleanroom geography. The floorplan's own order is the
+        # tie-break, which is what an idle fab sorts by and is stable.
+        return (-a["waiting"], physical)
+    areas.sort(key=area_rank)
+
+    return jsonify({"groups": ordered, "areas": areas, "total": len(rows)})
 
 
 @app.get("/api/tools/<path:tool_id>")

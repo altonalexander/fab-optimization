@@ -97,7 +97,24 @@ export default function ChatPanel({ context, pending, onPendingSent }) {
     setBusy(false)
   }
 
-  if (status && !status.available) {
+  // A question handed in from outside (the corner launcher) is sent once the
+  // panel is mounted and idle, then acknowledged so it cannot fire twice.
+  //
+  // This sits ABOVE the unavailable-assistant return deliberately. It used to
+  // sit below it, so the first status frame saying "unavailable" rendered one
+  // hook fewer than the frame before it and React threw "rendered fewer hooks
+  // than expected", taking the whole rail down. That is the state every
+  // deployment without Vertex credentials starts in -- a fresh clone, CI, or
+  // anyone bringing the stack up for the first time -- so the panel that
+  // explains how to enable the assistant was exactly the one that crashed.
+  const off = !!(status && !status.available)
+  useEffect(() => {
+    if (off || !pending || busy) return
+    onPendingSent?.()
+    send(pending)
+  }, [off, pending, busy])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (off) {
     return (
       <div className="chat-off">
         <strong>Assistant unavailable</strong>
@@ -111,14 +128,6 @@ export default function ChatPanel({ context, pending, onPendingSent }) {
       </div>
     )
   }
-
-  // A question handed in from outside (the corner launcher) is sent once the
-  // panel is mounted and idle, then acknowledged so it cannot fire twice.
-  useEffect(() => {
-    if (!pending || busy) return
-    onPendingSent?.()
-    send(pending)
-  }, [pending, busy])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const mood = busy ? 'thinking' : spoke ? 'speaking' : focused ? 'listening' : 'idle'
 
