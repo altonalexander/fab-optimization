@@ -45,11 +45,57 @@ from events import LotDoneEvent, MachineDoneEvent  # noqa: E402
 import fabslate
 
 
-# PySCFabSim parses queue-time constraints but does not enforce them
-# (docs/adr/0008). Feeding a real slack would have the solver optimise against
-# a signal the environment never punishes, so the q-time term in the C++ cost
-# function is deliberately held inert.
+# The sentinel that makes the C++ q-time term do nothing:
+# qtime_boost = 1 + 600/max(slack, 60) is 1.0000006 at 1e9, and the batch
+# rule (should_fire, min_qtime_slack_s <= fixed_process_s * 1.2) can never
+# trigger. Still used, but now only for lots that HAVE no live window.
+#
+# It used to be fed for every lot, correctly: "PySCFabSim parses queue-time
+# constraints but does not enforce them (docs/adr/0008). Feeding a real slack
+# would have the solver optimise against a signal the environment never
+# punishes." That premise died with ADR 0016 -- windows are enforced, a
+# violation reworks the lot, and a lot that misses too often is scrapped.
 QTIME_INERT = 1e9
+
+
+def qtime_slack_s(lot, t):
+    """Seconds until this lot's open queue-time window lapses, for the C++
+    cost term -- or QTIME_INERT when there is nothing live to protect.
+
+    A LAPSED window reports inert, not its (negative) slack, and that is the
+    whole subtlety. The C++ term clamps with max(slack, 60.0), so a lot 200
+    hours past deadline would come back as the MAXIMUM possible boost and the
+    solver would chase the most hopeless work in the fab. That is exactly the
+    bug the `qt` sort key shipped with (ADR 0017 §9): invisible on a cold fab,
+    and worth 55% of throughput on a warmed one where two thirds of open
+    windows are already blown. A blown window cannot be un-blown, so the lot
+    is priced as ordinary work.
+    """
+    w = getattr(lot, 'cqt_waiting', None)
+    d = getattr(lot, 'cqt_deadline', None)
+    if w is None or d is None:
+        return QTIME_INERT
+    slack = d - t
+    if slack <= 0:
+        return QTIME_INERT
+    # NORMALISED, not raw seconds. Both C++ q-time terms are hardcoded in
+    # MINUTES -- 1 + 600/slack in cost(), 1 + 3600/slack in the CP-SAT
+    # objective -- while this fab's windows are 10 to 240 HOURS. Feeding raw
+    # slack gave a lot with 16h remaining (the measured p75 of saveable
+    # at-risk lots) a boost of 1.010x and 1.063x respectively: numerically
+    # switched off, against due-date urgency that reaches 50x. That is why
+    # un-inerting the term changed nothing and slate kept cr's divergence
+    # signature (adr/0017 §11.1).
+    #
+    # Passing 600 * (slack / window) makes both formulas window-RELATIVE:
+    #     cost()   1 + 1/frac  -> 11x at 10% of the window left, 2x at 100%
+    #     CP-SAT   1 + 6/frac  -> 61x at 10%, 7x at 100%
+    # so a lot near the end of a 10-hour window and one near the end of a
+    # 240-hour window are treated alike, which is what the constraint means.
+    window = getattr(lot, 'cqt_window_s', None)
+    if not window or window <= 0:
+        return slack
+    return 600.0 * slack / window
 
 
 class SlateRule:
@@ -64,7 +110,7 @@ class SlateRule:
     # information tier is a row in the results table rather than one
     # undifferentiated "slate" number.
     TIERS = ('none', 'due', 'full', 'flow')
-    FALLBACKS = ('score', 'cr')
+    FALLBACKS = ('score', 'cr', 'qt')
 
     def __init__(self, instance, solver='cpsat', cycle_s=60.0, budget_s=0.005,
                  pressure='full', threads=1, lazy=True, lib_path=None,
@@ -147,6 +193,10 @@ class SlateRule:
         for fam, machines in self.instance.family_machines.items():
             for ordinal, m in enumerate(machines):
                 self._ordinal[m.idx] = (fam, ordinal)
+        # Same single-object rule for the mask library (adr/0014 §3.4): the
+        # solver reads the reticle ids off the object the simulator enforces,
+        # so the two cannot disagree about which lot needs which mask.
+        self._reticles = getattr(self.instance, 'reticles', None)
         self.planner.set_tools([self._tool_dict(m) for m in self._machines])
         ov = getattr(self.instance, 'overlay', None)
         if ov is not None:
@@ -154,6 +204,13 @@ class SlateRule:
             print(f'  overlay {ov.name} ({ov.hash}): {n} of '
                   f'{len(self._machines)} tools carry a qualified-part list',
                   flush=True)
+        if self._reticles is not None:
+            ns = sum(1 for m in self._machines
+                     if m.family in self._reticles.scanner_families)
+            print(f'  reticles ({self._reticles.hash}): '
+                  f'{len(set(r for r, _ in self._reticles.table.values()))} '
+                  f'masks over {ns} scanners, '
+                  f'transport {self._reticles.transport_s:g}s', flush=True)
 
     def _qualified_parts(self, m):
         """The parts tool `m` may run, or () for "every part".
@@ -197,6 +254,8 @@ class SlateRule:
                              if m.min_runs_left is not None else 0,
             'min_runs_setup': m.min_runs_setup or '',
             'qualified_parts': self._qualified_parts(m),
+            'is_scanner': (self._reticles is not None
+                           and m.family in self._reticles.scanner_families),
         }
 
     # -- the planning cycle -------------------------------------------------
@@ -397,7 +456,14 @@ class SlateRule:
             'batch_max': int(step.batch_max or 1),
             'wafers': int(lot.pieces or 25),
             'priority': u,
-            'qtime_slack_s': QTIME_INERT,
+            'qtime_slack_s': qtime_slack_s(lot, t),
+            # The mask this lot needs at THIS step (adr/0014). '' whenever
+            # there is no library or the step is not a scanner step, which is
+            # the same "empty is unconstrained" convention the qualified-part
+            # list uses. solver.hpp groups the scanner assignments by it and
+            # forbids two of them at once.
+            'reticle': (self._reticles.lot_reticle(lot)
+                        if self._reticles is not None else ''),
             'step_process_s': step.processing_time.avg(),
             'due_s': lot.deadline_at,
             'waiting_s': max(0.0, t - (lot.free_since or t)),
@@ -535,9 +601,24 @@ class SlateRule:
             # No token: score with the linearized C++ cost so ordering is
             # continuous across the coverage boundary rather than snapping
             # to FIFO.
-            lot.ptuple = (gate, setup, -lot.priority, 3,
-                          lot.cr(time) if self.fallback == 'cr'
-                          else self._score(lot, time, machine, setup))
+            # Coverage is ~50%, so the fallback decides about half of a
+            # slate run and a row with a weak one measures the fallback
+            # (bench/README.md). At the ADR 0017 operating point `cr` is not
+            # merely weaker than `qt`, it DIVERGES -- WIP 2199 -> 3822 at
+            # 15.2% on-time against qt's stationary 81.7% -- so a cr-fallback
+            # row would lose on the uncovered half whatever the solver did
+            # with the covered one.
+            if self.fallback == 'cr':
+                rank = lot.cr(time)
+            elif self.fallback == 'qt':
+                # the `qt` tuple's tier, so the uncovered half is ordered by
+                # the rule slate has to beat rather than by the one it beats.
+                sl = qtime_slack_s(lot, time)
+                rank = (0, sl, lot.cr(time)) if sl < QTIME_INERT \
+                    else (1, 0.0, lot.cr(time))
+            else:
+                rank = self._score(lot, time, machine, setup)
+            lot.ptuple = (gate, setup, -lot.priority, 3, rank)
         return lot.ptuple
 
     def _score(self, lot, time, machine, setup):

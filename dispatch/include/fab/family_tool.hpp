@@ -143,6 +143,11 @@ public:
     void set_qualified_parts(std::vector<std::string> parts) {
         qualified_parts_ = std::move(parts);
     }
+
+    // Master data like the qualified parts: which family a scanner belongs to
+    // is a property of the fab, not of the planning cycle (adr/0014 §3.4).
+    void set_scanner(bool v) noexcept { scanner_ = v; }
+    bool holds_reticle() const noexcept override { return scanner_; }
     const std::vector<std::string>& qualified_parts() const noexcept {
         return qualified_parts_;
     }
@@ -266,6 +271,7 @@ private:
 
     std::string current_setup_;
     std::vector<std::string> qualified_parts_;   // empty = every part
+    bool scanner_ = false;                       // holds a photomask (0014)
     int         min_run_length_ = 0;   // policy: lots owed after a changeover
     int         min_runs_left_  = 0;   // state: lots still owed
     std::string min_runs_setup_;

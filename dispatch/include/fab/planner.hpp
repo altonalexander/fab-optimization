@@ -13,6 +13,9 @@
 // usable, keep serving the previous Slate — that is correct behavior, not an
 // error path.
 
+#include <atomic>
+#include <thread>
+
 #include "fab/family_tool.hpp"
 #include "fab/machine_config.hpp"
 #include "fab/slate.hpp"
@@ -30,6 +33,12 @@ struct PlannerConfig {
     double solve_budget_s       = 5.0;
     double relative_gap         = 0.02;
     int    threads              = 8;
+    // Families solved concurrently (Planner::plan_by_family). 0 = hardware
+    // concurrency, 1 = serial. Distinct from `threads`, which is handed to
+    // the solver for ONE model: a ~300-variable per-family model does not
+    // repay intra-solve threading, so the parallelism is better spent across
+    // families. Defaults to serial so nothing changes until asked.
+    int    plan_threads         = 1;
     double stale_slate_alarm_s  = 60.0;
     int    stale_cycles_alarm   = 3;
 };
@@ -176,6 +185,24 @@ public:
         uint32_t rank = 0;
         int families_solved = 0, families_skipped = 0;
 
+        // Families are collected in map order FIRST, solved concurrently, and
+        // merged back in that same order. The merge stays serial on purpose:
+        // `rank` is a sequential counter, so merging out of order would
+        // renumber tokens and change the answer. Solving is where the time
+        // goes (60% of a slate run, adr/0009) and solving is what parallelises
+        // -- the families are provably independent, the eligibility matrix is
+        // block-diagonal and the one coupling, reticle exclusivity, is
+        // litho-internal.
+        struct Job {
+            const std::string* fam;
+            std::vector<Lot>*  flots;
+            std::vector<MachineConfiguration*>* tools;
+            AssignmentModel    model;
+            SolveResult        result;
+            bool               solved = false;
+        };
+        std::vector<Job> jobs;
+
         for (auto& [fam, flots] : lots_by_family) {
             auto it = tools_by_family.find(fam);
             if (it == tools_by_family.end() || it->second.empty()) continue;
@@ -196,21 +223,27 @@ public:
                 continue;
             }
 
-            AssignmentModel m = SolverExporter::build(it->second, flots);
-            r.variables += static_cast<int>(m.entries.size());
-            if (m.entries.empty()) continue;
+            Job j;
+            j.fam   = &fam;
+            j.flots = &flots;
+            j.tools = &it->second;
+            j.model = SolverExporter::build(it->second, flots);
+            r.variables += static_cast<int>(j.model.entries.size());
+            if (j.model.entries.empty()) continue;
+            jobs.push_back(std::move(j));
+        }
 
-            SolveParams sp;
-            sp.time_limit_s = cfg.solve_budget_s;
-            sp.relative_gap = cfg.relative_gap;
-            sp.threads      = cfg.threads;
-            // No warm start across families: hints are indexed by position
-            // within one model, so a hint from a different family would be
-            // meaningless at best and misleading at worst.
-            backend_->set_hint({});
+        SolveParams sp;
+        sp.time_limit_s = cfg.solve_budget_s;
+        sp.relative_gap = cfg.relative_gap;
+        sp.threads      = cfg.threads;
 
-            SolveResult sr = backend_->solve(m, flots, sp);
-            if (!sr.usable()) continue;
+        solve_jobs(jobs, sp, cfg);
+
+        for (auto& j : jobs) {
+            if (!j.solved || !j.result.usable()) continue;
+            const AssignmentModel& m = j.model;
+            const SolveResult&    sr = j.result;
             families_solved++;
             r.objective += sr.objective;
 
@@ -247,6 +280,66 @@ public:
     }
 
 private:
+    // Solve every job. Concurrently when the backend can hand out independent
+    // instances and there is more than one job; serially otherwise.
+    //
+    // Determinism: each job writes only its OWN slot, the merge that follows
+    // walks those slots in collection order, and CP-SAT is invoked at the same
+    // per-solve thread count either way. So the parallel result must be
+    // BIT-IDENTICAL to the serial one -- the gate this was accepted on, not a
+    // hoped-for property.
+    template <class Job>
+    void solve_jobs(std::vector<Job>& jobs, const SolveParams& sp,
+                    const PlannerConfig& cfg) {
+        const size_t n = jobs.size();
+        if (n == 0) return;
+
+        unsigned want = cfg.plan_threads > 0
+                      ? static_cast<unsigned>(cfg.plan_threads)
+                      : std::thread::hardware_concurrency();
+        if (want == 0) want = 1;
+        if (want > n) want = static_cast<unsigned>(n);
+
+        auto run_one = [&](Job& j, SolverBackend& be) {
+            // No warm start across families: hints are indexed by position
+            // within one model, so a hint from a different family would be
+            // meaningless at best and misleading at worst.
+            be.set_hint({});
+            j.result = be.solve(j.model, *j.flots, sp);
+            j.solved = true;
+        };
+
+        if (want <= 1) {
+            for (auto& j : jobs) run_one(j, *backend_);
+            return;
+        }
+
+        // One backend per worker. A nullptr clone means this backend has not
+        // declared itself safe to duplicate, so fall back to serial rather
+        // than guess.
+        std::vector<std::unique_ptr<SolverBackend>> pool;
+        pool.reserve(want);
+        for (unsigned i = 0; i < want; ++i) {
+            auto c = backend_->clone();
+            if (!c) { for (auto& j : jobs) run_one(j, *backend_); return; }
+            pool.push_back(std::move(c));
+        }
+
+        std::atomic<size_t> next{0};
+        std::vector<std::thread> workers;
+        workers.reserve(want);
+        for (unsigned w = 0; w < want; ++w) {
+            workers.emplace_back([&, w] {
+                for (;;) {
+                    const size_t i = next.fetch_add(1);
+                    if (i >= n) return;
+                    run_one(jobs[i], *pool[w]);
+                }
+            });
+        }
+        for (auto& t : workers) t.join();
+    }
+
     std::unique_ptr<SolverBackend> backend_;
     std::unordered_map<int, int>   last_assignment_;
     std::shared_ptr<Slate>         last_slate_;

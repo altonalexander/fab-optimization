@@ -59,7 +59,22 @@ import sim_runner  # noqa: E402  (bootstraps sys.path and cwd for the baseline)
 from sim_runner import REPO, RESET_AT, SECONDS_PER_DAY  # noqa: E402
 
 import overlay as overlay_mod  # noqa: E402  (ADR 0013 tool qualification)
+import trim as trim_mod  # noqa: E402  (ADR 0015 right-sizing)
 import slate_rule  # noqa: E402
+
+
+def build_horizon_days(args):
+    """Days of RELEASE SCHEDULE a run needs materialised (adr/0014).
+
+    `scale_starts` re-times a finite list of pre-built lots, so a part run at
+    3.3x eats 3.3 days of its own schedule per simulated day. Materialise
+    `days * max(scale)` (plus a little slack) or the fab starves part-way
+    through the window and the row measures the starvation.
+    """
+    scales = [1.0, float(getattr(args, 'starts_scale', 1.0) or 1.0)]
+    scales += [float(v) for v in (getattr(args, 'starts_part_map', None)
+                                  or {}).values()]
+    return args.days * max(scales) * 1.05
 
 
 def kpis(instance, warm_from):
@@ -72,25 +87,49 @@ def kpis(instance, warm_from):
     transient so the numbers describe steady state.
     """
     ct, on_time, tard, n = [], 0, 0.0, 0
+    # Per part as well as fab-wide (ADR 0014). On a HIGH-MIX fab a saturated
+    # reticle cannot show up in a fab-wide number: when one part's mask blocks
+    # a lot, the scanner simply takes one of the ~250 other layers, so the fab
+    # stays busy and the damage lands entirely on the blocked part's own cycle
+    # time and on-time. Averaging over every part is structurally blind to the
+    # effect being measured, which is how the first mix-shift run read as a
+    # no-op.
+    per = {}
     for lot in instance.done_lots:
         if lot.done_at is None or lot.done_at < warm_from:
             continue
         n += 1
-        ct.append((lot.done_at - lot.release_at) / SECONDS_PER_DAY)
+        c = (lot.done_at - lot.release_at) / SECONDS_PER_DAY
+        ct.append(c)
         late = lot.done_at - lot.deadline_at
+        p = per.setdefault(lot.part_name, {'n': 0, 'ct': 0.0,
+                                           'ot': 0, 'tard': 0.0})
+        p['n'] += 1
+        p['ct'] += c
         if late <= 0:
             on_time += 1
+            p['ot'] += 1
         else:
             tard += late / SECONDS_PER_DAY
+            p['tard'] += late / SECONDS_PER_DAY
+    by_part = {}
+    for name, p in sorted(per.items()):
+        by_part[name] = {
+            'throughput': p['n'],
+            'cycle_time_days': round(p['ct'] / p['n'], 4) if p['n'] else 0.0,
+            'on_time_pct': round(100.0 * p['ot'] / p['n'], 2) if p['n'] else 0.0,
+            'tardiness_lot_days': round(p['tard'], 2),
+        }
     return {
         'throughput': n,
         'cycle_time_days': round(sum(ct) / len(ct), 4) if ct else 0.0,
         'on_time_pct': round(100.0 * on_time / n, 2) if n else 0.0,
         'tardiness_lot_days': round(tard, 2),
+        'by_part': by_part,
     }
 
 
-def make_sampler(rule_name, warm_from):
+def make_sampler(rule_name, warm_from, total_s=None):
     """Hourly KPI series, taken by the FEED'S OWN plugin.
 
     The dashboard's Results page lays a benchmark row over the live run, and
@@ -116,11 +155,81 @@ def make_sampler(rule_name, warm_from):
             self.rows = []
             self.rule = rule_name
             self.store = None
+            # Per-FAMILY utilisation, accumulated rather than sampled into the
+            # row series (adr/0015). 60 families x 2,160 hourly samples would
+            # dominate the result file, and the question -- did this tool set
+            # land where we sized it for -- only needs the window mean. Counted
+            # here because a fab-wide average is what hid three effects
+            # already: it says the fab is at 80% while one family is at 91%
+            # and another at 5%.
+            self._fam_busy = {}
+            self._fam_n = 0
+            # Progress. A slate run on a 180-day window is hours long and used
+            # to print NOTHING until it wrote its result, which meant a wrong
+            # estimate could not be corrected and a run that was obviously
+            # failing still had to be paid for in full. Cheap to emit: this
+            # sampler already fires hourly.
+            self._next_progress = None
+            self._t0 = time.time()
+
+        def _progress(self, instance, t):
+            day = t / sim_runner.SECONDS_PER_DAY
+            if self._next_progress is None:
+                self._next_progress = day + PROGRESS_EVERY_DAYS
+                return
+            if day < self._next_progress:
+                return
+            self._next_progress = day + PROGRESS_EVERY_DAYS
+            done = sum(1 for l in instance.done_lots
+                       if l.done_at is not None and l.done_at >= warm_from)
+            span = max(day - warm_from / sim_runner.SECONDS_PER_DAY, 1e-9)
+            el = time.time() - self._t0
+            eta = ''
+            if total_s:
+                frac = max((t - warm_from) / max(total_s - warm_from, 1e-9),
+                           1e-9)
+                eta = '  ~%5.1fm left' % (el / frac * (1 - frac) / 60)
+            cq = getattr(instance, 'counter_cqt_scrapped', 0)
+            # Coverage is the one that says whether the SOLVER is working at
+            # all: a slate row with coverage near zero is measuring its
+            # fallback, not the solver (bench/README.md).
+            cov = ''
+            r = getattr(instance, '_rule_obj', None)
+            if r is not None and getattr(r, 'decisions', 0):
+                cov = ('  cov %5.1f%%' %
+                       (100.0 * r.decisions_covered / r.decisions))
+            print(f'    day {day:6.1f}  wip {len(instance.active_lots):5d}'
+                  f'  good/d {done / span:5.1f}  scrap {cq:5d}{cov}'
+                  f'  {el / 60:5.1f}m elapsed' + eta,
+                  file=sys.stderr, flush=True)
 
         def _kpi_sample(self, instance, t):
             row = super()._kpi_sample(instance, t)
+            if t >= warm_from:
+                self._progress(instance, t)
+            if t >= warm_from:
+                self._fam_n += 1
+                for tool in self._busy:
+                    fam = tool.rsplit('_', 1)[0]
+                    if fam.startswith('Delay'):
+                        continue
+                    self._fam_busy[fam] = self._fam_busy.get(fam, 0) + 1
             self.rows.append(dict(row, warmup=t < warm_from))
             return row
+
+        def family_util(self, instance):
+            """family -> (mean busy tools, tools, utilisation %)."""
+            if not self._fam_n:
+                return {}
+            out = {}
+            for fam, machines in instance.family_machines.items():
+                if fam.startswith('Delay'):
+                    continue
+                n = len(machines)
+                busy = self._fam_busy.get(fam, 0) / self._fam_n
+                out[fam] = {'tools': n, 'busy_mean': round(busy, 2),
+                            'util_pct': round(100.0 * busy / n, 1) if n else None}
+            return out
 
     return _Sampler()
 
@@ -148,6 +257,12 @@ class _Fingerprint:
         return self._h.hexdigest()
 
 
+# How often a long run reports itself, in SIMULATED days. 10 gives ~18 lines
+# on a 180-day window -- enough to see the trend and spot a run that is going
+# nowhere, few enough to read.
+PROGRESS_EVERY_DAYS = float(os.getenv('COMPARE_PROGRESS_DAYS', '10'))
+
+
 def make_rule(spec, instance, args):
     """Turn a --rules token into something sim_runner.run accepts."""
     if spec == 'slate-cr':
@@ -161,6 +276,13 @@ def make_rule(spec, instance, args):
     return spec          # a plain name; sim_runner resolves it
 
 
+def _mxr(args):
+    """The queue-time rework cap, as the checkpoint key wants it. 0 on the
+    command line means unbounded, which the key represents as no fragment."""
+    v = getattr(args, 'cqt_max_rework', 3)
+    return None if not v else int(v)
+
+
 def warm_checkpoint(args):
     """The shared warm-up checkpoint for this run, building it if missing.
 
@@ -170,8 +292,13 @@ def warm_checkpoint(args):
     """
     import sim_feed
     ov = args.overlay_obj
+    mix = getattr(args, 'starts_part_map', None)
+    tr = getattr(args, 'trim_obj', None)
     ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
-                            args.warmup_days, args.batch_strat, args.days, ov)
+                            args.warmup_days, args.batch_strat, args.days, ov,
+                            mix, tr, getattr(args, 'cqt', False),
+                            getattr(args, 'cqt_scale', 1.0),
+                            _mxr(args))
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
               f'{args.warmup_days:g} (horizon >= {args.days}d'
@@ -184,11 +311,21 @@ def warm_checkpoint(args):
                '--dispatcher', args.warmup_dispatcher,
                '--warmup-days', str(args.warmup_days),
                '--checkpoint-only', '--no-store', '--speed', '0',
-               '--out', os.devnull] + (['--overlay', ov.name] if ov else [])
+               '--out', os.devnull] + (['--overlay', ov.name] if ov else []) \
+              + [f'--starts-part={k}={v:g}' for k, v in sorted((mix or {}).items())] \
+              + (['--trim', args.trim] if getattr(args, 'trim', None) else []) \
+              + (['--cqt'] if getattr(args, 'cqt', False) else []) \
+              + ([f'--cqt-scale={args.cqt_scale:g}']
+                 if abs(getattr(args, 'cqt_scale', 1.0) - 1.0) > 1e-9 else []) \
+              + ([f'--cqt-max-rework={int(getattr(args, "cqt_max_rework", 3))}']
+                 if getattr(args, 'cqt', False) else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
-                                args.warmup_days, args.batch_strat, args.days, ov)
+                                args.warmup_days, args.batch_strat, args.days,
+                                ov, mix, tr, getattr(args, 'cqt', False),
+                                getattr(args, 'cqt_scale', 1.0),
+                                _mxr(args))
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
@@ -209,7 +346,7 @@ def load_warm(args, sampler):
     return instance, SECONDS_PER_DAY * args.days
 
 
-def scale_starts(instance, scale):
+def scale_starts(instance, scale, parts=None):
     """Compress the remaining release schedule by `scale`.
 
     SMT2020 releases every part on a constant interval from order.txt and the
@@ -219,6 +356,26 @@ def scale_starts(instance, scale):
     lot is judged against the same lead time it was given. Released lots and
     WIP are untouched: the same fab, fed faster from here on.
     """
+    if parts:
+        # Per-part ramp (adr/0014). Raising every part's rate uniformly loads
+        # every family and every mask together, which tests capacity as much
+        # as scheduling. Ramping ONE part concentrates the extra demand on
+        # that part's ~25 masks and leaves the other nine alone -- the
+        # asymmetric contention that dedication-skew-70 showed is what makes
+        # the dispatching decision worth anything. It is also what a fab
+        # actually does: products ramp one at a time.
+        now = instance.current_time
+        n = 0
+        for lot in instance.dispatchable_lots:
+            s = parts.get(lot.part_name, scale)
+            if not s or abs(s - 1.0) < 1e-9 or lot.release_at <= now:
+                continue
+            new_rel = now + (lot.release_at - now) / s
+            lot.deadline_at -= lot.release_at - new_rel
+            lot.release_at = new_rel
+            n += 1
+        instance.dispatchable_lots.sort(key=lambda k: k.release_at)
+        return n
     if not scale or abs(scale - 1.0) < 1e-9:
         return 0
     now = instance.current_time
@@ -253,12 +410,14 @@ def run_one(spec, args):
 
     use_reset = args.days > 365
     warm_from = RESET_AT if use_reset else args.warmup_days * SECONDS_PER_DAY
-    sampler = make_sampler(spec, warm_from)
+    sampler = make_sampler(spec, warm_from, args.days * SECONDS_PER_DAY)
     if args.warmup_days and not use_reset:
         instance, run_to = load_warm(args, sampler)
     else:
         instance, run_to = sim_runner.build(
-            args.dataset, args.days, args.seed, [sampler], args.batch_strat)
+            args.dataset, args.days, args.seed, [sampler], args.batch_strat,
+            build_days=build_horizon_days(args),
+            trim=getattr(args, 'trim_obj', None))
         if args.overlay_obj is not None:
             args.overlay_obj.bind(instance)
 
@@ -278,8 +437,53 @@ def run_one(spec, args):
     if use_reset:
         instance.add_event(ResetEvent(RESET_AT))
 
-    scale_starts(instance, getattr(args, 'starts_scale', 1.0))
+    # The per-part mix is applied ONCE, and where it is applied depends on
+    # whether this run warmed its own fab (adr/0014).
+    #
+    # A resumed checkpoint already HAS the mix: it is warmed under it and the
+    # mix hash is part of the checkpoint name, so the schedule in the pickle
+    # is already re-timed. Applying it again compresses an already-compressed
+    # schedule -- 3.3x on top of 3.3x is 10.9x -- which burns the release list
+    # part-way through the window and starves the fab after. Measured: starts
+    # ran at 138/day against a 62.7/day target, then fell off a cliff to 8/day
+    # at day 125, and WIP drained 21-36 lots/day in every cell of the grid.
+    #
+    # --starts-scale is different and still applies here: it is deliberately
+    # NOT in the checkpoint key, so one warmed fab serves every start rate
+    # (adr/0012). Only the mix is baked in.
+    # Queue-time enforcement is a property of the RUN, set on the instance
+    # after it is built or resumed (adr/0016). It is in the checkpoint key,
+    # so a warmed fab always matches the enforcement it is being run under.
+    instance.cqt_enforce = bool(getattr(args, 'cqt', False))
+    instance.cqt_scale = float(getattr(args, 'cqt_scale', 1.0) or 1.0)
+    instance.cqt_rework = not bool(getattr(args, 'cqt_no_rework', False))
+    _mx = getattr(args, 'cqt_max_rework', 3)
+    instance.cqt_max_rework = None if not _mx else int(_mx)
+
+    # The q-time counters live on the instance and are therefore PICKLED INTO
+    # THE CHECKPOINT: a resumed run starts with the warm-up's totals already
+    # on the clock. Every other KPI on the row is window-scoped, so reporting
+    # them raw mixes 180 days of violations with 90 days of throughput.
+    #
+    # Measured, and this is how it was caught: the s6 cell read
+    # 2,074 good + 5,498 scrapped + 753 dWIP = 8,325 lots through a 90-day
+    # window on a fab that releases ~57/day. Subtracting the warm-up's 3,256
+    # gives 5,069 -- 56.3/day against a control's 56.6. The identity is the
+    # only reason the mismatch was visible at all (adr/0017 §8.2).
+    cqt_base = {
+        'violations': getattr(instance, 'counter_cqt_violated', 0),
+        'reworks': getattr(instance, 'counter_cqt_rework', 0),
+        'scrapped': getattr(instance, 'counter_cqt_scrapped', 0),
+    }
+
+    resumed = bool(args.warmup_days and not use_reset)
+    scale_starts(instance, getattr(args, 'starts_scale', 1.0),
+                 None if resumed else getattr(args, 'starts_part_map', None))
     rule = make_rule(spec, instance, args)
+    # So the progress line can report solver coverage. A slate row whose
+    # coverage is near zero is measuring its fallback rather than the solver,
+    # and that is worth seeing at minute 10 rather than at hour four.
+    instance._rule_obj = rule
     banner = rule.banner() if hasattr(rule, 'banner') else f'  rule: {spec}'
     print(f'\n=== {spec} ===', flush=True)
     print(banner, flush=True)
@@ -316,8 +520,40 @@ def run_one(spec, args):
     # draws, so a row here and the live run agree.
     util = [r['util'] for r in sampler.rows if not r.get('warmup') and r.get('util') is not None]
     row['util_pct'] = round(sum(util) / len(util), 2) if util else None
+    # Scanner-scoped utilisation (adr/0014). Fab-wide utilisation averages a
+    # litho constraint over 1,313 tools and hides it; the ~80 scanners are
+    # where a mask is either working or blocked, so this is where a reticle
+    # library shows up undiluted.
+    sut = [r['sutil'] for r in sampler.rows
+           if not r.get('warmup') and r.get('sutil') is not None]
+    row['scanner_util_pct'] = round(sum(sut) / len(sut), 2) if sut else None
     row['starts_scale'] = getattr(args, 'starts_scale', 1.0)
     row.update(overlay_mod.stamp(args.overlay_obj))
+    row.update(trim_mod.stamp(getattr(args, 'trim_obj', None)))
+    row['family_util'] = sampler.family_util(instance)
+    # The loss function adr/0016 adds. Reported whether or not enforcement is
+    # on, so a pristine row carries an explicit zero rather than a silence.
+    row['cqt'] = {
+        'enforced': bool(getattr(args, 'cqt', False)),
+        'scale': float(getattr(args, 'cqt_scale', 1.0) or 1.0),
+        # Window-scoped, to match every other KPI on this row. The cumulative
+        # totals are kept beside them rather than discarded: a warm-up that
+        # scrapped heavily is itself a fact worth seeing.
+        'violations': (getattr(instance, 'counter_cqt_violated', 0)
+                       - cqt_base['violations']),
+        'reworks': (getattr(instance, 'counter_cqt_rework', 0)
+                    - cqt_base['reworks']),
+        'scrapped': (getattr(instance, 'counter_cqt_scrapped', 0)
+                     - cqt_base['scrapped']),
+        'rework_enabled': bool(getattr(instance, 'cqt_rework', True)),
+        'max_rework': getattr(instance, 'cqt_max_rework', None),
+        'warmup': cqt_base,
+        'cumulative': {
+            'violations': getattr(instance, 'counter_cqt_violated', 0),
+            'reworks': getattr(instance, 'counter_cqt_rework', 0),
+            'scrapped': getattr(instance, 'counter_cqt_scrapped', 0),
+        },
+    }
     # adr/0013 §3.5's KPI, on every row. Samples are hourly, so summing the
     # per-sample tool counts over the reporting window gives tool-hours; the
     # per-day figure is what the table prints, because rows of different
@@ -347,22 +583,24 @@ def run_one(spec, args):
 def table(rows):
     w = max((len(r['rule']) for r in rows), default=6)
     head = (f"  {'rule':<{w}}  {'cycle time':>11}  {'throughput':>10}  "
-            f"{'on-time %':>9}  {'tardiness':>11}  {'util %':>7}  {'coverage':>8}"
-            f"  {'idleQ t·h/d':>11}  {'idleF t·h/d':>11}")
+            f"{'on-time %':>9}  {'tardiness':>11}  {'util %':>7}  {'scan %':>7}"
+            f"  {'coverage':>8}  {'idleQ t·h/d':>11}  {'idleF t·h/d':>11}")
     out = ['', head, '  ' + '-' * (len(head) - 2)]
     for r in rows:
         cov = r.get('detail', {}).get('coverage')
         cov_s = f'{cov*100:.1f}%' if isinstance(cov, float) else '-'
         u = r.get('util_pct')
         u_s = f'{u:.1f}' if isinstance(u, (int, float)) else '-'
+        su = r.get('scanner_util_pct')
+        su_s = f'{su:.1f}' if isinstance(su, (int, float)) else '-'
         iq = r.get('idle_qualified_wip_tool_h_per_day')
         iw = r.get('idle_family_wip_tool_h_per_day')
         iq_s = f'{iq:.1f}' if isinstance(iq, (int, float)) else '-'
         iw_s = f'{iw:.1f}' if isinstance(iw, (int, float)) else '-'
         out.append(f"  {r['rule']:<{w}}  {r['cycle_time_days']:>11.3f}  "
                    f"{r['throughput']:>10}  {r['on_time_pct']:>9.2f}  "
-                   f"{r['tardiness_lot_days']:>11.1f}  {u_s:>7}  {cov_s:>8}"
-                   f"  {iq_s:>11}  {iw_s:>11}")
+                   f"{r['tardiness_lot_days']:>11.1f}  {u_s:>7}  {su_s:>7}"
+                   f"  {cov_s:>8}  {iq_s:>11}  {iw_s:>11}")
     return '\n'.join(out)
 
 
@@ -447,7 +685,8 @@ def main():
                         'it well inside 5ms, and the rest of the budget goes on '
                         'proving optimality nobody collects.')
     p.add_argument('--threads', type=int, default=1)
-    p.add_argument('--slate-fallback', default='cr', choices=['score', 'cr'],
+    p.add_argument('--slate-fallback', default='cr',
+                   choices=['score', 'cr', 'qt'],
                    help='how the slate scores a lot it holds no token for')
     p.add_argument('--slate-horizon', type=float, default=900.0,
                    help='plan lots arriving within this many fab-seconds too (ADR 0010); 0 = queue only')
@@ -459,6 +698,36 @@ def main():
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them (1.1 = 10%% more starts). '
                         'Due dates move with the releases, so on-time stays fair.')
+    p.add_argument('--cqt', action='store_true',
+                   help='ENFORCE the queue-time windows the dataset ships '
+                        '(264 steps, 1-24h). A missed window reworks the lot '
+                        'back to the step that opened it (adr/0016). Off by '
+                        'default: adr/0008 records that these are parsed and '
+                        'ignored, and every published row was produced that '
+                        'way.')
+    p.add_argument('--cqt-no-rework', action='store_true',
+                   help='count queue-time violations but do NOT rework the '
+                        'lot. Opens the feedback loop so its contribution can '
+                        'be separated from the constraint (adr/0017 §3).')
+    p.add_argument('--cqt-scale', type=float, default=1.0,
+                   help='multiply every queue-time window: >1 loosens, <1 '
+                        'tightens. The Y axis of adr/0017 grid.')
+    p.add_argument('--cqt-max-rework', type=int, default=3,
+                   help='scrap a lot after this many queue-time reworks. 0 '
+                        'means unbounded, which is what produced the '
+                        'absorbing state of adr/0016 §6: 422 violations on 12 '
+                        'lots, one reworked 83 times, utilisation 30%% '
+                        'against an 80%% control.')
+    p.add_argument('--trim', default=None,
+                   help='right-size the tool set from a trim table beside the '
+                        'dataset, e.g. --trim trim-82 (adr/0015)')
+    p.add_argument('--starts-part', action='append', default=None,
+                   metavar='PART=SCALE',
+                   help='ramp ONE part instead of the whole fab, e.g. '
+                        '--starts-part part_1=1.5 (repeatable). Parts not '
+                        'named keep --starts-scale. Concentrates the extra '
+                        'demand on that part\'s masks rather than loading '
+                        'every family at once (adr/0014).')
     p.add_argument('--no-lazy', action='store_true',
                    help='re-solve every family every cycle')
     p.add_argument('--warmup-days', type=float, default=0.0,
@@ -476,6 +745,15 @@ def main():
     a.dispatcher = None   # unused; --rules drives this tool
     a.overlay_obj = overlay_mod.load(a.overlay)
 
+    a.trim_obj = trim_mod.load(a.trim)
+    a.starts_part_map = None
+    if a.starts_part:
+        a.starts_part_map = {}
+        for spec in a.starts_part:
+            part, _, val = spec.partition('=')
+            if not part or not val:
+                p.error(f'--starts-part expects PART=SCALE, got {spec!r}')
+            a.starts_part_map[part] = float(val)
     if a.out:
         a.out = os.path.join(ORIG_CWD, a.out)
     if a.merge:
@@ -485,6 +763,9 @@ def main():
     print(f'  {a.dataset}  {a.days} days  seed={a.seed}  batch={a.batch_strat}'
           + (f'  warmup={a.warmup_days:g}d' if a.warmup_days else '')
           + (f'  starts={a.starts_scale:g}x' if a.starts_scale != 1.0 else '')
+          + (('  starts-part=' + ','.join(f'{k}x{v:g}' for k, v in
+                                          sorted(a.starts_part_map.items())))
+             if a.starts_part_map else '')
           + (f'  overlay={a.overlay_obj.name} ({a.overlay_obj.hash}, '
              f'{len(a.overlay_obj.table)} pairs)' if a.overlay_obj
              else '  overlay=none (pristine)'))

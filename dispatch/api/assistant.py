@@ -60,6 +60,15 @@ _HERE       = os.path.dirname(os.path.abspath(__file__))
 # dev box finds it; the container sets README_PATH (or ships without one and
 # the agent says so rather than guessing).
 README_PATH = os.getenv("README_PATH", os.path.join(_HERE, "..", "..", "README.md"))
+# The help guide is the README plus the reference docs split out of it. That
+# split was made for human readers -- a 987-line README buried the project's
+# actual findings -- but the assistant wants the OPPOSITE of brevity: the
+# page-by-page tour is exactly what answers "how does this page work" without
+# a tool call. Loading only README.md would silently gut the fast path.
+# Relative to the README so a dev box needs no env; ASSISTANT_HELP_PATHS
+# (os.pathsep-separated) overrides for a container that ships them elsewhere.
+_HELP_DEFAULT = ("docs/dashboard.md", "docs/running.md")
+HELP_PATHS = [p for p in os.getenv("ASSISTANT_HELP_PATHS", "").split(os.pathsep) if p]
 
 
 def _adc_project():
@@ -78,6 +87,29 @@ def _read_readme():
             return f.read()
     except OSError:
         return ""
+
+
+def _help_paths():
+    """The guide files, README first. Missing ones are skipped, not fatal."""
+    if HELP_PATHS:
+        return HELP_PATHS
+    root = os.path.dirname(os.path.abspath(README_PATH))
+    return [README_PATH] + [os.path.join(root, p) for p in _HELP_DEFAULT]
+
+
+def _read_help():
+    """The whole help corpus, each file under a heading naming it, so the
+    model can tell the reader WHICH doc to open rather than only quoting it."""
+    out = []
+    for path in _help_paths():
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if text.strip():
+            out.append(f"=== {os.path.basename(path)} ===\n\n{text}")
+    return "\n\n".join(out)
 
 
 # Which API endpoint backs which page, for get_page_data. Only GET endpoints
@@ -176,11 +208,15 @@ Markdown: bold sparingly, lists, and links as below.
 
 
 def _instruction():
-    readme = _read_readme()
-    guide = ("README (the help guide for the whole app; the 'tour of the "
-             "dashboard' section describes each page):\n\n" + readme) if readme \
-        else "README: not available in this deployment; answer app questions " \
-             "from the page table above and say the guide is missing."
+    guide = _read_help()
+    guide = ("HELP GUIDE for the whole app, one or more documents, each under "
+             "a '=== filename ===' heading. README.md is what the project is "
+             "and what it has found; dashboard.md describes each page of this "
+             "dashboard screen by screen and is what most 'how does this page "
+             "work' questions want; running.md is how to start and operate a "
+             "session:\n\n" + guide) if guide \
+        else "HELP GUIDE: not available in this deployment; answer app " \
+             "questions from the page table above and say the guide is missing."
     return INSTRUCTION_HEAD + "\n\n" + guide
 
 

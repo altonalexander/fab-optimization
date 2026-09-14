@@ -195,6 +195,10 @@ not the problem.
 - The optimized-decision KPI should **exclude** `Delay_*` families once the
   dispatcher is in the loop, or a fifth of its "decisions" are delay steps
   with nothing to decide.
-- If a future run reports CQT violations, §2's claim about the commented-out
-  handling is stale and this record needs updating — that is the cheapest
-  fidelity gain available and worth taking if upstream lands it.
+- ~~If a future run reports CQT violations, §2's claim about the commented-out
+  handling is stale and this record needs updating~~ — **met, 2026-09-12.**
+  Queue times are now enforced, not by upstream but here:
+  [0016](0016-queue-time-enforcement.md) turns them on, with rework and scrap
+  on violation. §2's "read and ignored" is accurate for the pinned upstream
+  and no longer describes how this repo runs the simulator. The rest of §2 —
+  transport, delay pseudo-toolset, storage — still stands.

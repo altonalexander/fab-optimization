@@ -29,6 +29,48 @@ class Instance:
     # Set by bench/tools/overlay.py's Overlay.bind(); None is the pristine fab.
     overlay = None
 
+    # Reticle library (fab-optimization deviation 9, ADR 0014). A class
+    # attribute for the same reason as `overlay`: a checkpoint pickled before
+    # masks existed must still unpickle into an instance that dispatches.
+    # Set by bench/tools/reticles.py's Reticles.bind(); None is no masks.
+    reticles = None
+
+    # Queue-time enforcement (fab-optimization deviation 10, ADR 0016).
+    # Class attributes so a checkpoint pickled before they existed still
+    # unpickles into an instance that dispatches, as with `overlay` above.
+    #
+    # OFF by default and that is deliberate: ADR 0008 records that SMT2020's
+    # CQT columns are parsed and ignored, every published row was produced
+    # that way, and `slate_rule.QTIME_INERT` exists precisely so the solver
+    # does not optimise against a signal the environment never punishes. The
+    # flag is what lets the pristine rows stay reproducible.
+    #
+    # cqt_scale multiplies every window: >1 loosens, <1 tightens. It is the
+    # Y axis of ADR 0017's grid.
+    cqt_enforce = False
+    cqt_scale = 1.0
+
+    # cqt_rework=False counts violations but does NOT reroute the lot. That
+    # opens the feedback loop ADR 0017 §3 predicts -- violations feed rework
+    # feeds load feeds queues feeds violations -- so the same grid run with
+    # this on and off isolates the loop's contribution from the constraint's.
+    # If the two look the same, rework is a flat tax and the feedback story
+    # is wrong.
+    cqt_rework = True
+
+    # A lot cannot be reworked forever. Measured on a 30-day cold run at
+    # window scale 8: 422 violations fell on just 12 lots, six of which
+    # reworked 20+ times and one 83 times -- the reroute was an ABSORBING
+    # STATE, not a cost. Those lots never leave, so WIP climbs while the
+    # fab-wide utilisation FALLS (30% against an 80% control) because the
+    # trapped work concentrates on a handful of steps and starves the rest.
+    # That is not a fab; it is a missing termination rule. A real fab scraps
+    # material that has missed its window too many times, and the scrap is
+    # the loss that gives queue time its teeth.
+    #
+    # None restores the old unbounded behaviour, for reproducing the above.
+    cqt_max_rework = 3
+
     def eligible(self, lot, machine):
         """Can `machine` run `lot` at the step it is waiting for?
 
@@ -48,6 +90,43 @@ class Instance:
         if di in lot.dedications and machine.idx != lot.dedications[di]:
             return False
         return self.qualified(lot, machine)
+
+    def mask_free(self, lot, machine):
+        """Is the photomask this lot needs available on `machine` right now?
+
+        Deliberately NOT part of `eligible` (ADR 0014 §3.3). `eligible` is a
+        STATIC predicate and the dispatch managers call it once per lot, when
+        the lot becomes available, to decide which machines it queues on
+        (`dm_lot_for_machine.free_up_lots`). A mask's availability is
+        time-varying, so asking it there loses every lot whose mask happened
+        to be busy at the instant it arrived -- permanently, because the lot
+        is never re-offered. That reads as a slow monotonic collapse rather
+        than as a bug: utilisation decays as lots fall out one by one.
+
+        So the question is asked where it belongs, at the moment of choosing
+        what to run, and `wake_mask_waiters` re-offers the scanners when a
+        mask comes back.
+        """
+        r = self.reticles
+        return True if r is None else r.allows(lot, machine, self.current_time)
+
+    def wake_mask_waiters(self):
+        """A mask was released: re-offer every idle scanner with work queued.
+
+        A machine leaves `usable_machines` when nothing on it was runnable,
+        and only `free_up_machine` puts it back -- which fires when the tool
+        finishes a job, and so never comes for a tool that is already idle.
+        A mask freed elsewhere in the fab is exactly such a change: it makes
+        work runnable on a tool that no event of its own will wake. Without
+        this the scanners park one by one and never come back.
+        """
+        r = self.reticles
+        if r is None:
+            return
+        for fam in r.scanner_families:
+            for m in self.family_machines.get(fam, ()):
+                if self.free_machines[m.idx] and m.waiting_lots:
+                    self.usable_machines.add(m)
 
     def qualified(self, lot, machine):
         """The overlay half of `eligible`, alone.
@@ -92,6 +171,9 @@ class Instance:
 
         #self.setup_per_timestep_when_needed = {}
         self.counter_cqt_violated = 0
+        self.counter_cqt_rework = 0      # violations that actually rerouted
+        self.counter_cqt_scrapped = 0    # lots scrapped at the rework cap
+        self.scrapped_lots: List[Lot] = []
 
         self.current_time = 0 
 
@@ -154,6 +236,7 @@ class Instance:
         for lot in lots:
             lot.free_since = self.current_time
             step_found = False
+            scrapped = False
             while len(lot.remaining_steps) > 0:
                 old_step = None
                 if lot.actual_step is not None:
@@ -164,6 +247,54 @@ class Instance:
                     removed = lot.processed_steps[rw_step - 1:]
                     lot.processed_steps = lot.processed_steps[:rw_step - 1]
                     lot.remaining_steps = removed + lot.remaining_steps
+                # A missed queue-time window sends the lot back to the step
+                # that OPENED it (ADR 0016): that is the operation whose
+                # result went stale, so redoing from there is what a fab
+                # does. Handled alongside the route's own rework because the
+                # mechanism is identical -- move processed steps back onto
+                # remaining -- and because doing it here means the closing
+                # step has already been paid for, which is the conservative
+                # direction: the fab loses the wasted operation AND the
+                # rework, so violations cost more rather than less.
+                #
+                # Scanned from the END: routes are re-entrant, so the same
+                # Step object can appear several times in processed_steps and
+                # the most recent visit is the one that opened this window.
+                if lot.cqt_violated and self.cqt_rework:
+                    lot.cqt_violated = False
+                    lot.cqt_reworks = getattr(lot, 'cqt_reworks', 0) + 1
+                    if (self.cqt_max_rework is not None
+                            and lot.cqt_reworks > self.cqt_max_rework):
+                        # Scrapped, not shipped: it leaves active_lots and is
+                        # deliberately NOT appended to done_lots, so it counts
+                        # against throughput and never against on-time. A
+                        # scrapped lot that landed in done_lots would read as
+                        # a completion and hide the loss entirely.
+                        lot.cqt_open_step = None
+                        lot.cqt_scrapped = True
+                        lot.scrapped_at = self.current_time
+                        self.counter_cqt_scrapped += 1
+                        self.active_lots.remove(lot)
+                        self.scrapped_lots.append(lot)
+                        scrapped = True
+                        break
+                    tgt = lot.cqt_open_step
+                    pos = None
+                    for i in range(len(lot.processed_steps) - 1, -1, -1):
+                        if lot.processed_steps[i] is tgt:
+                            pos = i
+                            break
+                    if pos is not None:
+                        removed = lot.processed_steps[pos:]
+                        lot.processed_steps = lot.processed_steps[:pos]
+                        lot.remaining_steps = removed + lot.remaining_steps
+                        self.counter_cqt_rework += 1
+                    lot.cqt_open_step = None
+                elif lot.cqt_violated:
+                    # Counted, not rerouted. The flag must still be cleared
+                    # or it would fire on the next window this lot opens.
+                    lot.cqt_violated = False
+                    lot.cqt_open_step = None
                 lot.actual_step, lot.remaining_steps = lot.remaining_steps[0], lot.remaining_steps[1:]
                 if lot.actual_step.has_to_perform():
                     self.dm.free_up_lots(self, lot)
@@ -171,6 +302,8 @@ class Instance:
                     for plugin in self.plugins:
                         plugin.on_step_done(self, lot, old_step)
                     break
+            if scrapped:
+                continue
             if not step_found:
                 assert len(lot.remaining_steps) == 0
                 lot.actual_step = None
@@ -182,6 +315,10 @@ class Instance:
 
             for plugin in self.plugins:
                 plugin.on_lot_free(self, lot)
+        # A lot leaving a scanner hands its mask back (ADR 0014 §3.3), which
+        # can make work runnable on an idle tool that has no event of its own
+        # coming. Re-offer those tools here or they stay parked.
+        self.wake_mask_waiters()
 
     def dispatch(self, machine: Machine, lots: List[Lot]):
         # remove machine and lot from active sets
@@ -193,18 +330,48 @@ class Instance:
             lot.waiting_time += self.current_time - lot.free_since
             if lot.actual_step.batch_max > 1:
                 lot.waiting_time_batching += self.current_time - lot.free_since
-            # if lot.actual_step.cqt_for_step is not None: TODO: CQT handling, Deactivated for now
-            #     lot.cqt_waiting = lot.actual_step.cqt_for_step
-            #     #lot.cqt_deadline = self.current_time + lot.actual_step.cqt_time
-            #     lot.cqt_deadline = lot.actual_step.cqt_time
-            # if lot.actual_step.order == lot.cqt_waiting:
-            #     if lot.cqt_deadline < self.current_time:
-            #         for plugin in self.plugins:
-            #             plugin.on_cqt_violated(self, machine, lot)
-            #     lot.cqt_waiting = None
-            #     lot.cqt_deadline = None
+            # Queue-time windows (ADR 0016). The clock is read HERE, at the
+            # start of processing, which is the industry definition: material
+            # degrades while it waits, and the wait ends when the next
+            # operation begins, not when the lot joins a queue.
+            #
+            # CLOSE before OPEN: one step can both close an inbound window and
+            # open an outbound one, and doing it the other way round would
+            # have a step close the window it had just opened.
+            #
+            # Note the original commented-out code stored the window LENGTH
+            # in cqt_deadline where it needed an absolute time -- the correct
+            # line was there, commented out above the wrong one.
+            if self.cqt_enforce:
+                st = lot.actual_step
+                if (lot.cqt_waiting is not None
+                        and st.order == lot.cqt_waiting):
+                    if lot.cqt_deadline is not None \
+                            and self.current_time > lot.cqt_deadline:
+                        self.counter_cqt_violated += 1
+                        lot.cqt_violated = True
+                        for plugin in self.plugins:
+                            plugin.on_cqt_violated(self, machine, lot)
+                    lot.cqt_waiting = None
+                    lot.cqt_deadline = None
+                fs = getattr(st, 'cqt_for_step', None)
+                if isinstance(fs, (int, float)) and st.cqt_time:
+                    lot.cqt_waiting = fs
+                    lot.cqt_window_s = st.cqt_time * self.cqt_scale
+                    lot.cqt_deadline = (self.current_time
+                                        + lot.cqt_window_s)
+                    lot.cqt_open_step = st
         # compute times for lot and machine
         lot_time, machine_time, setup_time = self.get_times(self.setups, lots, machine)
+        # Mount the photomask (ADR 0014). Moving one between scanners costs
+        # transport, which lands in the setup so it delays the lot and blocks
+        # the tool exactly as a setup change does. Every lot in a batch shares
+        # a (part, step) and therefore a reticle, so one claim covers them all.
+        reticle_key = None
+        if self.reticles is not None:
+            transport_s, reticle_key = self.reticles.claim(
+                lots[0], machine, self.current_time)
+            setup_time += transport_s
         # compute per-piece preventive maintenance requirement
         for i in range(len(machine.pieces_until_maintenance)):
             machine.pieces_until_maintenance[i] -= sum([l.pieces for l in lots])
@@ -237,6 +404,18 @@ class Instance:
         # add events
         machine_done = self.current_time + machine_time + setup_time
         lot_done = self.current_time + lot_time + setup_time
+        # The mask is unavailable to every other scanner until this one is
+        # done with it. This is the interval the solver forbids with
+        # AddAtMostOne over the scanners sharing a reticle.
+        #
+        # Released at LOT done, not machine done: the mask is in the scanner
+        # while the lot exposes, and can be pulled as soon as the lot leaves.
+        # machine_done also carries preventive maintenance and any breakdown
+        # folded in above, and holding a mask through a tool's PM would block
+        # every other scanner for a reason that has nothing to do with the
+        # mask.
+        if self.reticles is not None:
+            self.reticles.hold(reticle_key, lot_done)
         ev1 = MachineDoneEvent(machine_done, [machine])
         ev2 = LotDoneEvent(lot_done, [machine], lots)
         self.add_event(ev1)

@@ -73,35 +73,70 @@ row is ~40 min per 30 days. Order of work is 1, then 2+3, 4, 5, then 6+7.
 Qualification is master data (on the tool, loaded once), not lot state on
 the wire; see 0013 §2 before adding anything to `LOT_READY`.
 
-- [ ] 0013 §3.3 — one `instance.eligible(lot, machine)` predicate in the
-      vendored simulator, default = existing dedication check. Gate: pristine
-      fifo/cr fingerprints unchanged.
-- [ ] 0013 §3.1 — overlay mechanism: `data/smt2020/overlays/<name>/`
+- [x] 0013 §3.3 — one `instance.eligible(lot, machine)` predicate in the
+      vendored simulator, default = existing dedication check. Gate held:
+      pristine `slate-cr` still reproduces `cr` at 47,149 decisions,
+      fp `8d77d45c4c2654a3`. The predicate is inert on the pristine fab.
+- [x] 0013 §3.1 — overlay mechanism: `data/smt2020/overlays/<name>/`
       (`qualification.tsv` + `provenance.json`), `--overlay` on `compare.py`
       and `sim_feed.py`, day-90 checkpoint keyed by overlay hash.
-- [ ] 0013 §3.2 — `bench/tools/gen_overlay.py`: balanced round-robin,
-      fraction, floors, scope, separate seed, capacity check that refuses
-      >90% effective utilization. Write `dedication-litho-50`,
-      `dedication-all-50`, `dedication-all-33`.
-- [ ] 0013 §3.4 — `qualified_parts` on the C-ABI tool struct, filled once at
+- [x] 0013 §3.2 — `bench/tools/gen_overlay.py`. **The capacity check refuses
+      the fractions this page asked for.** 0.50 all-scope is rejected on
+      eight families (`Litho_FE_98` 79.2% → 117.6% effective), and the
+      balanced frontier is between 0.60 (refused) and 0.65 (written). What
+      exists is `dedication-litho-70`, `dedication-all-70`,
+      `dedication-all-80`, plus `dedication-all-65` (hardest feasible) and
+      `dedication-skew-70` (the `--skew` variant). On SMT2020 at the 1.03×
+      operating point you cannot make dedication much harder without
+      deleting capacity, which is itself a finding about the testbed.
+- [x] 0013 §3.4 — `qualified_parts` on the C-ABI tool struct, filled once at
       `set_tools`; `FamilyTool::evaluate` rejects `RecipeNotQualified`;
-      `test_main.cpp` case; `slate-cr` gate under the overlay.
-- [ ] 0013 §3.5 — KPI: family hours idle with qualified WIP waiting, defined
-      once in `FeedPlugin._kpi_sample`; overlay name/hash + starts scale on
-      every row and on the Results tab.
-- [ ] 0013 §3.6 — runs into `bench/results/dedication/` with a README like
-      `starts/`: three overlays × fifo/cr/slate at 1.00× and 1.03×, then 120
-      days on the most separating overlay (seeds 0, 1) and the pressure
-      ablation on it.
+      `test_main.cpp` case (97/97 pass); `slate-cr` gate under all three
+      overlays (45,882 / 45,281 / 45,138 decisions, each matching `cr`).
+- [x] 0013 §3.5 — KPI: family hours idle with qualified WIP waiting, on every
+      row as `idleQ` (and `idleF` unfiltered), with overlay name/hash and
+      starts scale in the result JSON.
+- [ ] 0013 §3.6 — **30-day screen done and negative**
+      (`bench/results/dedication/README.md`): the slate − cr gap does not
+      grow with dedication, it runs backwards — largest on pristine at 1.03×
+      (+9.6%) and on the least dedicated overlay (`all-80`, +12.8%), negative
+      on the most dedicated (`all-70`, −1.3%) — and `idleQ`, the KPI built
+      for this, is 32–71 t·h/d worse for the slate in all eight cells.
+      Coverage rose (45.4% → 48.7–51.7%) where §3.5 said it would fall.
+      Still to run: 120 days at 1.03× on the most separating overlay
+      (seeds 0, 1) and the pressure ablation. The 30-day window cannot carry
+      the throughput column — ~36-day cycle time, and ADR 0012 measured
+      +1.0% over 120 days where the screen shows +9.6%.
 - [ ] 0013 §7 — status update and `summary.md` §7.4 with pristine and
       dedicated tables side by side; decide ADR 0012's overturn condition.
-- [ ] **Reticles** per (part, litho layer): exclusive across scanners, transport
-      delay between them, two copies for high-volume parts. Simulator gets a
-      reticle resource; `LOT_READY` gains a reticle id; the C++ planner's
-      reticle fields start to bind; the litho scene draws the library. Next
-      overlay if dedication alone does not separate the rules (0013 §7).
+      On the screen alone the condition is **not** met, but the honest
+      reading is *untested* rather than *refuted*: these matrices are mild
+      enough that `fifo` holds 98–99% on-time on every fab. The harder
+      `all-65` / `skew-70` rows are the tiebreak before the reticle branch.
+- [x] **Reticles** per (part, litho layer) — **built, ADR 0014.** Exclusive
+      across scanners, transport between them, copies per layer. The simulator
+      has the resource, `slate_rule` sends the reticle id and the scanner set,
+      and the C++ planner's reticle fields now bind (both paths have carried
+      `AddAtMostOne` over scanners sharing a mask since 0009; nothing had ever
+      fed them an id). Gates held: pristine fp `8d77d45c4c2654a3` unchanged,
+      every 0013 overlay hashes as before, 97/97 C++ tests pass.
+- [ ] **Make the masks contend, which is the open question** (0014 §6). The
+      coupling argument is necessary and not sufficient: with transport zeroed
+      the library is indistinguishable from pristine on LVHM at 1.00× (493
+      lots against 495), because 251 masks over 82 scanners sit at ~27% of a
+      mask-day and a blocked lot never idles a scanner. A mask has to be
+      scarce enough that blocking propagates. For a high-mix fab the lever is
+      **volume, not mix**: `--starts-part part_1=3.3` takes one part's masks
+      to ~89% while the rest scale down to hold total starts at 57 lots/day.
+      Warm under the mix (the checkpoint key carries it) and read `by_part` —
+      a fab-wide average cannot register a mask on a high-mix fab.
 - [ ] **Queue-time enforcement** (CQT columns): scrap or rework on violation;
       un-inert the planner's q-time term (`QTIME_INERT` in `slate_rule.py`).
+      Named in 0014 §5 as the successor if masks do not separate the rules,
+      on the same "built and inert" grounds — and because it is the only
+      candidate that gives the fab a way to **lose work**. Today a bad
+      decision can only make a lot late, and tardiness below the knee is a
+      few lot-days across 1,300 tools.
 - [ ] Sequence-dependent track setups — only if the loss analysis names
       setups as a material loss.
 - [ ] Rerun the starts grid on the overlay; same page, with and without.

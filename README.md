@@ -59,9 +59,8 @@ batch-holding, processing, delay steps), and the busiest tools per run.
 ### The KPIs
 
 The numbers on that page are the same KPIs that head every page of the
-dashboard, each with an (i) that states its definition.
-The header of every page carries the fab KPIs, each with an (i) that states
-its definition; the live tab draws them from day 0. They are **computed by
+dashboard, each with an (i) that states its definition; the live tab draws
+them from day 0. They are **computed by
 the producer**, not the dashboard: `sim_feed.py` samples them once per
 simulated hour over a trailing simulated day, during warm-up and live alike,
 and publishes them on the compacted `fab.kpi.state` topic keyed by run
@@ -83,6 +82,110 @@ piece of code, so an A/B compares like with like.
 | optimized decisions | dispatch decisions in the trailing day that did **not** fall back to the default rule — 0% for the fifo baseline by construction. A dispatcher running inside the simulator stamps `instance.dispatch_source` before `instance.dispatch()`; anything not `rule:*` counts |
 
 `/api/kpi` returns the series; `/api/state` carries the latest sample.
+
+## What we have found so far
+
+The question this project exists to answer is narrow: **does a solver beat a
+sort key at the moment a machine frees up?** Not "is scheduling useful" — a
+sort key is already a scheduler. The specific claim under test is that solving
+an assignment across all waiting lots at once beats ranking them one at a time.
+
+The answer is **yes, narrowly, and only once the objective was calibrated to
+the fab's actual numbers** — which took four apparent negatives and one
+constant that was wrong by two orders of magnitude.
+
+- **Tool qualification** — not every tool can run every recipe
+  ([`0013`](docs/adr/0013-tool-dedication-overlay.md)). The rules did not
+  separate. Qualification only *filters* which tools a lot may use, and a sort
+  key handles a filter perfectly well.
+- **Reticles** — the photomask a lot needs can only be in one machine at a
+  time ([`0014`](docs/adr/0014-reticle-overlay.md)). This is a genuine
+  *coupling* constraint, the kind a solver should win on. It never bound: on
+  this fab there are enough masks, so the whole cost turned out to be the time
+  spent moving them. `cr` recovered about a third of that cost. `slate`
+  recovered **−0.09%** — nothing — for **14.4× the compute**.
+- **Capacity** — the fab has almost no slack
+  ([`0015`](docs/adr/0015-right-sizing-the-tool-set.md)). It runs at 72%
+  average tool load, and removing just 5% of tools takes on-time delivery from
+  98% to under 2%. Capacity here is a cliff, not a dial.
+- **Queue times** — some steps must reach the next step within a time limit or
+  the work is damaged ([`0016`](docs/adr/0016-queue-time-enforcement.md)).
+  This is the one constraint class that makes the fab able to *lose* work
+  rather than just be slow, and it is now enforced.
+
+- **Due-date balance** — the last and best-shaped candidate
+  ([`0017`](docs/adr/0017-fab-conditions-analysis.md)). With queue times
+  enforced, a queue-time-aware sort key (`qt`) leaves the fab stable at full
+  load with zero scrap and ~7% of lots late. Measured over 180 days, twice,
+  the solver **lost badly** — 48.1 good lots/day against 57.5, on-time 24.9%
+  against 81.7%, WIP diverging.
+
+  **That result was wrong, and the reason is the most useful thing here.**
+  The solver's queue-time term is `1 + 600/slack_seconds` — written for
+  windows measured in *minutes*. This fab's windows are **10 to 240 hours**,
+  so a typical at-risk lot received a **1.01×** preference against a due-date
+  term reaching 50×. The signal was not weak; it was arithmetically absent.
+  Every conclusion about "the solver can't handle queue time" came from a
+  solver that had never been told about queue time.
+
+  Made window-relative — one line, no change to the solver — and re-run twice:
+
+  | | good/day | on-time | cycle time | tardiness | WIP |
+  |---|---:|---:|---:|---:|---|
+  | `qt`, as first written | 57.5 | 81.7% | 38.4 d | 1,925 | stationary |
+  | `qt`, with a promotion threshold | 57.4 | 89.6% | 38.3 d | 524 | stationary |
+  | `slate`, before the fix | 48.1 | 24.9% | 48.8 d | 91,889 | **diverging** |
+  | **`slate`, after** | **57.5** | **93.0%** | **36.9 d** | **118** | stationary |
+
+  Against the *strongest* baseline: **+3.3 on-time points, 4.3× less
+  tardiness, 1.4 days shorter cycle time**, level on throughput, violations,
+  scrap and stability — at **~5× the wall clock**.
+
+**So the answer is a qualified yes: a minimum viable solver is demonstrated.**
+It matches the best sort key on everything that keeps the fab alive and beats
+it on lateness. Whether that margin justifies 5× the compute is a business
+question, and it now has numbers attached.
+
+Two things we had to withdraw along the way, both recorded in
+[`0017 §12`](docs/adr/0017-fab-conditions-analysis.md):
+
+- We claimed the solver won by **rebalancing across a set** — lifting late
+  products without hurting early ones — which a ranking supposedly cannot do.
+  Giving the sort key a promotion threshold produced the same rebalancing. So
+  that was a property of not wasting effort on lots that were never at risk,
+  not of solving as a set, and ADR 0009's central claim remains
+  **undemonstrated**.
+- The published margin is a **lower bound**. Coverage is ~46%, so the `qt`
+  fallback decides most of a `slate` run, and the measured `slate` rows
+  contained the *untuned* fallback while being compared against the tuned
+  rule. Improving the baseline raises the solver's floor too.
+
+The three earlier negatives are untouched by this — different mechanisms — but
+their standing **as evidence** is weaker now. If one unchecked constant could
+invert a measured, replicated, written-up result, "we tested it and the solver
+lost" means less than it reads. Nobody has audited the remaining coefficients
+the same way.
+
+The bigger finding is the one we were not looking for: **which simple rule you
+choose decides whether the fab is viable at all**, not merely how efficient it
+is. A queue-time-aware rule holds WIP stationary at full load with zero scrap;
+`cr` and `fifo` diverge on the same fab, same demand, same machines. That is
+replicated on three seeds and is worth more than the question it came from.
+
+### What went wrong on the way, and why it is in the ADRs
+
+Every wrong answer this project has produced came from the same place: **a
+metric that could not respond to the thing being changed, or a number nobody
+checked.** Reading a WIP drain as throughput. Averaging a per-part effect
+across the whole fab. Measuring on-time over a window while the fab was
+diverging, so the number described where the window was cut rather than the
+rule. Comparing a two-day utilisation against a ninety-day one. Optimising
+against a queue-time term calibrated in minutes for windows measured in days.
+
+Each fix was a control or an invariant, never a better number. The ADRs record
+the mistakes alongside the decisions, because in each case the mistake is the
+part that transfers. There is a plain-language account in
+[`docs/notes/`](docs/notes/2026-09-12-does-the-solver-earn-its-place.md).
 
 ## Architecture
 
@@ -121,12 +224,13 @@ batching, time- and piece-based PM, breakdowns, due dates. Runs 730 simulated
 days and reports cycle time, throughput, on-time %, tardiness, utilization.
 Pinned upstream at `ae3d55ef`, read-only — changes belong in `dispatch/` or
 `bench/`. See its `UPSTREAM.md`. What it simplifies — transport is one
-uniform draw for the whole fab, delays are a 400-station pseudo-toolset,
-there is no storage and queue-time constraints are parsed but not enforced —
-and what that hides from an A/B, is inventoried in
-[`docs/adr/0008`](docs/adr/0008-what-pyscfabsim-simplifies.md). It plays three roles: fast batch KPI runs for
-scenario comparison, paced playback for watching one tool, and (designed, not
-built) the environment the dispatcher itself runs inside.
+uniform draw for the whole fab, delays are a 400-station pseudo-toolset and
+there is no storage — and what that hides from an A/B, is inventoried in
+[`docs/adr/0008`](docs/adr/0008-what-pyscfabsim-simplifies.md). Queue-time
+constraints were on that list; they are now enforced, with rework and scrap on
+violation ([`0016`](docs/adr/0016-queue-time-enforcement.md)). It plays three
+roles: fast batch KPI runs for scenario comparison, paced playback for
+watching one tool, and the environment the dispatcher itself runs inside.
 
 **The dispatch solver** — `dispatch/include/fab/solver.hpp`. A single-period
 assignment: one Boolean per feasible (lot, tool) pair, at-most-one tool per lot,
@@ -176,243 +280,15 @@ per-tool time budget in-process instead of publishing `EquipmentState` onto the
 stream the API already speaks. Once it does, the React tool view can show the
 busy/setup/pm/down/blocked/starved split that today only the terminal has.
 
-## A tour of the dashboard
+## The dashboard
 
-Captured from a live session: the fab warmed up for 90 simulated days under
-`fifo`, the CP-SAT slate dispatcher switched on at day 90, paused at day
-93. Every number on these screens is computed by the simulator feed, not
-the browser, which is what makes a live run comparable with a benchmark row.
+A React dashboard reads the Flask API and mirrors the fab: live floor and tool
+views, per-lot burndown, route and product views, the solver's slate on
+demand, and a Results tab that compares dispatchers on equal terms.
 
-### Live — the fab right now
-![live](docs/screenshots/live.png)
+**[Screen-by-screen tour, with screenshots →](docs/dashboard.md)**
 
-The digital twin's front page. The header carries the fab KPIs — WIP,
-throughput, starts, cycle time, on-time delivery, tool utilisation, and
-**optimized decisions**, the share of the trailing day's dispatch decisions
-the solver actually made rather than its fallback (44% here). Below it, WIP
-split into waiting and running from day 0, the raw event feed, and every KPI
-as a series with the warm-up in black and the run under test in blue, so the
-effect of switching the dispatcher on is visible as a break at the day-90
-rule rather than inferred from a table.
-
-### Live — playback control and the assistant
-![live-controls](docs/screenshots/live-controls.png)
-
-Two interactive features on the same page. **Playback** (the badge next to
-the sim clock) pauses and resumes the simulated fab and sets the replay
-speed from 1x to 1600x. It changes pacing only — the run, its seed and every
-decision are unchanged, so the same fab can be watched slowly or raced
-through; this is working, and the dashboard's choice persists across API
-restarts. The **Assistant** rail is a conceptual mockup of where an
-operator would ask the fab questions in plain language — "what happens if
-LITHO_03 goes down?", "which tool is the bottleneck?" — with answers
-grounded in the live state and the same C++ planner the dispatcher uses,
-read-only by construction. The panel and its tool contract exist; it is not
-wired to a model in this checkout.
-
-### Lots — cohort burndown
-![lots](docs/screenshots/lots.png)
-
-One product's releases from one day, drawn as steps-remaining against
-simulated time — here six `part_3` lots released on day 47 with a 583-step
-route, warm-up in black, the run under test in blue from the `sim start`
-rule. A cohort is the set of lots that can actually share a furnace batch,
-so the band's thickness is the cohort's spread and a widening band means it
-is desynchronising and will stall at the next batch step — this one has
-opened to 78 steps between fastest and slowest. The red dots on the zero
-line are the due dates; a naive projection from the product's achieved rate
-says whether they are in reach (`0 of 6 projected late`, worst slack
-+3.5 d). Rework shows as a jog upward. This is the product-level view of
-what the dispatch rule is doing.
-
-The **lots** tab draws one cohort's burndown (steps left against simulated
-time). Two toggles add context: **± cohorts** overlays the nearest earlier
-(cyan) and later (orange) cohorts of the same product, nearest by release
-*and* due date together so they are the ones that will actually meet it at a
-batch step; **hot lots catching up** overlays the M hot lots (priority 20,
-red dashed) of that product that are behind it in the route and released
-nearest to it — the ones moving fast enough to contend for its batches.
-`/api/lots?part=…` and `/api/lots/hot` serve them.
-
-### Lots — one lot at a time
-![lots-lotview](docs/screenshots/lots-lotview.png)
-
-The same cohort view switched from **envelope** to **lots**: `part_3-d47`,
-six lots released on day 47 with 583 steps ahead of them, each drawn as its
-own line. Warm-up is black; from the `sim start` rule each lot is coloured
-by what it is doing at the last point — waiting on its cohort for a batch
-(purple), queued for a tool (grey), processing (green) — and the dashed
-rays project each one to the zero line at the product's achieved rate, to
-be read against its due-date dot. Here the cohort has spread to 78 steps
-between fastest and slowest, yet 0 of 6 are projected late with 3.5 days
-of slack on the worst. Clicking a line opens that lot.
-
-### Tools — who is busy, who is down
-![tools](docs/screenshots/tools.png)
-
-All 1,313 tools in 106 groups, busiest first, with the online roster over
-time (breakdowns and PM take tools out; the feed brings them back, and a
-watchdog holds the roster if an event is lost). Expanding a group — here
-`WE_FE_84`, 17 wet-etch tools, 7,247 dispatches — shows each tool's queue
-and dispatch count; queue depth beside an online tool is where lots are
-waiting, i.e. where the dispatch decision matters most. Each tool card
-drills down to its dispatches and the choice set it was offered.
-
-### Tool — one machine's decisions
-![tool](docs/screenshots/tool.png)
-
-`#/tools/Litho_BE_110_890`: one lithography tool's queue, lots in flight,
-dispatches and changeovers, and then every recent dispatch decision made at
-it — the simulated day, how many lots it **chose from**, how many were left
-waiting, and **who decided**: `slate` when the CP-SAT slate held a pick for
-this tool, `slate-fallback` when the solver-consistent fallback score did.
-This is the optimized-decisions KPI at decision resolution, and litho is
-where it counts: at the top of the log the tool is choosing one lot from
-38–51 waiting, and every one of those choices is the slate's. The
-`slate-fallback` rows at the bottom are from the first hours after the
-switch, before the planner had a token for this tool.
-
-### Tool — setups and changeovers
-![tool-changeovers](docs/screenshots/tool-changeovers.png)
-
-`#/tools/Implant_132_870`: the same page on an implanter, where the
-**setup** column is the story. This tool has done 21 changeovers; reading
-down the log it runs a block of lots in `SU132_1`, switches to `SU132_2`,
-then `SU132_3`, then back — each switch costs setup time and, under
-SMT2020's minimum-run-length rule, commits the tool to a run of that setup
-before it may switch again. The dispatch rule sees the queue of 6–16 lots
-across those setups and decides both which lot goes next and, implicitly,
-when the tool pays for a changeover. This is the sequencing problem a
-per-cycle assignment is blind to (see `docs/adr/0002`), visible one
-decision at a time.
-
-### Tool — the bay in three dimensions (dry etch, CMP, furnace, litho)
-On a dry-etch tool (`/tools/DE_FE_86_206`, any `DE_*` family), a CMP
-polisher (`Planar_*`), a diffusion furnace (`Diffusion_*`) or a litho cell
-(`LithoTrack_*`, `Litho_FE_*`, `Litho_BE_*`) the tool page also draws the
-bay: the lots waiting for the family on track-side shelves,
-the lot on each load port with its time left, and the one-way overhead
-loop with three hoist vehicles. When a decision lands, the panel on the
-right lists the candidates the rule chose from — priority, wait, slack,
-setup match — scans them, locks the winner, and connects
-**lot → vehicle → tool · port**; the winner's rail route lights up and a
-vehicle fetches it. When the FOUP nearest the port by rail is not the one
-chosen, its route is ghosted in red, which is the point of the picture:
-the dispatcher ranks the lot, not the distance. The strip beneath reads the
-machine state (`IDLE → LOT SELECTED → RESERVED → FOUP IN TRANSIT →
-LOADING → PROCESSING`). Two modes. **Live twin** follows the feed on the
-fab clock — a delivery is twenty-odd fab seconds, so it is only watchable
-at **1x** playback (the scene's clock chip offers it); at 20x it is a
-flick, and paused it stands still, like every other view here. **Playback**
-replays one recorded decision at one fab second per second whatever the
-feed is doing: pick **▶ watch** on a row under Recent decisions, and the
-scene (amber-framed while it runs) shows the previous lot leaving, those
-candidates on the shelves, the choice, and the delivery. The scene and the
-lots view link both ways: a lot in a decision's rationale links to its
-cohort, and a lot's journey links each step it has left to a replay of the
-dispatch on the tool that ran it (`/tools/<tool>?lot=<lot>&mode=playback`),
-and its current step to the live bay (`mode=live`); opened that way, or by
-clicking a FOUP, the camera locks onto the lot instead of the tool.
-CMP is the second scene and reuses all of this with a different focal tool
-(three platens under a carousel that turn while a lot is on the tool, a
-post-clean module, a slurry cabinet) and two more dispatch dimensions the
-data actually has: **pad life**, drawn from SMT2020's piece-based PM
-calendar (the feed publishes pieces until the next PM with each decision,
-so the panel shows "n of 3,500 wafers since PM"), and **next ↓**, the
-family each candidate's next route step needs and the queue waiting there
-now — the downstream a fab-wide dispatcher weighs and a queue rule does
-not. Setups are hidden where a family has none (CMP), and a tool down for
-PM or a breakdown says so on the tool and in the panel.
-The furnace is the third scene and the one where the right decision can be
-to wait. SMT2020 furnaces batch 3–6 lots of the same product at the same
-step (BATCHMN/BATCHMX in the route, in pieces), so the queue on the shelves
-is grouped by product and step; while nothing runs and no group has reached
-its minimum, the state strip reads **WAITING FOR BATCH** and the lots of the
-largest forming group are tinted amber. When the decision lands it names
-every lot of the batch: they lock together in the panel, then leave the
-shelves one vehicle at a time (three vehicles, so the fourth FOUP waits for
-the first to come back), onto six ports, and the tubes glow while the batch
-runs. Alternatives in the panel show their step, which is usually why they
-were not in the batch.
-Litho is the fourth scene: a coat/develop track with the scanner behind it.
-SMT2020 gives the track families one setup per layer (`SU015_1`,
-`SU036_1`, … in the route) and a changeover time between setups, so every
-FOUP's lid carries the colour of the setup it needs and the track wears a
-band of the setup it is on. A lot that needs another layer's setup costs a
-changeover, drawn as a **SETUP CHANGE** state between loading and
-processing for exactly the seconds the decision record priced it at
-(`setup_s` in the ranking tuple), after which the band takes the new
-colour. The rules rank setup cost ahead of queue age, and the panel says so
-when a lot that waited longer lost to one already on the layer. SMT2020
-has no reticles, so none are modelled or drawn; the scanner families have
-no setups, so their pages show the cell without the band.
-SMT2020 has no AMHS (transport is a `Delay_*` step), so ports, shelves and
-vehicles are a visualisation of the decision, not a second simulation; the
-layout is the same synthetic one the floor map uses, and the neighbouring
-tools are the real occupants of the tool's cell. Model in
-`dispatch/ui/src/etch_geom.js` (tested), rendering in `EtchScene.jsx`
-(three.js, loaded only on those pages).
-
-### Floor — the cleanroom as a map
-![floor](docs/screenshots/floor.png)
-
-A synthetic bay/chase layout of the same 913 process tools, coloured by
-area, with WIP per bay and a heatmap toggle. Hatching marks bays with a
-tool down. Clicking a bay opens its panel — here bay 8 · seg 2,
-photolithography: 14 tools, 77 lots of WIP, 11 running, 1 down, and the
-tool list, each a link into the tools tab. It answers the spatial question
-the tables cannot: where in the fab the queue is building, and whether it
-is one bay or a whole area. The selection lives in the URL
-(`#/floor?bay=8,2`), so a view is pasteable.
-
-### Products — the ten routes at a glance
-![products](docs/screenshots/products.png)
-
-The ten saleable LVHM products, one card each: route length in steps,
-**visits** (consecutive steps in one bay, collapsed — always well below
-steps, which is the re-entrancy), the areas touched, a bar of where the
-route's steps are spent by process area, and how many cohorts and lots of
-that product are live in the fab right now. Routes run from 242 to 583
-steps and every one of them spends most of its time in wet etch. Each card
-opens the product's route page.
-
-### Routes — what a product's journey looks like
-![routes](docs/screenshots/routes.png)
-
-One page per product. The lane map draws the whole route — here 521 steps
-across 12 areas — one lane per area, one column per step, with measurement
-and rework points marked. Reading across shows the re-entrancy that makes
-fab scheduling hard: the same few lanes fire over and over for 391 visits,
-and a bad exposure sends the lot back three steps. The area table below
-says where the steps go and how often the lot returns.
-
-### Slate — the optimizer, on demand
-![slate](docs/screenshots/slate.png)
-
-The CP-SAT planner from `dispatch/libfabslate.so`, the same library the
-simulator's `slate` rule calls, applied to the live ready pool: one click
-plans every waiting lot against every tool by family and returns the slate
-— primary tool, alternate, rank. The head-to-head buttons open the
-benchmark result files. This is the read-only window onto the dispatcher;
-no write path reaches the fab from here.
-
-### Results — dispatchers compared on equal terms
-
-The screenshot at the top of this README. Every run in the Postgres run store,
-each resumed from the same day-90 checkpoint, with post-switch means and
-deltas against a chosen baseline — see [What it solves](#what-it-solves) and
-`bench/README.md` for what the numbers do and do not say.
-
-### Topology — the pipeline itself
-![topology](docs/screenshots/topology.png)
-
-The four security zones and the stream between them: event throughput
-(~570 envelopes/s here), the simulated clock rate *measured* against the
-playback speed *requested* — 803x against 1600x, because the CP-SAT slate
-cannot plan faster than that, so the gap is the solver's cost in fab time
-— mirror lag from zone 2 to zone 3, frames seen, and which services
-straddle a boundary. When the fab looks wrong, this is where to check
-whether it is the fab or the pipe.
+![results](docs/screenshots/results.png)
 
 ## Cold start
 
@@ -444,7 +320,10 @@ this and nothing else.
 A discrete-event simulator cannot *start* at day 90 — it has to simulate
 there, at roughly 3 minutes of CPU per 30 simulated days (about 35 s for the
 default 5 days). So the warm-up is paid **once** and cached in
-`bench/snapshots/`, keyed by dataset, seed, dispatcher, batch strategy and day:
+`bench/snapshots/`, keyed by dataset, seed, dispatcher, batch strategy and
+day — and by every constraint overlay in force (tool dedication, reticles,
+tool trim, start mix, queue-time settings), because a fab warmed under a
+constraint is a different fab from one warmed without it:
 
 - `…_dayN.json` — the dashboard snapshot (positions and per-lot warm-up
   history). `--snapshot-only` republishes it in ~2 s, which populates the
@@ -495,251 +374,21 @@ populated the moment it starts rather than filling in over the next hour.
 
 ## Running it
 
-### Start a fresh session
-
-One command. It brings up Kafka and Postgres, starts the API and the UI, waits
-for all three to answer, and starts a producer:
-
 ```bash
-scripts/dev-up.sh --fresh --feed
-```
-
-Then open http://localhost:5173/.
-
-| flag | what it does |
-|---|---|
-| `--feed` | start the simulator producer. Without it the dashboard is empty: the API consumer starts at `latest` and there is nothing to consume. |
-| `--fresh` | drop the Kafka and Postgres volumes first, so no snapshot from an earlier run is bootstrapped. This is what "clean start" means here. |
-| `--status` | what is listening |
-| `--stop` | stop what the script started (it refuses to kill anything it did not) |
-
-`FEED_DAYS` / `FEED_WARMUP` / `FEED_SPEED` / `FEED_RULE` / `FEED_WARMUP_RULE`
-override the producer's defaults — 180 simulated days, a 90-day warm-up (so
-the dashboard opens on a fab with a full quarter of history and steady-state
-KPIs to compare against), 20x realtime, `fifo`, warm-up under `fifo`. The
-first start simulates the warm-up (~10 min of CPU); later starts resume from
-its checkpoint in under a second. `FEED_RULE=slate FEED_SPEED=1600
-scripts/dev-up.sh --feed` is the dispatcher under test taking over the same
-fab at day 90.
-
-Run it directly rather than through a pipe; see the note at the top of the
-script.
-
-**Why one command rather than three terminals.** `--feed` starts a *single*
-producer that publishes the WIP snapshot and then streams from the same point.
-Two processes would mean two producer run ids, and the dashboard would be
-drawing a snapshot from one run against a live stream from another — which it
-will now tell you about (the header badge goes red), but is better not to do.
-See [`docs/adr/0003`](docs/adr/0003-cold-start-snapshot-and-delta.md).
-
-### Runs and the results tab
-
-Every `sim_feed.py` run also records itself in the **Postgres run store**
-(ADR 0004): a `runs` row at start (dataset, seed, dispatcher, batching,
-horizon, warm-up, git sha, the Kafka `run` key), every hourly KPI sample in
-`run_kpi_samples` as it is taken, and on exit a status (`finished`, or
-`stopped` for Ctrl-C/SIGTERM) plus post-warm-up means in `run_kpis`.
-`--no-store` opts out; `--notes` says what a run was for.
-
-The **results** tab reads that store (`/api/runs`, `/api/runs/<id>/kpi`):
-a table of every run with its means and deltas against a chosen baseline,
-and per-KPI charts laying the selected runs over each other — including the
-run currently streaming, whose line grows live. SMT2020 has several
-out-of-the-box rules (`fifo`, `cr`, two `lifo`s, `random`) and four batching
-strategies, so "baseline" is a choice, not a property; the default is the
-oldest finished fifo run.
-
-To record a baseline without disturbing the live dashboard, run the feed
-headless into a file, with its own control file so it cannot change the
-live feed's pacing:
-
-```bash
-SIM_CONTROL_FILE=/tmp/ctl.json baselines/pyscfabsim/.venv/bin/python3 \
-    bench/tools/sim_feed.py --days 120 --warmup-days 90 --speed 0 \
-    --dispatcher cr --warmup-dispatcher fifo \
-    --out /tmp/cr.jsonl --truncate --notes "cr baseline"
-```
-
-With `--warmup-dispatcher fifo` every baseline resumes the same day-90
-checkpoint the live run did, so the rows on the Results tab differ only in
-the rule. Without it, the first run of a new dispatcher pays its own 90-day
-warm-up and the rows compare two histories.
-
-### Watching it
-
-The header badge is the simulated fab clock. It shows the current sim day, the
-producer run id, and turns red if the snapshot and the live stream are from
-different runs. Clicking it returns to the live view.
-
-`--speed` is sim-seconds per wall-second: `1` is realtime, `20` (the default)
-is twenty times realtime, `0` is unpaced. The dashboard's menu goes to
-1600x; measured, the feed holds the requested rate within 3% to 2000x and
-the simulator itself tops out near 10,000x. Playback is the only throttle in
-the pipeline, and [`docs/adr/0007`](docs/adr/0007-playback-is-a-cursor-not-a-throttle.md)
-is the case for making it a viewer-side cursor over the recorded stream
-rather than a producer-side sleep. The dashboard's playback menu changes
-it live, and that setting persists in `bench/.sim_control.json` — **if the
-clock is not moving, check there first**: a leftover `"paused": true` from an
-earlier session leaves the feed running but silent.
-
-### The two modes
-
-The simulator runs in two modes — the same run loop
-(`bench/tools/sim_runner.py`) with a different plugin riding it.
-
-*Mode 1 — headless.* No broker, no feed, no pacing, as fast as possible. This
-is what you use for KPIs and parameter tuning:
-
-```bash
-baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 30 --top 15
-```
-
-*Mode 2 — producer.* What `--feed` starts. To run it by hand, for a different
-dataset or start day:
-
-```bash
+scripts/dev-up.sh                     # bring the stack up
 baselines/pyscfabsim/.venv/bin/python3 bench/tools/sim_feed.py \
-    --days 40 --warmup-days 0 --speed 20
+    --dataset SMT2020_LVHM --seed 0 --days 120 --warmup-days 90 \
+    --dispatcher fifo                 # warm 90 days, checkpoint, stream live
 ```
 
-`--warmup-days 0` snapshots the WIP the dataset already ships with (~2,200
-lots) and streams from there, at no warm-up cost. A later start day has to be
-simulated to — roughly 3 minutes of CPU per 30 simulated days on an idle
-machine, considerably more on a busy one — and is cached in `bench/snapshots/`
-afterwards, so only the first build of a given day is slow.
-
-**Tests:**
+The first run simulates the warm-up and caches it; every run after resumes in
+under a second. A head-to-head table, every rule from the same warmed fab:
 
 ```bash
-cd dispatch && make test        # 56/56, the C++ suite
-scripts/smoke.sh                # end-to-end: API, producer, floorplan, scenario
-python3 bench/tools/t_sim_runner.py   # the shared dispatch loop, any interpreter
+bench/tools/compare.py --days 180 --warmup-days 90 --rules fifo,cr,slate
 ```
 
-`smoke.sh` runs on :8111 so it can stand beside a running dev API. Every
-assertion in it corresponds to a bug that actually shipped.
-
-`t_sim_runner.py` is the one test here that needs nothing — no venv, no
-dataset, no broker. It fakes the instance to pin the loop in
-`bench/tools/sim_runner.py`, which both `tool_probe.py` and `sim_feed.py` run
-on, so a break there would take out the measurements and the dashboard feed
-together. `smoke.sh` runs it first for that reason.
-
-**The full four-zone stack:**
-
-```bash
-cd dispatch
-make infra-up     # docker compose, four networks, every service a container
-
-# or one zone at a time — profiles: equipment · realtime · data · enterprise
-cd infra && docker compose --profile data up -d
-# containers are named fab-<zone>-<service>, e.g. fab-data-kafka
-
-make verify       # zone declarations
-make reach        # reachability — proves the isolation is real
-make logs
-make infra-down
-```
-
-This is a different pipeline from `dev-up.sh`, not just the same one in
-containers. In dev the API and UI are host processes and the producer is
-`sim_feed.py` in the simulator's venv. Here the producer is the `feed`
-container (`infra/Dockerfile.feed`): the same `sim_feed.py`, with
-`libfabslate.so` built against OR-Tools inside the image, living in the data
-zone where a real MES feed would enter. Its first start simulates the 90-day
-warm-up (~10 min of CPU) and caches the checkpoint in the `feed-cache`
-volume; every later start resumes in seconds. The `dispatcher` container
-(`fabdisp`) is a one-shot closed-loop benchmark: it prints its numbers and
-exits 0, which is expected — the dashboard's decisions come from the feed's
-slate, not from it.
-
-**Deploying it (homelab, public URL):**
-
-```bash
-cd dispatch/infra
-cp .env.example .env            # POSTGRES_PASSWORD, PUBLIC_URL (per-app settings)
-./deploy.sh                     # compose up --build under the shared secrets
-make -C .. verify               # passes clean: no dev override, no host ports
-```
-
-`deploy.sh` injects secrets that several apps on the box share (Mailgun for
-now) from the homelab SOPS store with `sops exec-env`, so they are never
-written in plaintext; per-app values stay in `.env`.
-
-`docker-compose.prod.yml` binds the UI to `127.0.0.1:8080` and nothing else,
-so the only way in is the reverse proxy or tunnel on the same box. The
-included ingress is a Cloudflare Tunnel (`--profile tunnel`), driven from the
-command line by `infra/cf-tunnel.sh` with a Cloudflare API token (Account:
-Cloudflare Tunnel Edit, Zone: Zone Read + DNS Edit):
-
-```bash
-export CLOUDFLARE_API_TOKEN=...          # or: sops exec-env <file> '...'
-./cf-tunnel.sh create walden-fab         # tunnel + token -> .env
-./cf-tunnel.sh route fab.<your-domain> http://ui:80   # ingress rule + CNAME
-docker compose -f docker-compose.yml -f docker-compose.prod.yml \
-    --profile all --profile tunnel up -d
-./cf-tunnel.sh status
-```
-
-Routes are stored at Cloudflare, so another `route` later (a second hostname,
-another service on the same box) takes effect without restarting anything.
-Basic auth is only meaningful behind the TLS the tunnel provides.
-
-**Demo lifecycle.** A public demo should not run flat out for nobody. With no
-dashboard connected for `IDLE_PAUSE_SECONDS` (default 600) the API pauses the
-feed. A paused fab greets the next viewer with a modal that explains the
-simulation and offers *Resume at 10× speed* (set `AUTO_RESUME_ON_VIEWER=true`
-to resume silently instead). The feed runs to
-`FEED_DAYS` and then restarts from the day-90 warm-up checkpoint; every open
-dashboard gets a modal explaining the jump, and the previous run stays under
-Results. A checkpoint is per horizon, so the first start at a new `FEED_DAYS`
-re-simulates the warm-up once (~10 min).
-
-**Access gate.** nginx asks the API (`auth_request`) on every request, so one
-gate covers the dashboard, every `/api` route and the SSE stream; `/health`
-stays open for uptime checks. Visitors sign in at `/login` with a six-character
-**access code**, or ask for a **magic link**: they enter an email, the API
-mints a code tied to that email and mails it (from `MAIL_FROM` via Mailgun, `MAILGUN_*`)
-with a one-click link. Codes are shareable on purpose; every use is recorded.
-Sign-ins from `@AUTH_ADMIN_DOMAIN` (frontanalytics.com) get `/admin`: mint
-codes with a note, see who used what and when, disable a code. State lives in
-the fab Postgres (`access_codes`, `sessions`). The first code has to come from
-somewhere: `dispatch/infra/mint-code.sh` mints one from the box itself.
-
-The gate exists because of the POST routes: `/api/scenario` and
-`/api/scenario/compare` run the C++ planner (CPU), `/api/sim/control` changes
-the playback speed for *everyone* watching, and `/api/chat` calls Gemini on
-Vertex on your project's bill. In dev (`dev-up.sh`, no nginx) nothing enforces
-it.
-
-**The dispatcher on its own:**
-
-```bash
-cd dispatch
-make test                       # 56/56, greedy-only build
-make hsms-test                  # two processes, real TCP, real HSMS handshake
-make bench                      # prints which backends are linked FIRST
-./build-ortools/fabtest --bench 5   # CP-SAT vs greedy, if built per BUILD.md
-```
-
-**The simulator:**
-
-```bash
-cd baselines/pyscfabsim
-.venv/bin/python3 main.py       # 730-day greedy run, writes KPIs
-
-# per-tool view (from the repo root)
-baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py --days 30 --top 15
-baselines/pyscfabsim/.venv/bin/python3 bench/tools/tool_probe.py \
-    --days 30 --tool 970 --tail 40
-```
-
-The probe is headless: it runs the window as fast as it can and reports. To
-watch a run unfold, feed the dashboard with `bench/tools/sim_feed.py` and use
-its playback controls — that path pages through Kafka's log, so nothing has to
-re-simulate to redraw. Recording a bespoke stream instead would be ~2.5 GB per
-730-day scenario at 22.5k dispatch events per simulated day, which is the
-argument for letting the log be the recording.
+**[Starting a session, the two modes, the results tab, the per-tool probe →](docs/running.md)**
 
 ## Considerations and enhancements
 
@@ -766,9 +415,17 @@ the reasoning survives the backlog.
   verbatim; CONWIP or workload regulation would be a second lever beside
   dispatch, judged on the *starts* KPI. Depends on demand information the
   simulator only sees as `order.txt`.
-- **Queue-time constraints** (0008 §2). Parsed, never enforced. The
-  cheapest fidelity gain available; a dispatcher that protects CQT windows
-  gets no credit until it lands.
+- ~~**Queue-time constraints** (0008 §2). Parsed, never enforced.~~ **Built**
+  ([`0016`](docs/adr/0016-queue-time-enforcement.md)): windows are enforced,
+  a violated lot reworks, and a lot that misses too often is scrapped. The
+  solver's q-time term is still inert on purpose — it gets un-inerted once
+  there is an operating point where violations cost something.
+- **Parallel per-family solves** ([0009](docs/adr/0009-slate-rule-hybrid-split.md),
+  measured section). A `slate` run spends 60% of its time inside the solver
+  and 13% marshalling, so the marshalling everyone remembers as the bottleneck
+  is worth only 1.15× now — that fix already landed. The families are provably
+  independent but still solved in a serial loop; running them concurrently is
+  ~2.1×. Deliberately not built yet: nothing that needs it is running.
 - **A self-built simulator** (0008 §6). Three separate cases — speed,
   fidelity where the dispatcher's claims live, one data model — and one
   acceptance test: reproduce PySCFabSim's published baselines on the same
@@ -789,6 +446,19 @@ Honest accounting, because the numbers here have been wrong before:
   98.7%). One seed, 47% solver coverage, 9× the wall clock —
   `bench/README.md` has the caveats and `summary.md` the account. The old
   synthetic-instance "+34.4%" number is superseded and should not be quoted.
+- **On a fab with real constraints, `slate` does not beat `cr`.** Those rows
+  above are the unconstrained fab. With tool dedication and reticles fed in,
+  `slate` recovered −0.09% against `cr` at 14.4× the compute
+  ([`0014 §7`](docs/adr/0014-reticle-overlay.md)). That meets an overturn
+  condition [`0012`](docs/adr/0012-starts-knee-and-what-the-slate-optimises.md)
+  set for itself. The open question is no longer "is the slate better here"
+  but "is there any operating point where assignment beats ordering"
+  ([`0017`](docs/adr/0017-fab-conditions-analysis.md)).
+- **Queue-time enforcement is built and the shipped windows bite.** Detection
+  costs nothing — a detection-only run is digit-identical to one with
+  enforcement off, which is the control that makes the rest trustworthy.
+  Violations rework the lot, and a lot that misses too many times is scrapped
+  ([`0016 §6`](docs/adr/0016-queue-time-enforcement.md)).
 - The tactical cycle needs **≥2s of solve time at 400 lots**, not the ≥1s once
   stated. A 1s-tuned cycle runs greedy on every tick while the backend table
   honestly reports `cpsat linked` — no error, no warning, no CP-SAT. Measured

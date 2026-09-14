@@ -14,11 +14,24 @@ overturn it. Not how anything works — that lives beside the code.
 | [0006](0006-zeromq-inbound-kafka-outbound.md) | ZeroMQ inbound, Kafka outbound: the transport split |
 | [0007](0007-playback-is-a-cursor-not-a-throttle.md) | Playback is a cursor, not a throttle: run unpaced, replay at will |
 | [0008](0008-what-pyscfabsim-simplifies.md) | What PySCFabSim simplifies (transport, delay, storage, CQT), and what that hides |
-| [0009](0009-slate-rule-hybrid-split.md) | `slate_rule`: where the line between Python and C++ falls |
+| [0009](0009-slate-rule-hybrid-split.md) | `slate_rule`: where the line between Python and C++ falls (built and measured; the solve is 60% of a slate run, marshalling 13% — family-level parallelism is the ~2.1× left on the table) |
 | [0010](0010-look-ahead-dispatch-the-hold-decision.md) | Look-ahead dispatch: let a tool hold for a predictable arrival (proposed) |
 | [0011](0011-downstream-aware-dispatch.md) | Downstream-aware dispatch: push bottleneck and batch need back up the route (proposed) |
 | [0012](0012-starts-knee-and-what-the-slate-optimises.md) | The starts knee, what the slate optimises, and look-ahead coverage (measured; sets cr fallback + 900 s horizon as defaults) |
-| [0013](0013-tool-dedication-overlay.md) | Tool dedication overlay: qualification matrices beside the testbed, read by simulator and solver alike; the ADR 0012 overturn test (proposed, hand-off plan) |
+| [0013](0013-tool-dedication-overlay.md) | Tool dedication overlay: qualification matrices beside the testbed, read by simulator and solver alike (implemented; the rules did not separate — qualification is a unary constraint and a sort key handles it) |
+| [0014](0014-reticle-overlay.md) | Reticle overlay: the coupling constraint the solver already had and nothing ever fed (implemented and **answered** — the real-time layer should be a sort key; ADR 0012's overturn condition is met) |
+| [0015](0015-right-sizing-the-tool-set.md) | Right-sizing the tool set: trim tables beside the dataset, and the demand model that silently returned zero for 45 of 105 families (implemented) |
+| [0016](0016-queue-time-enforcement.md) | Queue-time enforcement: give the fab a way to lose work — the one remaining constraint class that is a set problem rather than an ordering (implemented; §6 — the reroute was an absorbing state until rework was capped and scrap added) |
+| [0017](0017-fab-conditions-analysis.md) | Fab conditions analysis: locate the cliff on a queue-time grid, then operate just past it (in progress; §8 — the cheap gate killed the first matrix, and scrap broke the WIP-stationarity criterion) |
+| [0018](0018-dashboard-assistant.md) | The dashboard assistant: one agent, two answer paths, and nothing stated from model recall (implemented; the help corpus is the fast path and is easy to break) |
+
+Plain-language write-ups, for whoever picks this up next:
+
+- [2026-09-12 — does the solver earn its place?](../notes/2026-09-12-does-the-solver-earn-its-place.md)
+  how 0012 → 0013 → 0014 played out, and the three ways the measurements lied.
+- [2026-09-13 — the rule decides whether the fab survives](../notes/2026-09-13-the-rule-decides.md)
+  0016 → 0017: queue time, the rework loop that ate the fab, and the finding
+  that dispatching determines viability rather than efficiency.
 
 ## Why these are central and not filed under bench/ or dispatch/
 

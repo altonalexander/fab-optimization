@@ -66,7 +66,8 @@ import uuid
 import sim_runner  # noqa: E402
 from sim_runner import REPO  # noqa: E402
 
-import overlay as overlay_mod  # noqa: E402  (ADR 0013 tool qualification)
+import overlay as overlay_mod
+import trim as trim_mod  # noqa: E402  (ADR 0013 tool qualification)
 
 from plugins.interface import IPlugin  # noqa: E402
 
@@ -88,7 +89,8 @@ KPI_SAMPLE_S = 3600        # one sample per simulated hour
 KPI_WINDOW_S = 86400       # throughput / cycle time / on-time over a trailing day
 TOOLS_FLUSH_S = 6 * 3600   # per-tool books to the run store this often
 KPI_FIELDS = ('t', 'wip', 'running', 'util', 'thr', 'ct', 'otd', 'tard',
-              'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd', 'iq', 'iw')
+              'dec', 'opt', 'wq', 'wb', 'wp', 'starts', 'wd', 'iq', 'iw',
+              'sutil', 'nscan', 'rlock')
 
 # Warm-up is ~3 minutes of CPU per 30 simulated days, so a snapshot is worth
 # keeping. Keyed by everything that changes the trajectory; a cache hit makes a
@@ -215,7 +217,58 @@ CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
                     '_release_log')
 
 
-def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
+def _mx(a):
+    """The rework cap off the parsed args; 0 on the command line means the
+    unbounded behaviour, which the key represents as no fragment at all."""
+    v = getattr(a, 'cqt_max_rework', 3)
+    return None if not v else int(v)
+
+
+def cqt_key(enforce, scale, max_rework=3):
+    """Checkpoint key fragment for queue-time enforcement (adr/0016).
+
+    A fab warmed WITHOUT enforcement has different WIP from one warmed with
+    it -- violations rework lots and change the queues -- so the two must not
+    share a checkpoint, for the reason adr/0013 §3.5 gives about the
+    qualification matrix. Empty when off, so every existing checkpoint
+    filename is unchanged.
+
+    The rework cap folds in too, and for the same reason: capped and
+    uncapped warm-ups are different fabs -- uncapped traps lots forever
+    (adr/0016 §6), capped scraps them. Only when enforcement is on, so every
+    non-cqt checkpoint filename is still unchanged. Checkpoints built before
+    the cap existed carry no 'r' fragment and are therefore orphaned rather
+    than silently reused, which is the point.
+    """
+    if not enforce:
+        return ''
+    base = '_cqt' if abs(scale - 1.0) < 1e-9 else f'_cqt{scale:g}'
+    return base + ('' if max_rework is None else f'r{int(max_rework)}')
+
+
+def mix_key(parts):
+    """Checkpoint key fragment for a per-part start mix (adr/0014).
+
+    A fab warmed under a uniform mix has the wrong WIP for a run that ramps
+    one part: with a ~37-day cycle time, an 8-day window from such a
+    checkpoint completes only lots released BEFORE the ramp, so the per-part
+    numbers describe the old mix and the experiment cannot see its own
+    effect. Same argument as adr/0013 §3.5 makes for the qualification
+    matrix. An empty mix contributes nothing, so every existing checkpoint
+    filename is unchanged.
+    """
+    if not parts:
+        return ''
+    import hashlib
+    h = hashlib.blake2b(digest_size=4)
+    for k in sorted(parts):
+        h.update(f'{k}={parts[k]:g}\n'.encode())
+    return f'_mix{h.hexdigest()}'
+
+
+def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
+              parts=None, trim=None, cqt=False, cqt_scale=1.0,
+              cqt_max_rework=3):
     """Where the shared warm-up checkpoint for this configuration lives.
 
     The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
@@ -227,15 +280,22 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
     existing checkpoint filename is unchanged.
     """
     name = (f'{dataset}_seed{seed}_{dispatcher}_{batch_strat}'
-            f'_day{day:g}{overlay_mod.key(overlay)}_h{int(days)}.ckpt')
+            f'_day{day:g}{overlay_mod.key(overlay)}{mix_key(parts)}'
+            f'{trim_mod.key(trim)}'
+            f'{cqt_key(cqt, cqt_scale, cqt_max_rework)}'
+            f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
-def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None):
+def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
+              parts=None, trim=None, cqt=False, cqt_scale=1.0,
+              cqt_max_rework=3):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
-    pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay) \
-        .replace('_h0.ckpt', '_h*.ckpt')
+    pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay,
+                    parts, trim, cqt, cqt_scale,
+                    cqt_max_rework).replace('_h0.ckpt',
+                                                         '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
         try:
@@ -278,12 +338,40 @@ def save_checkpoint(path, instance, feed, days):
         instance.plugins = plugins
 
 
-def scale_starts(instance, scale):
+def build_horizon_days(args):
+    """Days of RELEASE SCHEDULE to materialise (adr/0014); see sim_runner."""
+    scales = [1.0, float(getattr(args, 'starts_scale', 1.0) or 1.0)]
+    scales += [float(v) for v in (getattr(args, 'starts_part_map', None)
+                                  or {}).values()]
+    return args.days * max(scales) * 1.05
+
+
+def scale_starts(instance, scale, parts=None):
     """Compress the remaining release schedule by `scale` (compare.py has
     the same function; kept identical so a stored benchmark row and a live
     run at the same scale are the same experiment). Each unreleased lot's
     time-to-release is divided by `scale` and its due date moves by the same
     amount; released lots and WIP are untouched."""
+    if parts:
+        # Per-part ramp (adr/0014). Raising every part's rate uniformly loads
+        # every family and every mask together, which tests capacity as much
+        # as scheduling. Ramping ONE part concentrates the extra demand on
+        # that part's ~25 masks and leaves the other nine alone -- the
+        # asymmetric contention that dedication-skew-70 showed is what makes
+        # the dispatching decision worth anything. It is also what a fab
+        # actually does: products ramp one at a time.
+        now = instance.current_time
+        n = 0
+        for lot in instance.dispatchable_lots:
+            s = parts.get(lot.part_name, scale)
+            if not s or abs(s - 1.0) < 1e-9 or lot.release_at <= now:
+                continue
+            new_rel = now + (lot.release_at - now) / s
+            lot.deadline_at -= lot.release_at - new_rel
+            lot.release_at = new_rel
+            n += 1
+        instance.dispatchable_lots.sort(key=lambda k: k.release_at)
+        return n
     if not scale or abs(scale - 1.0) < 1e-9:
         return 0
     now = instance.current_time
@@ -1065,12 +1153,26 @@ class FeedPlugin(IPlugin):
                 if not self._name(m).startswith('Delay_'))
         ntools = real or 1
         busy = sum(1 for t in self._busy if not t.startswith('Delay_'))
+        # Scanner-scoped utilisation (adr/0014). Fab-wide utilisation dilutes
+        # a litho constraint across 1,313 tools, ~80 of which are scanners; a
+        # mask that idles a scanner shows up here at 16x the weight. Reported
+        # on the pristine fab too, because the number only means something
+        # against the same number without masks.
+        nscan, sbusy = self._scanner_counts(instance)
         iq, iw = self._idle_with_wip(instance)
         return {
             't': round(t, 1),
             'wip': len(instance.active_lots),
             'running': len(self._on_tool),
             'util': round(100.0 * busy / ntools, 1),
+            'sutil': round(100.0 * sbusy / nscan, 1) if nscan else None,
+            'nscan': nscan,
+            # Masks checked out right now. A run statistic and a deadlock
+            # probe: a claim that is never released shows up as a floor this
+            # never falls below.
+            'rlock': (instance.reticles.locked_now(t)
+                      if getattr(instance, 'reticles', None) is not None
+                      else None),
             'thr': n,                                   # lots completed / day
             'ct': round(sum(cyc) / n / 86400, 3) if n else 0,      # days
             'otd': round(100.0 * (n - len(late)) / n, 1) if n else 0,
@@ -1091,6 +1193,40 @@ class FeedPlugin(IPlugin):
             'iq': iq,
             'iw': iw,
         }
+
+    def _scanner_counts(self, instance):
+        """(scanner tools in the fab, scanners busy now).
+
+        The family set is cached on first call: from the bound reticle
+        library when there is one, and otherwise read from the dataset's tool
+        master so the pristine baseline is the same set of tools.
+        """
+        fams = getattr(self, '_scan_fams', None)
+        if fams is None:
+            lib = getattr(instance, 'reticles', None)
+            if lib is not None and lib.scanner_families:
+                # Authoritative: the generator resolved these from STNGRP.
+                fams = set(lib.scanner_families)
+            else:
+                # Pristine baseline, where there is no library to ask and the
+                # instance carries no station group. On SMT2020 the scanners
+                # are exactly the families beginning `Litho_` once the `_REG`
+                # registration tools are removed: `LithoTrack_` and `LithoMet`
+                # do not match the prefix (no underscore after "Litho"), and
+                # `Litho_REG_*` sits in group `Litho_Met` and holds no mask.
+                fams = {f for f in instance.family_machines
+                        if f.startswith('Litho_')
+                        and not f.startswith('Litho_REG')}
+            self._scan_fams = fams
+            self._scan_n = sum(1 for m in instance.machines
+                               if m.family in fams)
+        if not self._scan_fams:
+            return 0, 0
+        # Tool names are '<family>_<idx>', so the family is everything before
+        # the last underscore.
+        busy = sum(1 for t in self._busy
+                   if t.rsplit('_', 1)[0] in self._scan_fams)
+        return self._scan_n, busy
 
     def _idle_with_wip(self, instance):
         """Tools idle right now while WIP waited: (qualified, family-wide).
@@ -1592,6 +1728,24 @@ def main():
                         '(ADR 0013). Keys the warm-up checkpoint and is stamped '
                         'on the run, so an overlay row is never laid over a '
                         'pristine one unlabelled. Omit for the pristine fab.')
+    p.add_argument('--cqt', action='store_true',
+                   help='enforce the dataset queue-time windows (adr/0016)')
+    p.add_argument('--cqt-max-rework', type=int, default=3,
+                   help='scrap a lot after this many queue-time reworks; 0 '
+                        'means unbounded (adr/0016 §6)')
+    p.add_argument('--cqt-scale', type=float, default=1.0,
+                   help='multiply every queue-time window (adr/0016)')
+    p.add_argument('--trim', default=None,
+                   help='right-size the tool set from a trim table beside the '
+                        'dataset, e.g. --trim trim-82 (adr/0015). A trimmed '
+                        'fab is a different fab and keys its own checkpoint.')
+    p.add_argument('--starts-part', action='append', default=None,
+                   metavar='PART=SCALE',
+                   help='ramp ONE part instead of the whole fab, e.g. '
+                        '--starts-part part_1=3.3 (repeatable). Applied during '
+                        'the warm-up too, and keyed into the checkpoint name: '
+                        'a fab warmed under a uniform mix has the wrong WIP '
+                        'for a ramped run (adr/0014).')
     p.add_argument('--starts-scale', type=float, default=1.0,
                    help='release the remaining lots this many times faster than '
                         'order.txt schedules them, after the warm-up checkpoint '
@@ -1717,8 +1871,19 @@ def main():
     # Resume from a checkpoint if one covers this run: the warm-up is then
     # paid once per (dataset, seed, dispatcher, batching, day) rather than on
     # every start. --rebuild forces the slow path.
+    a.trim_obj = trim_mod.load(a.trim)
+    a.starts_part_map = None
+    if getattr(a, 'starts_part', None):
+        a.starts_part_map = {}
+        for spec in a.starts_part:
+            part, _, val = spec.partition('=')
+            if not part or not val:
+                p.error(f'--starts-part expects PART=SCALE, got {spec!r}')
+            a.starts_part_map[part] = float(val)
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
-        a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days, ov)
+        a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days,
+        ov, a.starts_part_map, a.trim_obj, a.cqt, a.cqt_scale,
+        _mx(a))
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1730,11 +1895,14 @@ def main():
                '--batch-strat', a.batch_strat, '--days', str(a.days),
                '--dispatcher', warm_rule, '--warmup-days', str(a.warmup_days),
                '--checkpoint-only', '--no-store', '--speed', '0',
-               '--out', os.devnull] + (['--overlay', a.overlay] if a.overlay else [])
+               '--out', os.devnull] + (['--overlay', a.overlay] if a.overlay else []) \
+              + [f'--starts-part={k}={v:g}'
+                 for k, v in sorted((a.starts_part_map or {}).items())]
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
-                         a.batch_strat, a.days, ov)
+                         a.batch_strat, a.days, ov, a.starts_part_map,
+                         a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1779,6 +1947,13 @@ def main():
         t0 = time.time()
         instance = load_checkpoint(ckpt, feed, ov)
         if instance is not None:
+            # NOT the mix: a resumed checkpoint is warmed under it and keyed
+            # by it, so the schedule is already re-timed. Re-applying it
+            # compresses an already-compressed list (adr/0014). --starts-scale
+            # is not in the key and does still apply here.
+            instance.cqt_enforce = bool(a.cqt)
+            instance.cqt_scale = float(a.cqt_scale or 1.0)
+            instance.cqt_max_rework = _mx(a)
             n = scale_starts(instance, a.starts_scale)
             if n:
                 print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
@@ -1799,11 +1974,27 @@ def main():
                   f'published', file=sys.stderr)
     if instance is None:
         instance, run_to = sim_runner.build(
-            a.dataset, a.days, a.seed, [feed], a.batch_strat)
+            a.dataset, a.days, a.seed, [feed], a.batch_strat,
+            build_days=build_horizon_days(a), trim=a.trim_obj)
         # Bound BEFORE the first decision point, so the warm-up this run
         # checkpoints was itself simulated under the matrix.
         if ov is not None:
             ov.bind(instance)
+        # Same reasoning for the start mix (adr/0014): the ramp has to be in
+        # force THROUGH the warm-up, not applied to a fab warmed uniform.
+        # Cycle time is ~37 days, so a fab warmed at the uniform mix is full
+        # of pre-ramp lots and a 30-day window measures the OLD mix draining.
+        # The checkpoint name carries the mix (`mix_key`) so the two can
+        # never be confused.
+        instance.cqt_enforce = bool(a.cqt)
+        instance.cqt_scale = float(a.cqt_scale or 1.0)
+        instance.cqt_max_rework = _mx(a)
+        if a.starts_part_map:
+            n = scale_starts(instance, 1.0, a.starts_part_map)
+            print(f'  start mix: {n} future releases re-timed for '
+                  + ', '.join(f'{k}x{v:g}' for k, v in
+                              sorted(a.starts_part_map.items())),
+                  file=sys.stderr)
 
     def before_dispatch(instance):
         nonlocal warmed, next_report
@@ -1844,7 +2035,8 @@ def main():
                                kpi=feed._kpi)
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
-                              a.batch_strat, a.days, ov)
+                              a.batch_strat, a.days, ov, a.starts_part_map,
+                              a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)

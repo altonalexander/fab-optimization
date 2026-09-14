@@ -485,23 +485,27 @@ what-ifs conversationally. It is built with the **Google Agent Development Kit
 (ADK)** on **Gemini Flash**, served from **Vertex AI**, so the model call stays
 inside your GCP project.
 
-**Shape.** One root `dispatch` agent talks to the engineer and routes each
-question to a specialist it calls as a tool: `state` (what is happening now)
-or `scenario` (what-if against the cloned registry). Each specialist owns the
-tools for its kind of question, so a live number and a simulated one never
-come from the same agent. Adding a specialist is one more `LlmAgent` in
-`api/assistant.py`. The runner is driven in-process per request, with an
-in-memory session rebuilt from the transcript the UI sends, so the API stays
-stateless.
+**Shape.** **One** agent with six tools — not a router with specialists. That
+earlier shape reads well but cost an extra model round trip per question, and
+this is read by someone standing at a tool; see
+[`docs/adr/0018`](../docs/adr/0018-dashboard-assistant.md) §3.1. A question the
+documentation answers ("how does this page work") takes **one** round trip and
+no tool call at all, because the help guide is resident in a static system
+prompt; a question about live state takes **two**. The runner is driven
+in-process per request, with an in-memory session rebuilt from the transcript
+the UI sends, so the API stays stateless.
 
-**Grounding is the whole design.** The specialists are given four tools and
-every agent is instructed that each number, tool ID, and lot ID it states must
-come from a tool result:
+**Grounding is the whole design.** Every number, tool ID, lot ID and recipe
+the agent states must come from a tool result in that conversation — never
+recalled, never estimated:
 
 | tool | does |
 |---|---|
 | `get_fab_state` | live counts, throughput, per-tool online status |
+| `get_page_data` | the same JSON the current page drew, by route |
+| `get_bottlenecks` | tool groups ranked by lots waiting, plus busiest bays |
 | `get_recent_events` | recent lot/tool events from the Kafka mirror |
+| `explain_unassigned` | why the planner left lots unassigned |
 | `run_scenario` | takes tools down and re-plans via the **C++ planner** |
 | `explain_unassigned` | held lots with the reason for each |
 

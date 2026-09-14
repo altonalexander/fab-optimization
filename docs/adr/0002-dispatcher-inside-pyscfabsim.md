@@ -1,10 +1,14 @@
 # 0002 — Run the dispatcher inside PySCFabSim to compare it
 
-**Status:** Proposed, not built. This is the experiment that would settle
-claim 2 in [0000](0000-motivation-scope-and-boundaries.md), and it has not been
-run.
+**Status:** **Built and run, 2026-09-12.** The harness is
+`bench/tools/compare.py`; every rule resumes one shared day-90 `fifo`
+checkpoint, so the only thing differing between rows is the dispatching
+decision. The experiment this page proposed has been run many times over, and
+claim 2 of [0000](0000-motivation-scope-and-boundaries.md) has an answer —
+see [0014 §7](0014-reticle-overlay.md).
 
-**Original note:** proposal, not built. Nothing in this file is implemented. It records
+**Original note (2026-08-30), kept because the shape it describes is what got
+built:** proposal, not built. Nothing in this file is implemented. It records
 the intended shape of the comparison harness that `README.md` says does not yet
 exist.
 

@@ -95,6 +95,37 @@ def families_in_scope(instance, groups_by_family, scope, include_delay):
     return picked
 
 
+def dist_mean(d):
+    """Mean of a PySCFabSim distribution, whatever class it is.
+
+    Three classes with three different attributes and an incomplete
+    `avg()` surface (`baselines/pyscfabsim/simulation/tools.py`):
+
+        UniformDistribution      .m  .avg()
+        ConstantDistribution     .c  .avg()       -- NO .m
+        ExponentialDistribution  .p              -- NO .m AND NO .avg()
+
+    The demand model here used to read `.m` with a `hasattr` guard falling
+    back to 0.0, which silently returned **zero demand for every step with a
+    constant or exponential process time** -- 45 of SMT2020 LVHM's 105
+    families. That understated fab load (53% measured against 76% over the
+    tools that actually have work), and it understated reticle load, which is
+    the number ADR 0014 §6 leaned on. A plain switch to `.avg()` is not the
+    fix either: it raises AttributeError on the exponential class.
+    """
+    if d is None:
+        return 0.0
+    if hasattr(d, 'avg'):
+        return float(d.avg())
+    if hasattr(d, 'p'):          # exponential: expovariate(1/p) has mean p
+        return float(d.p)
+    if hasattr(d, 'm'):
+        return float(d.m)
+    if hasattr(d, 'c'):
+        return float(d.c)
+    return 0.0
+
+
 def machine_seconds_per_lot(instance):
     """Expected tool-seconds a lot of each part asks of each family.
 
@@ -126,8 +157,7 @@ def machine_seconds_per_lot(instance):
     for part, route in _routes_by_part(instance).items():
         for step in route.steps:
             fam = step.family
-            t = step.cascading_time.m if hasattr(step.cascading_time, 'm') else 0.0
-            t = float(t)
+            t = dist_mean(step.cascading_time)
             if not cascading.get(fam, False):
                 t += lu.get(fam, 0.0)
             if step.batch_max and step.batch_max > 1:

@@ -1,10 +1,22 @@
 # 0013 — Tool dedication overlay: make the fab worth assigning, then measure
 
-**Status:** Proposed, 2026-09-10. Plan only; no code, no numbers yet. This is
-the first item of `docs/NEXT.md` §2 (data overlay) and the experiment ADR
-0012 deferred to: its "what would overturn this" names *an overlay fab where
-the assignment solver still adds nothing over a sort*. This ADR is how that
-condition gets tested.
+**Status:** Implemented 2026-09-10; first rows 2026-09-11, and they do not
+support the hypothesis. §3.1–§3.5 are built and gated; §3.6's 30-day screen
+is in [`bench/results/dedication/`](../../bench/results/dedication/README.md).
+This is the first item of `docs/NEXT.md` §2 (data overlay) and the experiment
+ADR 0012 deferred to: its "what would overturn this" names *an overlay fab
+where the assignment solver still adds nothing over a sort*. This ADR is how
+that condition gets tested.
+
+**What the screen said — read §8 before planning off this page.** The
+slate − cr gap does not grow with dedication; ordered by how much capacity
+each matrix removes, it runs backwards. `idleQ`, the KPI §3.5 built to favour
+a matcher, is worse for the slate in all eight cells. And the generator
+refuses the fractions §3.2 names: 0.50 all-scope deletes capacity at eight
+families, so the matrices actually tested are 0.65–0.80 and mild enough that
+`fifo` keeps 98–99% on-time on every fab. The mechanism, the predicate and
+the tool-master field all work as designed — the fab just does not care as
+much as §1 assumed.
 
 Written for hand-off: a different agent, on a machine with enough cores to
 run the rows continuously, should be able to pick this up from this page,
@@ -256,3 +268,43 @@ downstream and batch terms, and the optimisation effort moves entirely to
 the segment scheduler. Either way the overlay mechanism, the predicate and
 the tool-master field are kept; they are what a realistic fab needs
 regardless of which dispatcher wins.
+
+## 8. What the first rows said (2026-09-11)
+
+Full table and caveats in
+[`bench/results/dedication/README.md`](../../bench/results/dedication/README.md).
+Four fabs × two starts scales × fifo/cr/slate, 30 days from each fab's own
+overlay-keyed day-90 checkpoint. Both gates in §3.5 held first: pristine
+fingerprints unchanged, and `slate-cr` reproducing `cr` under every overlay.
+
+**§3.2's fractions are not reachable on this testbed.** The capacity check
+refuses 0.50 all-scope on eight families — `Litho_FE_98` goes 79.2% → 117.6%
+effective — and the balanced frontier sits between 0.60 (refused) and 0.65
+(written). The check is doing exactly what §3.2 built it to do; the
+consequence is that "a dedicated SMT2020" means 0.65–0.80, not 0.33–0.50.
+At that strength a myopic rule barely notices the matrix: `fifo` holds
+98.0–98.9% on-time and `cr` 99.3–99.9% on every fab, pristine included.
+
+**The separation runs backwards.** §1 predicts the slate − cr gap grows with
+dedication. Ordered by capacity removed it shrinks: +9.6% on *pristine* at
+1.03×, +12.8% on the least dedicated overlay (`all-80`), +2.4% and −1.3% on
+the most dedicated (`all-70`). Whatever produces the slate's edge in these
+rows, it is not the qualification matrix.
+
+**§3.5's KPI disagrees with §1 too.** `idleQ` — family tool-hours idle while
+qualified WIP waited — was defined as the quantity a matcher should reduce
+and a sort key should not. `cr` has the lowest `idleQ` of the three rules in
+all eight cells; the slate is 32–71 t·h/d worse. Coverage also rose under
+the overlays (45.4% → 48.7–51.7%) rather than falling as §3.5 expected: a
+narrower eligible set means fewer tools compete for each token.
+
+**What this does and does not settle.** It does not meet ADR 0012's overturn
+condition. It also does not refute §1 cleanly, because a matrix this mild is
+a weak test — and the 30-day window cannot carry the throughput column at a
+~36-day cycle time (ADR 0012 measured +1.0% over 120 days where this shows
++9.6%). So the order of work from here is: the harder matrices first
+(`dedication-all-65`, `dedication-skew-70`, both written and both at the
+feasible edge), then §3.6's 120-day confirmation, and only then §7's reticle
+branch. If a matrix at the capacity frontier still does not separate the
+rules, the honest conclusion is that per-family assignment has no room on
+SMT2020 at any dedication a balanced fab can carry, and §7 applies.
