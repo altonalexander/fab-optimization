@@ -179,53 +179,139 @@ def t_fab():
                      'batch steps', 'setup-bearing steps'], rows)
 
 
+# -- Table: five-seed viability (one deterministic run per sort key) --------
+def t_viability5():
+    rows = []
+    for sd in range(5):
+        for key, lab in ((f'fifo_s{sd}', 'FIFO'), (f'cr_s{sd}', 'CR'),
+                         (f'qt_s{sd}', 'QT'), (f'qt50_s{sd}', 'QT tuned')):
+            r = D.get(key)
+            if not r:
+                rows.append([sd, lab] + ['—'] * 8)
+                continue
+            rows.append([sd, lab, f1(r['good_per_day']), pct(r['on_time_pct']),
+                         f1(r['cycle_time_days']), big(r['tardiness_lot_days']),
+                         f1(r['scrap_per_day']), f1(r['violations_per_day']),
+                         f"{r['wip_first']:,}→{r['wip_last']:,}",
+                         sgn(r['wip_slope_final_third'])])
+    return md_table(['seed', 'rule', 'good/day', 'on-time', 'CT (d)', 'tardiness',
+                     'scrap/day', 'viol/day', 'WIP', 'slope, final ⅓'], rows)
+
+
+def _slate_reps(sd):
+    return [D[k] for k in (f'slate_s{sd}_a', f'slate_s{sd}_b', f'slate_s{sd}_c') if k in D]
+
+
+def _mmm(vals, fmt):
+    """mean (min–max) over replicates, or the single value."""
+    if not vals:
+        return '—'
+    if len(vals) == 1:
+        return fmt(vals[0])
+    return f'{fmt(sum(vals) / len(vals))} ({fmt(min(vals))}–{fmt(max(vals))})'
+
+
+# -- Table: the paired comparison, per seed ---------------------------------
+def t_paired():
+    metrics = [('on_time_pct', 'on-time %', f2, +1), ('tardiness_lot_days', 'tardiness', big, -1),
+               ('good_per_day', 'good/day', f1, +1), ('cycle_time_days', 'CT (d)', f1, -1),
+               ('part_spread', 'per-product spread', f1, -1)]
+    rows = []
+    for sd in range(3):
+        q = D.get(f'qt50_s{sd}')
+        reps = _slate_reps(sd)
+        for key, lab, fmt, better in metrics:
+            qv = q[key] if q else None
+            sv = [r[key] for r in reps if r.get(key) is not None]
+            if qv is None or not sv:
+                rows.append([sd, lab, fmt(qv) if qv is not None else '—',
+                             _mmm(sv, fmt), '—', '—'])
+                continue
+            diffs = [v - qv for v in sv]
+            allwin = all((d * better) > 0 for d in diffs)
+            rows.append([sd, lab, fmt(qv), _mmm(sv, fmt),
+                         _mmm(diffs, lambda x: f'{x:+.2f}' if key == 'on_time_pct' else f'{x:+,.1f}'),
+                         '✓' if allwin else '✗', ])
+    return md_table(['seed', 'metric', 'QT tuned', 'SLATE (mean, min–max of 3)',
+                     'SLATE − QT (mean, range)', 'better on every replicate'],
+                    rows, align=['r', 'l', 'r', 'r', 'r', 'c'])
+
+
+# -- Table: determinism of the sort key -------------------------------------
+def t_determinism():
+    a, b = D.get('qt50_s0'), D.get('qt50_s0_repeat')
+    if not (a and b):
+        return '_(repeat run not yet available)_'
+    same = a['fingerprint'] == b['fingerprint']
+    return md_table(['run', 'good/day', 'on-time', 'tardiness', 'fingerprint'],
+                    [['QT tuned, seed 0', f1(a['good_per_day']), pct(a['on_time_pct']),
+                      big(a['tardiness_lot_days']), f'`{a["fingerprint"]}`'],
+                     ['QT tuned, seed 0, repeat', f1(b['good_per_day']), pct(b['on_time_pct']),
+                      big(b['tardiness_lot_days']), f'`{b["fingerprint"]}`'],
+                     ['identical?', '', '', '', '**yes**' if same else '**NO**']])
+
+
 TABLES = {
+    'table_viability5': t_viability5, 'table_paired': t_paired,
+    'table_determinism': t_determinism,
     'table_seeds': t_seeds, 'table_main': t_main, 'table_parts': t_parts,
     'table_parts_ct': t_parts_ct, 'table_boost': t_boost, 'table_mech': t_mech,
     'table_window': t_window, 'table_fab': t_fab,
 }
 
-src = open(os.path.join(PAPER, 'paper.md.in'), encoding='utf-8').read()
-src = src.replace('{{git_sha}}', SHA)
-for name, fn in TABLES.items():
-    src = src.replace('{{' + name + '}}', fn())
-missing = re.findall(r'\{\{(\w+)\}\}', src)
-if missing:
-    raise SystemExit(f'unfilled placeholders: {missing}')
-open(os.path.join(PAPER, 'paper.md'), 'w', encoding='utf-8').write(src)
+def main():
+    import sys
+    if len(sys.argv) > 2 and sys.argv[1] == '--table':
+        print(TABLES[sys.argv[2]]())
+        return
+    build()
 
-body = markdown.markdown(src, extensions=['tables', 'fenced_code', 'toc',
-                                          'attr_list', 'md_in_html',
-                                          'footnotes', 'smarty'])
-CSS = """
-@page { size: A4; margin: 22mm 20mm 24mm 20mm;
-  @bottom-center { content: counter(page); font: 9pt 'DejaVu Sans', sans-serif; color: #52514e; } }
-body { font: 10.4pt/1.42 'DejaVu Serif', Georgia, serif; color: #0b0b0b; }
-h1 { font: 700 19pt/1.2 'DejaVu Sans', sans-serif; margin: 0 0 6pt; }
-h2 { font: 700 13pt/1.25 'DejaVu Sans', sans-serif; margin: 20pt 0 6pt; page-break-after: avoid; }
-h3 { font: 700 11pt/1.25 'DejaVu Sans', sans-serif; margin: 14pt 0 4pt; page-break-after: avoid; }
-p { margin: 0 0 8pt; text-align: justify; hyphens: auto; }
-.meta { font: 9.5pt 'DejaVu Sans', sans-serif; color: #52514e; margin-bottom: 14pt; }
-.abstract { font-size: 9.6pt; margin: 10pt 18pt 16pt; padding: 10pt 12pt; border-top: 0.5pt solid #c3c2b7; border-bottom: 0.5pt solid #c3c2b7; }
-.abstract p { text-align: justify; }
-table { border-collapse: collapse; width: 100%; font: 8.2pt/1.3 'DejaVu Sans', sans-serif; margin: 8pt 0 10pt; page-break-inside: avoid; }
-th, td { padding: 3pt 5pt; border-bottom: 0.5pt solid #e1e0d9; vertical-align: top; }
-th { border-bottom: 0.8pt solid #c3c2b7; text-align: left; font-weight: 700; color: #0b0b0b; }
-td { font-variant-numeric: tabular-nums; }
-figure { margin: 12pt 0 14pt; page-break-inside: avoid; text-align: center; }
-figure img { max-width: 100%; }
-figcaption { font: 8.6pt/1.35 'DejaVu Sans', sans-serif; color: #52514e; text-align: left; margin-top: 6pt; }
-code { font: 8.6pt 'DejaVu Sans Mono', monospace; background: #f3f2ee; padding: 0 2pt; }
-pre { font: 8.2pt/1.35 'DejaVu Sans Mono', monospace; background: #f3f2ee; padding: 6pt 8pt; overflow-x: auto; page-break-inside: avoid; }
-pre code { background: none; padding: 0; }
-blockquote { margin: 8pt 14pt; padding-left: 8pt; border-left: 2pt solid #e1e0d9; color: #52514e; }
-ul, ol { margin: 0 0 8pt 18pt; padding: 0; }
-li { margin-bottom: 3pt; }
-.footnote { font-size: 8.6pt; }
-.refs p { font-size: 9.2pt; text-align: left; margin-left: 14pt; text-indent: -14pt; }
-sup { font-size: 7pt; }
-"""
-html = f'<!doctype html><meta charset="utf-8"><title>paper</title><style>{CSS}</style><body>{body}</body>'
-open(os.path.join(PAPER, 'paper.html'), 'w', encoding='utf-8').write(html)
-HTML(string=html, base_url=PAPER).write_pdf(os.path.join(PAPER, 'paper.pdf'))
-print('wrote paper.md, paper.html, paper.pdf  (sha', SHA + ')')
+
+def build():
+    src = open(os.path.join(PAPER, 'paper.md.in'), encoding='utf-8').read()
+    src = src.replace('{{git_sha}}', SHA)
+    for name, fn in TABLES.items():
+        src = src.replace('{{' + name + '}}', fn())
+    missing = re.findall(r'\{\{(\w+)\}\}', src)
+    if missing:
+        raise SystemExit(f'unfilled placeholders: {missing}')
+    open(os.path.join(PAPER, 'paper.md'), 'w', encoding='utf-8').write(src)
+
+    body = markdown.markdown(src, extensions=['tables', 'fenced_code', 'toc',
+                                              'attr_list', 'md_in_html',
+                                              'footnotes', 'smarty'])
+    CSS = """
+    @page { size: A4; margin: 22mm 20mm 24mm 20mm;
+      @bottom-center { content: counter(page); font: 9pt 'DejaVu Sans', sans-serif; color: #52514e; } }
+    body { font: 10.4pt/1.42 'DejaVu Serif', Georgia, serif; color: #0b0b0b; }
+    h1 { font: 700 19pt/1.2 'DejaVu Sans', sans-serif; margin: 0 0 6pt; }
+    h2 { font: 700 13pt/1.25 'DejaVu Sans', sans-serif; margin: 20pt 0 6pt; page-break-after: avoid; }
+    h3 { font: 700 11pt/1.25 'DejaVu Sans', sans-serif; margin: 14pt 0 4pt; page-break-after: avoid; }
+    p { margin: 0 0 8pt; text-align: justify; hyphens: auto; }
+    .meta { font: 9.5pt 'DejaVu Sans', sans-serif; color: #52514e; margin-bottom: 14pt; }
+    .abstract { font-size: 9.6pt; margin: 10pt 18pt 16pt; padding: 10pt 12pt; border-top: 0.5pt solid #c3c2b7; border-bottom: 0.5pt solid #c3c2b7; }
+    .abstract p { text-align: justify; }
+    table { border-collapse: collapse; width: 100%; font: 8.2pt/1.3 'DejaVu Sans', sans-serif; margin: 8pt 0 10pt; page-break-inside: avoid; }
+    th, td { padding: 3pt 5pt; border-bottom: 0.5pt solid #e1e0d9; vertical-align: top; }
+    th { border-bottom: 0.8pt solid #c3c2b7; text-align: left; font-weight: 700; color: #0b0b0b; }
+    td { font-variant-numeric: tabular-nums; }
+    figure { margin: 12pt 0 14pt; page-break-inside: avoid; text-align: center; }
+    figure img { max-width: 100%; }
+    figcaption { font: 8.6pt/1.35 'DejaVu Sans', sans-serif; color: #52514e; text-align: left; margin-top: 6pt; }
+    code { font: 8.6pt 'DejaVu Sans Mono', monospace; background: #f3f2ee; padding: 0 2pt; }
+    pre { font: 8.2pt/1.35 'DejaVu Sans Mono', monospace; background: #f3f2ee; padding: 6pt 8pt; overflow-x: auto; page-break-inside: avoid; }
+    pre code { background: none; padding: 0; }
+    blockquote { margin: 8pt 14pt; padding-left: 8pt; border-left: 2pt solid #e1e0d9; color: #52514e; }
+    ul, ol { margin: 0 0 8pt 18pt; padding: 0; }
+    li { margin-bottom: 3pt; }
+    .footnote { font-size: 8.6pt; }
+    .refs p { font-size: 9.2pt; text-align: left; margin-left: 14pt; text-indent: -14pt; }
+    sup { font-size: 7pt; }
+    """
+    html = f'<!doctype html><meta charset="utf-8"><title>paper</title><style>{CSS}</style><body>{body}</body>'
+    open(os.path.join(PAPER, 'paper.html'), 'w', encoding='utf-8').write(html)
+    HTML(string=html, base_url=PAPER).write_pdf(os.path.join(PAPER, 'paper.pdf'))
+    print('wrote paper.md, paper.html, paper.pdf  (sha', SHA + ')')
+
+
+main()
