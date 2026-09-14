@@ -333,7 +333,77 @@ Same throughput, eleven points better on-time, a day and a half quicker, and
 **seventeen times less lateness**. Inventory flat, scrap still zero,
 queue-time violations back down to the sort key's level.
 
-### And it won the way it was supposed to
+### And then we made the simple rule harder
+
+Before writing any of this up as a solver win, we went back and improved the
+sort key it was being compared against.
+
+The sort key had an obvious flaw of exactly the kind we'd just found in the
+solver: a parameter nobody had chosen. It bumped *any* lot whose clock was
+running, whether that lot had twenty minutes left or two hundred hours. That's
+indiscriminate — it shoves lots to the front that were never actually in
+danger, and disrupts the machine's setup and batching to do it.
+
+One change: only bump a lot once it has burned through half its window.
+
+| | on-time | total lateness | worst-to-best product gap |
+|---|---:|---:|---:|
+| sort key, as published | 81.7% | 1,925 lot-days | 33 points |
+| **sort key, with the threshold** | **89.6%** | **524** | **16 points** |
+| solver | 93.0% | 118 | 15 points |
+
+**That cost us the most interesting thing we thought we'd found.**
+
+### The claim we had to withdraw
+
+We had written that the solver won by *rebalancing between products* — lifting
+the ones running late without hurting the ones running early — and that a
+simple rule can't do that, because ranking lots one at a time gives you no way
+to move slack from one product to another. It was the first time the project's
+central design claim had shown up in real numbers.
+
+The improved sort key does it too. Same rebalancing, same closing of the gap
+between best and worst product, from one threshold.
+
+So that wasn't a property of solving-as-a-set after all. It was a property of
+not wasting effort on lots that were never at risk — and a sort key can be
+told that in one line.
+
+### What the solver is actually worth
+
+Against the best simple rule we have:
+
+- **on-time 93.0% vs 89.6%** — three points better
+- **total lateness 118 vs 524 lot-days** — more than four times less
+- **cycle time 36.9 vs 38.3 days** — a day and a half quicker
+- level on everything else: output, scrap, queue-time violations, stability
+
+for about **five times the computing cost**.
+
+The lateness number is the one worth staring at. It's the only gap that stayed
+wide after we improved the rule — the solver doesn't just miss fewer dates, it
+misses them by much less when it does miss. We don't have an explanation for
+that yet, and it's a better question than the one we started with.
+
+One caveat we're recording rather than hiding: the solver was run twice, and
+the two runs agree almost exactly. Each version of the improved sort key was
+run once. That's not a balanced comparison. We stopped there deliberately —
+the goal was to find out whether a solver could work at all, not to write the
+definitive study of a sort key — but a reader should know.
+
+### So: does the solver earn its place?
+
+**Yes, minimally.** On a realistic fab — enforced queue times, rework, scrap,
+running at full production — the solver matches the best simple rule on
+everything that keeps the fab alive, and beats it on lateness, for roughly
+five times the compute.
+
+That is a much smaller claim than we thought we had this morning, and it is a
+real one. Whether three points of on-time and four times less lateness are
+worth five times the compute is a business question, not a technical one, and
+it now has actual numbers attached to it.
+
+### How it won, for the record
 
 The target was the imbalance between products: some finishing at 99% on time,
 others at 66%. A single sort key can only rank, so it can't easily take slack
