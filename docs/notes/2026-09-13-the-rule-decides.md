@@ -287,35 +287,127 @@ right** — and the dangerous case isn't the short run that points the wrong
 way, it's the short run that looks acceptable while the thing that ruins it is
 still building.
 
+## The reversal (2026-09-14)
+
+Alton pushed back on the conclusion above, and the pushback was right.
+
+His argument: an optimizer should never *lose* to a simple rule, because it
+could always just copy it. If it loses, we aren't optimizing the right thing.
+So what are we actually solving for?
+
+We went and looked at what the solver is told about queue time. It gets one
+number per lot — how much time is left before the window lapses — and turns it
+into a preference with this:
+
+    boost = 1 + 600 / seconds_of_slack
+
+That constant is **600 seconds**. Ten minutes. It was written for a fab whose
+queue-time windows are measured in minutes.
+
+**This fab's windows are 10 to 240 hours.**
+
+So a lot with sixteen hours left — which is the typical at-risk lot here —
+received a boost of **1.01×**. One percent. Meanwhile the due-date term in the
+same expression reaches fifty times. The queue-time signal wasn't weak; it was
+arithmetically absent. Every conclusion we'd drawn about "the solver can't
+handle queue time" was drawn from a solver that had effectively never been
+told about queue time.
+
+(There are two such constants, 600 in one place and 3600 in another, and the
+design says they're supposed to be the same expression. They aren't.)
+
+The fix is one line: instead of raw seconds, tell the solver what **fraction**
+of its window a lot has left. Then a lot near the end of a ten-hour window and
+one near the end of a ten-day window are treated the same way — which is what
+the constraint actually means. Nothing else changed.
+
+### What happened
+
+| | good lots/day | on-time | cycle time | total lateness |
+|---|---:|---:|---:|---:|
+| queue-time sort key | 57.5 | 81.7% | 38.4 d | 1,925 lot-days |
+| solver, before | 48.1 | 24.9% | 48.8 d | 91,889 lot-days |
+| **solver, after** | **57.4** | **92.9%** | **36.9 d** | **114 lot-days** |
+
+Same throughput, eleven points better on-time, a day and a half quicker, and
+**seventeen times less lateness**. Inventory flat, scrap still zero,
+queue-time violations back down to the sort key's level.
+
+### And it won the way it was supposed to
+
+The target was the imbalance between products: some finishing at 99% on time,
+others at 66%. A single sort key can only rank, so it can't easily take slack
+from one product and give it to another. An assignment across a whole *set*
+can. That was the claim the whole project rested on.
+
+| product | sort key | solver |
+|---|---:|---:|
+| the worst two | 66.4% · 66.7% | **84.9% · 88.6%** |
+| the best three | 98.6% · 99.3% · 99.3% | 99.3% · 98.7% · 99.3% |
+
+**The spread narrowed from 33 points to 14** — every laggard lifted by twelve
+to twenty-two points, and not one of the leaders sacrificed to do it. It found
+slack the ranking couldn't reach, which is precisely the thing an assignment
+solver is supposed to be able to do and had never yet demonstrated here.
+
+It costs about **4.7× the wall clock**, after the speedup.
+
+### What this does and doesn't mean
+
+It does **not** retroactively rescue the earlier three negatives. Machine
+qualification really is just a filter. Reticles really don't bind on this fab.
+Those were different mechanisms and this doesn't touch them.
+
+What it does is make them suspect. If one hardcoded constant being wrong by
+two orders of magnitude was enough to turn a decisive loss into a decisive
+win, then "we tested it and the solver lost" is a weaker statement than it
+sounded. We found this by reading the code and working out what boost a
+typical lot actually receives. Nobody had done that for the other constants
+either.
+
+It also nearly went unnoticed. The solver had been losing for a reason that
+looked like a *finding* — the fab diverges, the solver can't cope — and we had
+written it up that way, with numbers, replicated. It took someone refusing to
+accept that an optimizer should lose.
+
 ## Where that leaves the project
 
-Four kinds of constraint, four losses:
+Four kinds of constraint. Three losses and one win:
 
 - machine qualification — a filter; sorting handles it
 - reticles — never actually binding on this fab
 - queue time — a five-line sort key takes scrap to zero
-- due-date balance — the solver makes it dramatically worse
+- **due-date balance — the solver wins, clearly, once its queue-time term is
+  on the right scale**
 
-The bet the project rested on — that the solver beats the simple rule — has
-now failed four times, the last one on the problem shape that suited it best.
-The recommendation is to stop pursuing the solver for moment-to-moment
-dispatching.
+So the bet the project rested on is **not** dead. It was nearly buried by a
+wrong constant, and the burial had been written up with numbers and
+replicates.
 
-That is not a wasted night, because the other finding is bigger than the one
-we were chasing: **the choice of simple rule decides whether the fab survives
-at all.** We went looking for a few percent and found the difference between a
-fab that runs and one that buries itself.
+Two findings stand, and they are independent:
+
+**The choice of simple rule decides whether the fab survives at all.** A
+queue-time-aware rule holds the fab steady at full production with zero scrap;
+the two standard rules bury it. That is replicated on three seeds and is the
+larger result.
+
+**On top of a rule that keeps the fab alive, the solver buys real balance.**
+Seventeen times less lateness, and the gap between best and worst product
+halved, without sacrificing anything. That is one run so far, with a second
+confirming.
 
 ## What's next
 
-1. One attempt at strengthening how the solver weighs queue time — it treats
-   it as a preference where the sort key treats it as a rule. Tuning, not a
-   new idea, and it should be time-boxed.
-2. Tune the sort key, so that whatever it is compared against next faces a
-   harder bar.
-3. Try the other fab in the dataset. Every negative so far is on the
-   low-volume/high-mix scenario, where machines within a group are identical
-   and reticles never bind — which is exactly where an assignment solver has
-   least to offer.
-4. Give the solver a deterministic deadline, so runs replay. The code already
+1. Confirm on more seeds. One win, one confirming run, one seed.
+2. **Audit the other constants the same way.** We found this one by asking
+   what number a typical lot actually receives. There are several more in the
+   same expression and nobody has checked any of them.
+3. **Stop hand-picking these numbers.** Treat the objective's coefficients as
+   something to be fitted against a full run rather than guessed. The catch is
+   that a short evaluation can't be trusted — we proved that tonight — so each
+   fit costs a real run, which makes it expensive rather than hard.
+4. Tune the sort key too, so the solver faces a harder bar than a first draft.
+5. Re-test the earlier negatives, now that "the solver lost" has been shown to
+   be a statement about a constant at least once.
+6. Give the solver a deterministic deadline, so runs replay. The code already
    claims this and doesn't do it.
