@@ -1,0 +1,112 @@
+{
+ "tools_total": 1313,
+ "tools_real": 913,
+ "tools_delay_pseudo": 400,
+ "families_real": 105,
+ "families_delay": 1,
+ "initial_wip_lots": 2164,
+ "products": [
+  "part_1",
+  "part_10",
+  "part_2",
+  "part_3",
+  "part_4",
+  "part_5",
+  "part_6",
+  "part_7",
+  "part_8",
+  "part_9"
+ ],
+ "route_steps": {
+  "part_3": 583,
+  "part_2": 529,
+  "part_1": 521,
+  "part_10": 390,
+  "part_8": 375,
+  "part_9": 384,
+  "part_7": 353,
+  "part_4": 343,
+  "part_6": 293,
+  "part_5": 242
+ },
+ "cqt_steps_per_product": {
+  "part_3": 41,
+  "part_2": 38,
+  "part_1": 29,
+  "part_10": 26,
+  "part_8": 20,
+  "part_9": 23,
+  "part_7": 24,
+  "part_4": 25,
+  "part_6": 27,
+  "part_5": 11
+ },
+ "cqt_steps_total_distinct": 264,
+ "cqt_window_hours_min": 1.0,
+ "cqt_window_hours_max": 24.0,
+ "cqt_window_hours_distinct": [
+  1.0,
+  2.0,
+  4.0,
+  5.0,
+  6.0,
+  8.0,
+  10.0,
+  16.0,
+  24.0
+ ],
+ "batch_steps_per_product": {
+  "part_3": 17,
+  "part_2": 19,
+  "part_1": 15,
+  "part_10": 15,
+  "part_8": 12,
+  "part_9": 13,
+  "part_7": 12,
+  "part_4": 11,
+  "part_6": 12,
+  "part_5": 9
+ },
+ "setup_steps_per_product": {
+  "part_3": 58,
+  "part_2": 54,
+  "part_1": 48,
+  "part_10": 39,
+  "part_8": 40,
+  "part_9": 34,
+  "part_7": 36,
+  "part_4": 35,
+  "part_6": 30,
+  "part_5": 27
+ },
+ "batch_tools": 0,
+ "family_size_min": 1,
+ "family_size_median": 5,
+ "family_size_max": 118,
+ "largest_families": [
+  [
+   "DE_FE_86",
+   118
+  ],
+  [
+   "LithoTrack_FE_115",
+   41
+  ],
+  [
+   "LithoTrack_FE_95",
+   40
+  ],
+  [
+   "WE_FE_108",
+   29
+  ],
+  [
+   "Litho_FE_92",
+   26
+  ],
+  [
+   "Litho_BE_110",
+   23
+  ]
+ ]
+}
