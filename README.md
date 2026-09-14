@@ -1,5 +1,31 @@
 # fab-optimization
 
+> **On a public 300 mm fab benchmark (~21,000 lots/year), a calibrated
+> assignment solver lifted on-time delivery from 89.6% to 96.1% and cut total
+> lateness by 85% versus the best dispatching rule we could build — at
+> identical output. For a fab shipping ~$1.5B of wafers a year, that's roughly
+> 1,400 more lots (~34,000 wafers) delivered on time annually and about $5M
+> less inventory on the floor, before counting a single expedite fee or lost
+> order. The cost is ~5× the dispatcher's compute — a rounding error against
+> either number.**
+>
+> Simulation, one seed, $3,000/wafer assumed; the full accounting, the
+> caveats, and the results that were wrong on the way are in the paper:
+> **[When Does an Assignment Solver Beat a Sort Key?](docs/paper/paper.pdf)**
+> ([Markdown](docs/paper/paper.md)).
+> Watch the fab run live at **<https://fab.frontanalytics.com>**.
+
+| | |
+|---|---|
+| [![live](docs/screenshots/live.png)](docs/dashboard.md#live--the-fab-right-now) **Live** — the fab right now, KPIs from day 0 | [![live-controls](docs/screenshots/live-controls.png)](docs/dashboard.md#live--playback-control-and-the-assistant) **Playback + assistant** — pause, 1×–1600×, ask the fab questions |
+| [![lots](docs/screenshots/lots.png)](docs/dashboard.md#lots--cohort-burndown) **Lots** — a day's releases burning down their routes | [![lot](docs/screenshots/lots-lotview.png)](docs/dashboard.md#lots--one-lot-at-a-time) **One lot** — every step, every wait, every tool |
+| [![tools](docs/screenshots/tools.png)](docs/dashboard.md#tools--who-is-busy-who-is-down) **Tools** — who is busy, who is down, by process area | [![tool](docs/screenshots/tool.png)](docs/dashboard.md#tool--one-machines-decisions) **One tool** — its decisions and its queue |
+| [![changeovers](docs/screenshots/tool-changeovers.png)](docs/dashboard.md#tool--setups-and-changeovers) **Setups** — changeovers and minimum runs | [![floor](docs/screenshots/floor.png)](docs/dashboard.md#floor--the-cleanroom-as-a-map) **Floor** — the cleanroom as a map, WIP as heat |
+| [![products](docs/screenshots/products.png)](docs/dashboard.md#products--the-ten-routes-at-a-glance) **Products** — the ten routes at a glance | [![routes](docs/screenshots/routes.png)](docs/dashboard.md#routes--what-a-products-journey-looks-like) **Routes** — one product's journey, step by step |
+| [![slate](docs/screenshots/slate.png)](docs/dashboard.md#slate--the-optimizer-on-demand) **Slate** — the solver's plan, on demand | [![topology](docs/screenshots/topology.png)](docs/dashboard.md#topology--the-pipeline-itself) **Topology** — the four zones and the pipe between them |
+
+Every screen, explained: **[the dashboard, screen by screen →](docs/dashboard.md)**
+
 A wafer fab is the hardest scheduling problem in manufacturing. A silicon lot
 makes hundreds of passes through the same few hundred machines, revisiting the
 same toolsets at different stages — so the queue you join depends on every
@@ -287,8 +313,6 @@ views, per-lot burndown, route and product views, the solver's slate on
 demand, and a Results tab that compares dispatchers on equal terms.
 
 **[Screen-by-screen tour, with screenshots →](docs/dashboard.md)**
-
-![results](docs/screenshots/results.png)
 
 ## Cold start
 
