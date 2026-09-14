@@ -462,13 +462,45 @@ the two standard rules bury it. That is replicated on three seeds and is the
 larger result.
 
 **On top of a rule that keeps the fab alive, the solver buys real balance.**
-Seventeen times less lateness, and the gap between best and worst product
-halved, without sacrificing anything. That is one run so far, with a second
-confirming.
+Against the best rule we could build, six and a half points of on-time and
+nearly seven times less lateness, at about five times the computing cost.
+Whether that trade is worth making is a business question, and it finally has
+numbers attached to it.
+
+## One more run, and a mistake in how we compared
+
+We had been comparing unfairly, and Alton spotted it.
+
+The solver isn't a separate thing from the sort key — it **contains** it. About
+half of the solver's decisions are handed to the sort key as a fallback, when
+the solver hasn't planned that particular lot. So when we improved the sort
+key, we improved the baseline *and* half of the solver — except we only re-ran
+the baseline. The solver was still carrying the old, worse rule inside it while
+being measured against the new, better one.
+
+Re-run with both sides improved:
+
+| | on-time | total lateness | worst-to-best product gap |
+|---|---:|---:|---:|
+| sort key, improved | 89.6% | 524 lot-days | 16 points |
+| solver, carrying the *old* rule inside | 93.0% | 118 | 15 points |
+| **solver, carrying the improved rule** | **96.1%** | **77** | **10 points** |
+
+So the margin is **six and a half points of on-time and nearly seven times
+less lateness**, not the three points we had. And the claim we withdrew comes
+partly back: with both sides fairly improved, the solver *does* balance
+between products better — a 10-point gap against the rule's 16. Not the
+dramatic difference we first reported, and not nothing.
+
+Both of those last cells are single runs, so hold them loosely.
+
+The general trap is worth remembering, because it is invisible after the fact:
+**whenever you improve the baseline, you have to re-run the solver too**, and
+nothing in a saved result says which version of the rule it was carrying.
 
 ## What's next
 
-1. Confirm on more seeds. One win, one confirming run, one seed.
+1. Confirm on more seeds. Everything here is one seed.
 2. **Audit the other constants the same way.** We found this one by asking
    what number a typical lot actually receives. There are several more in the
    same expression and nobody has checked any of them.
