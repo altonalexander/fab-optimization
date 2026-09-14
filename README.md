@@ -90,8 +90,9 @@ sort key at the moment a machine frees up?** Not "is scheduling useful" — a
 sort key is already a scheduler. The specific claim under test is that solving
 an assignment across all waiting lots at once beats ranking them one at a time.
 
-So far the answer is **no, and the reasons are more interesting than the
-result.**
+The answer is **yes, narrowly, and only once the objective was calibrated to
+the fab's actual numbers** — which took four apparent negatives and one
+constant that was wrong by two orders of magnitude.
 
 - **Tool qualification** — not every tool can run every recipe
   ([`0013`](docs/adr/0013-tool-dedication-overlay.md)). The rules did not
@@ -114,20 +115,56 @@ result.**
 
 - **Due-date balance** — the last and best-shaped candidate
   ([`0017`](docs/adr/0017-fab-conditions-analysis.md)). With queue times
-  enforced, a queue-time-aware sort key leaves the fab stable at full load
-  with zero scrap, and ~7% of lots late — unevenly, some products at 99% and
-  others at 84%. Rebalancing that is a decision about a *set*, which is the
-  solver's whole claim. Measured over 180 days, twice: the solver delivers
-  **48.1 good lots/day against the sort key's 57.5, on-time 24.9% against
-  81.7%**, with WIP diverging rather than stationary, at **5.7× the wall
-  clock**. It did not close the per-product gap; it flattened nine of ten
-  products by 53 to 81 points.
+  enforced, a queue-time-aware sort key (`qt`) leaves the fab stable at full
+  load with zero scrap and ~7% of lots late. Measured over 180 days, twice,
+  the solver **lost badly** — 48.1 good lots/day against 57.5, on-time 24.9%
+  against 81.7%, WIP diverging.
 
-**So the answer is no, four times over, and the recommendation is to stop
-pursuing CP-SAT for moment-to-moment dispatching.** The assignment
-formulation may still earn its cost in the segment scheduler, or on the
-high-volume scenario where tools within a group are not interchangeable —
-neither of which this work speaks to.
+  **That result was wrong, and the reason is the most useful thing here.**
+  The solver's queue-time term is `1 + 600/slack_seconds` — written for
+  windows measured in *minutes*. This fab's windows are **10 to 240 hours**,
+  so a typical at-risk lot received a **1.01×** preference against a due-date
+  term reaching 50×. The signal was not weak; it was arithmetically absent.
+  Every conclusion about "the solver can't handle queue time" came from a
+  solver that had never been told about queue time.
+
+  Made window-relative — one line, no change to the solver — and re-run twice:
+
+  | | good/day | on-time | cycle time | tardiness | WIP |
+  |---|---:|---:|---:|---:|---|
+  | `qt`, as first written | 57.5 | 81.7% | 38.4 d | 1,925 | stationary |
+  | `qt`, with a promotion threshold | 57.4 | 89.6% | 38.3 d | 524 | stationary |
+  | `slate`, before the fix | 48.1 | 24.9% | 48.8 d | 91,889 | **diverging** |
+  | **`slate`, after** | **57.5** | **93.0%** | **36.9 d** | **118** | stationary |
+
+  Against the *strongest* baseline: **+3.3 on-time points, 4.3× less
+  tardiness, 1.4 days shorter cycle time**, level on throughput, violations,
+  scrap and stability — at **~5× the wall clock**.
+
+**So the answer is a qualified yes: a minimum viable solver is demonstrated.**
+It matches the best sort key on everything that keeps the fab alive and beats
+it on lateness. Whether that margin justifies 5× the compute is a business
+question, and it now has numbers attached.
+
+Two things we had to withdraw along the way, both recorded in
+[`0017 §12`](docs/adr/0017-fab-conditions-analysis.md):
+
+- We claimed the solver won by **rebalancing across a set** — lifting late
+  products without hurting early ones — which a ranking supposedly cannot do.
+  Giving the sort key a promotion threshold produced the same rebalancing. So
+  that was a property of not wasting effort on lots that were never at risk,
+  not of solving as a set, and ADR 0009's central claim remains
+  **undemonstrated**.
+- The published margin is a **lower bound**. Coverage is ~46%, so the `qt`
+  fallback decides most of a `slate` run, and the measured `slate` rows
+  contained the *untuned* fallback while being compared against the tuned
+  rule. Improving the baseline raises the solver's floor too.
+
+The three earlier negatives are untouched by this — different mechanisms — but
+their standing **as evidence** is weaker now. If one unchecked constant could
+invert a measured, replicated, written-up result, "we tested it and the solver
+lost" means less than it reads. Nobody has audited the remaining coefficients
+the same way.
 
 The bigger finding is the one we were not looking for: **which simple rule you
 choose decides whether the fab is viable at all**, not merely how efficient it
@@ -138,11 +175,12 @@ replicated on three seeds and is worth more than the question it came from.
 ### What went wrong on the way, and why it is in the ADRs
 
 Every wrong answer this project has produced came from the same place: **a
-metric that could not respond to the thing being changed.** Reading a WIP
-drain as throughput. Averaging a per-part effect across the whole fab.
-Measuring on-time over a window while the fab was diverging, so the number
-described where the window was cut rather than the rule. Comparing a two-day
-utilisation against a ninety-day one.
+metric that could not respond to the thing being changed, or a number nobody
+checked.** Reading a WIP drain as throughput. Averaging a per-part effect
+across the whole fab. Measuring on-time over a window while the fab was
+diverging, so the number described where the window was cut rather than the
+rule. Comparing a two-day utilisation against a ninety-day one. Optimising
+against a queue-time term calibrated in minutes for windows measured in days.
 
 Each fix was a control or an invariant, never a better number. The ADRs record
 the mistakes alongside the decisions, because in each case the mistake is the
