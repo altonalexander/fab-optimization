@@ -1,5 +1,20 @@
 # fab-optimization
 
+> **On a public 300 mm fab benchmark (~21,000 lots/year), a calibrated
+> assignment solver lifted on-time delivery from 89.6% to 96.1% and cut total
+> lateness by 85% versus the best dispatching rule we could build — at
+> identical output. For a fab shipping ~$1.5B of wafers a year, that's roughly
+> 1,400 more lots (~34,000 wafers) delivered on time annually and about $5M
+> less inventory on the floor, before counting a single expedite fee or lost
+> order. The cost is ~5× the dispatcher's compute — a rounding error against
+> either number.**
+>
+> Simulation, one seed, $3,000/wafer assumed; the full accounting, the
+> caveats, and the results that were wrong on the way are in the paper:
+> **[When Does an Assignment Solver Beat a Sort Key?](docs/paper/paper.pdf)**
+> ([Markdown](docs/paper/paper.md)).
+> Watch the fab run live at **<https://fab.frontanalytics.com>**.
+
 A wafer fab is the hardest scheduling problem in manufacturing. A silicon lot
 makes hundreds of passes through the same few hundred machines, revisiting the
 same toolsets at different stages — so the queue you join depends on every
