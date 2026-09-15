@@ -116,7 +116,7 @@ def fig1():
 
 # -- Fig 2: replication on three seeds (FIFO / CR / QT) --------------------
 def fig2():
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.7), sharey=True)
+    fig, axes = plt.subplots(1, 5, figsize=(7.2, 2.4), sharey=True)
     for i, ax in enumerate(axes):
         for ent in by_slot(['QT', 'CR', 'FIFO']):
             s = DATA[f'{ent.lower()}_s{i}']['series']
@@ -124,11 +124,13 @@ def fig2():
                     color=SLOT[ent][1], label=LABEL[ent].split(' (')[0])
         ax.set_title(f'seed {i}', loc='left', fontsize=9)
         ax.set_xlim(90, 270)
-        ax.set_xlabel('simulated day')
+        ax.set_xticks([90, 180, 270])
+        ax.set_xlabel('day', fontsize=8)
+        ax.tick_params(labelsize=7)
         if i == 0:
             ax.set_ylabel('WIP, lots')
-            ax.legend(loc='upper left')
-    fig.suptitle('The same three rules on three independent seeds',
+            ax.legend(loc='upper left', fontsize=6.5)
+    fig.suptitle('The same three rules on five independent seeds',
                  x=0.02, ha='left', fontsize=10)
     fig.tight_layout()
     save(fig, 'fig2_seeds')
@@ -301,5 +303,35 @@ def fig7():
     save(fig, 'fig7_headline')
 
 
-for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7):
+# -- Fig 8: what the solver decides -- candidate-set histogram --------------
+def fig8():
+    h = DATA['slate_s1_c']['candidate_hist']
+    order = [('1', '1 lot'), ('1+idle', '1 lot,\nothers idle'), ('2', '2 lots'),
+             ('3-5', '3–5 lots'), ('6+', '6+ lots')]
+    tot = sum(v['fallback'] + v['covered'] for v in h.values())
+    fig, ax = plt.subplots(figsize=(7.2, 2.8))
+    xs = range(len(order))
+    cov = [h[k]['covered'] / tot * 100 for k, _ in order]
+    fb = [h[k]['fallback'] / tot * 100 for k, _ in order]
+    ax.bar(xs, cov, color=SLOT['SLATE_sym'][1], width=0.62, edgecolor=SURFACE,
+           linewidth=1.5, label='decided by the solver')
+    ax.bar(xs, fb, bottom=cov, color=SLOT['QT_tuned'][1], width=0.62,
+           edgecolor=SURFACE, linewidth=1.5, label='decided by the QT fallback')
+    for x, (k, _) in zip(xs, order):
+        c, f = h[k]['covered'], h[k]['fallback']
+        ax.annotate(f'{100 * c / (c + f):.0f}% solver', (x, (c + f) / tot * 100),
+                    xytext=(0, 3), textcoords='offset points', ha='center',
+                    fontsize=7.5, color=INK2)
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels([lab for _, lab in order], fontsize=8)
+    ax.set_ylabel('share of all dispatch decisions, %')
+    ax.set_ylim(0, 46)
+    ax.grid(axis='x', visible=False)
+    ax.legend(loc='upper left', fontsize=7.5)
+    ax.set_title('Who decided, by how many lots were waiting '
+                 '(one 180-day solver run, seed 1)', loc='left', fontsize=10)
+    save(fig, 'fig8_coverage')
+
+
+for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8):
     f()

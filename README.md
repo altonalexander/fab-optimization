@@ -1,15 +1,16 @@
 # fab-optimization
 
 > **On a public 300 mm fab benchmark (~21,000 lots/year), a calibrated
-> assignment solver lifted on-time delivery from 89.6% to 96.1% and cut total
-> lateness by 85% versus the best dispatching rule we could build — at
-> identical output. For a fab shipping ~$1.5B of wafers a year, that's roughly
-> 1,400 more lots (~34,000 wafers) delivered on time annually and about $5M
-> less inventory on the floor, before counting a single expedite fee or lost
-> order. The cost is ~5× the dispatcher's compute — a rounding error against
-> either number.**
+> assignment solver beat the best dispatching rule we could build on the hard
+> seed in all three replicates — on-time delivery 89.6% → 91.2–96.1%, total
+> lateness cut 67–85% — at identical output and zero scrap. For a fab shipping
+> ~$1.5B of wafers a year, the best replicate is roughly 1,400 more lots
+> (~34,000 wafers) delivered on time annually and about $5M less inventory on
+> the floor; the worst replicate is about a quarter of that. On an easy seed, where the rule is
+> already at 99.65%, the solver loses by 0.6–2.0 points. The cost is 3–7× the
+> dispatcher's compute — a rounding error against either number.**
 >
-> Simulation, one seed, $3,000/wafer assumed; the full accounting, the
+> Simulation, three seeds, $3,000/wafer assumed; the full accounting, the
 > caveats, and the results that were wrong on the way are in the paper:
 > **[When Does an Assignment Solver Beat a Sort Key?](docs/paper/paper.pdf)**
 > ([Markdown](docs/paper/paper.md)).
@@ -196,7 +197,7 @@ The bigger finding is the one we were not looking for: **which simple rule you
 choose decides whether the fab is viable at all**, not merely how efficient it
 is. A queue-time-aware rule holds WIP stationary at full load with zero scrap;
 `cr` and `fifo` diverge on the same fab, same demand, same machines. That is
-replicated on three seeds and is worth more than the question it came from.
+replicated on five seeds and is worth more than the question it came from.
 
 ### What went wrong on the way, and why it is in the ADRs
 
