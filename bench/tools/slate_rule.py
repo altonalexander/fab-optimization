@@ -163,6 +163,19 @@ class SlateRule:
         # or measures its fallback.
         self.decisions = 0
         self.decisions_covered = 0
+        # Coverage is only meaningful over decisions where there was a choice.
+        # A tool with ONE eligible waiting lot dispatches it under any rule --
+        # solver token or not -- so counting it as "fallback" understates the
+        # solver and counting it as "covered" overstates it. Split them out:
+        self.decisions_forced = 0            # exactly one eligible lot waiting
+        self.decisions_choice = 0            # two or more eligible lots waiting
+        self.decisions_choice_covered = 0    # ...and the solver had a token
+        # Candidate-set size per decision, split by who decided. Buckets are
+        # eligible waiting lots: '1', '2', '3-5', '6+'. And because SLATE is a
+        # lot-TOOL assignment, a single waiting lot is still an assignment
+        # opportunity when other tools in its family are idle (which tool
+        # takes it matters for setup state); '1+idle' counts those.
+        self.cand_hist = {k: [0, 0] for k in ('1', '1+idle', '2', '3-5', '6+')}  # [fallback, covered]
         self._cur_machine = None
         self.solve_time_s = 0.0
         self.last_stats = {}
@@ -557,6 +570,20 @@ class SlateRule:
             covered = bool(held) and any(l.idx in held for l in machine.waiting_lots)
             if covered:
                 self.decisions_covered += 1
+            n = len(machine.waiting_lots)
+            if n <= 1:
+                self.decisions_forced += 1
+                inst = self.instance
+                fam = getattr(machine, 'family', None)
+                idle = sum(1 for m in inst.family_machines.get(fam, ())
+                           if inst.free_machines[m.idx]) if fam is not None else 1
+                b = '1+idle' if idle >= 2 else '1'
+            else:
+                self.decisions_choice += 1
+                if covered:
+                    self.decisions_choice_covered += 1
+                b = '2' if n == 2 else ('3-5' if n <= 5 else '6+')
+            self.cand_hist[b][1 if covered else 0] += 1
             self._fallback_src = f'rule:slate-fallback-{self.fallback}' if self.fallback != 'score' else 'rule:slate-fallback'
 
             # Stamp WHO decided, using the protocol sim_feed already defines:
@@ -663,6 +690,17 @@ class SlateRule:
             'builds': self.builds,
             'decisions': self.decisions,
             'coverage': round(cov, 4),
+            # the split that makes coverage meaningful (adr/0017): decisions
+            # with one eligible lot are forced under ANY rule; effective
+            # coverage is solver decisions among those with a genuine choice
+            'decisions_forced': self.decisions_forced,
+            'decisions_choice': self.decisions_choice,
+            'decisions_choice_covered': self.decisions_choice_covered,
+            'candidate_hist': {k: {'fallback': v[0], 'covered': v[1]}
+                               for k, v in self.cand_hist.items()},
+            'effective_coverage': round(
+                self.decisions_choice_covered / self.decisions_choice, 4)
+                if self.decisions_choice else None,
             'consults': self.consults,
             'lot_token_share': round(share, 4),
             'plan_time_s': round(self.solve_time_s, 3),

@@ -202,6 +202,10 @@ def _slate_reps(sd):
     return [D[k] for k in (f'slate_s{sd}_a', f'slate_s{sd}_b', f'slate_s{sd}_c') if k in D]
 
 
+def _slate_rep_keys(sd):
+    return [k for k in (f'slate_s{sd}_a', f'slate_s{sd}_b', f'slate_s{sd}_c') if k in D]
+
+
 def _mmm(vals, fmt):
     """mean (min–max) over replicates, or the single value."""
     if not vals:
@@ -229,12 +233,105 @@ def t_paired():
                 continue
             diffs = [v - qv for v in sv]
             allwin = all((d * better) > 0 for d in diffs)
-            rows.append([sd, lab, fmt(qv), _mmm(sv, fmt),
+            alllose = all((d * better) < 0 for d in diffs)
+            verdict = 'solver' if allwin else ('rule' if alllose else 'mixed')
+            if len(sv) == 1:
+                verdict += ' (n=1)'
+            rows.append([f'{sd} (n={len(sv)})' if key == 'on_time_pct' else '', lab, fmt(qv), _mmm(sv, fmt),
                          _mmm(diffs, lambda x: f'{x:+.2f}' if key == 'on_time_pct' else f'{x:+,.1f}'),
-                         '✓' if allwin else '✗', ])
-    return md_table(['seed', 'metric', 'QT tuned', 'SLATE (mean, min–max of 3)',
+                         verdict])
+    return md_table(['seed', 'metric', 'QT tuned', 'SLATE (mean, min–max)',
                      'SLATE − QT (mean, range)', 'better on every replicate'],
-                    rows, align=['r', 'l', 'r', 'r', 'r', 'c'])
+                    rows, align=['l', 'l', 'r', 'r', 'r', 'l'])
+
+
+# -- Table: seed difficulty, read off the untuned rule -----------------------
+def t_difficulty():
+    rows = []
+    for sd in range(5):
+        u, q = D.get(f'qt_s{sd}'), D.get(f'qt50_s{sd}')
+        reps = _slate_reps(sd)
+        sv = [r['on_time_pct'] for r in reps]
+        rows.append([sd, f"{u['wip_first']:,}", pct(u['on_time_pct']), big(u['tardiness_lot_days']),
+                     pct(q['on_time_pct']), big(q['tardiness_lot_days']),
+                     (f'{_mmm(sv, pct)} (n={len(sv)})' if sv else 'not run'),
+                     (f'{(sum(sv) / len(sv)) - q["on_time_pct"]:+.2f}' if sv else '—')])
+    return md_table(['seed', 'WIP at day 90', 'QT on-time', 'QT tardiness',
+                     'QT tuned on-time', 'QT tuned tardiness', 'SLATE on-time', 'SLATE − QT tuned'],
+                    rows)
+
+
+# -- Table: every solver replicate, raw ---------------------------------------
+def t_slate_reps():
+    rows = []
+    for sd in range(3):
+        q = D.get(f'qt50_s{sd}')
+        rows.append([sd, 'QT tuned', f1(q['good_per_day']), pct(q['on_time_pct']),
+                     f1(q['cycle_time_days']), big(q['tardiness_lot_days']),
+                     f1(q['violations_per_day']), f1(q['scrap_per_day']),
+                     f1(q['part_spread']), sgn(q['wip_slope_final_third']), f"{q['wall_s']:,.0f}"])
+        for k in _slate_rep_keys(sd):
+            r = D[k]
+            rows.append(['', f'SLATE {k[-1]}', f1(r['good_per_day']), pct(r['on_time_pct']),
+                         f1(r['cycle_time_days']), big(r['tardiness_lot_days']),
+                         f1(r['violations_per_day']), f1(r['scrap_per_day']),
+                         f1(r['part_spread']), sgn(r['wip_slope_final_third']), f"{r['wall_s']:,.0f}"])
+    return md_table(['seed', 'run', 'good/day', 'on-time', 'CT (d)', 'tardiness', 'viol/day',
+                     'scrap/day', 'spread', 'slope', 'wall (s)'], rows)
+
+
+# -- Table: what the solver decides (candidate-set histogram) ----------------
+def t_coverage():
+    r = D['slate_s1_c']
+    h = r['candidate_hist']
+    order = [('1', 'exactly 1 lot'), ('1+idle', '1 lot, other tools in the family idle'),
+             ('2', '2 lots'), ('3-5', '3–5 lots'), ('6+', '6 or more lots')]
+    rows = []
+    tot = sum(v['fallback'] + v['covered'] for v in h.values())
+    for k, lab in order:
+        c, f = h[k]['covered'], h[k]['fallback']
+        rows.append([lab, big(c + f), f'{100 * (c + f) / tot:.1f}%', f'{100 * c / (c + f):.1f}%'])
+    ch = sum(h[k]['covered'] + h[k]['fallback'] for k in ('2', '3-5', '6+'))
+    cc = sum(h[k]['covered'] for k in ('2', '3-5', '6+'))
+    rows.append(['**all decisions with a choice (≥ 2 lots)**', f'**{big(ch)}**',
+                 f'**{100 * ch / tot:.1f}%**', f'**{100 * cc / ch:.1f}%**'])
+    rows.append(['all decisions', big(tot), '100%', f"{100 * r['coverage']:.1f}%"])
+    return md_table(['candidate set when the tool freed', 'decisions', 'share of all',
+                     'share made by the solver'], rows)
+
+
+# -- Table: the window-open deviation, sized from the dataset ----------------
+def t_cqt_dev():
+    import csv, glob, statistics
+    ds = os.path.join(PAPER, '..', '..', 'baselines', 'pyscfabsim', 'datasets', 'SMT2020_LVHM')
+    units = {'sec': 1, 's': 1, 'min': 60, 'hr': 3600, 'day': 86400}
+    fr, wins = [], []
+    for f in sorted(glob.glob(os.path.join(ds, 'route_*.txt'))):
+        steps = list(csv.DictReader(open(f), delimiter='\t'))
+        by = {st['STEP']: st for st in steps}
+        for st in steps:
+            c = st.get('STEP_CQT', '')
+            if not c or c not in by:
+                continue
+            w = float(st['CQT']) * units[st['CQTUNITS']]
+            e = by[c]
+            pt = float(e['PTIME']) * units[e['PTUNITS']]
+            if e.get('PTPER') == 'per_piece':
+                pt *= 25
+            fr.append(pt / w)
+            wins.append(w)
+    fr.sort()
+    p90 = fr[int(0.9 * len(fr))]
+    rows = [
+        ['window length, min / median / max (h)',
+         f'{min(wins) / 3600:.0f} / {statistics.median(wins) / 3600:.0f} / {max(wins) / 3600:.0f}',
+         f'{10 * min(wins) / 3600:.0f} / {10 * statistics.median(wins) / 3600:.0f} / {10 * max(wins) / 3600:.0f}'],
+        ['entrance-step time ÷ window, median', f'{100 * statistics.median(fr):.0f}%', f'{100 * statistics.median(fr) / 10:.1f}%'],
+        ['mean', f'{100 * statistics.mean(fr):.0f}%', f'{100 * statistics.mean(fr) / 10:.1f}%'],
+        ['90th percentile', f'{100 * p90:.0f}%', f'{100 * p90 / 10:.1f}%'],
+        ['worst of the 264 pairs', f'{100 * max(fr):.0f}%', f'{100 * max(fr) / 10:.0f}%'],
+    ]
+    return md_table(['', 'native windows (scale 1)', 'as run (scale 10)'], rows)
 
 
 # -- Table: determinism of the sort key -------------------------------------
@@ -253,7 +350,8 @@ def t_determinism():
 
 TABLES = {
     'table_viability5': t_viability5, 'table_paired': t_paired,
-    'table_determinism': t_determinism,
+    'table_determinism': t_determinism, 'table_difficulty': t_difficulty,
+    'table_slate_reps': t_slate_reps, 'table_coverage': t_coverage, 'table_cqt_dev': t_cqt_dev,
     'table_seeds': t_seeds, 'table_main': t_main, 'table_parts': t_parts,
     'table_parts_ct': t_parts_ct, 'table_boost': t_boost, 'table_mech': t_mech,
     'table_window': t_window, 'table_fab': t_fab,

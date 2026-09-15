@@ -62,6 +62,8 @@ RUNS = {
     'slate_s2_a': ('mx3_s2_slate_a.json', 'SLATE sym', 'solver_sym'),
     'slate_s2_b': ('mx3_s2_slate_b.json', 'SLATE sym', 'solver_sym'),
     'slate_s2_c': ('mx3_s2_slate_c.json', 'SLATE sym', 'solver_sym'),
+    # seed-0 coverage-split probe (20 days, first counters, no histogram)
+    'probe_cov_s0': ('probe_cov_s0.json', 'SLATE sym, 20-day probe', 'probe'),
     # mechanism checks, 40 cold days, seed 0
     'dx_nocqt':  ('dx_nocqt.json',  'no enforcement', 'mechanism'),
     'dx_s8norw': ('dx_s8-norw.json', 'scale 8, detection only', 'mechanism'),
@@ -102,7 +104,13 @@ def summarise(d, row):
         'violations_per_day': (cq.get('violations') or 0) / win,
         'scrap_per_day': (cq.get('scrapped') or 0) / win,
         'by_part': row.get('by_part') or {},
-        'coverage': None,
+        'coverage': (row.get('detail') or {}).get('coverage'),
+        'effective_coverage': (row.get('detail') or {}).get('effective_coverage'),
+        'decisions': (row.get('detail') or {}).get('decisions'),
+        'decisions_forced': (row.get('detail') or {}).get('decisions_forced'),
+        'decisions_choice': (row.get('detail') or {}).get('decisions_choice'),
+        'decisions_choice_covered': (row.get('detail') or {}).get('decisions_choice_covered'),
+        'candidate_hist': (row.get('detail') or {}).get('candidate_hist'),
         'series': s,
     }
     if s:
@@ -127,7 +135,7 @@ def summarise(d, row):
 
 data = {}
 for key, (f, label, group) in RUNS.items():
-    p = os.path.join(R, f)
+    p = f if f.startswith('/') else os.path.join(R, f)
     if not os.path.exists(p):
         print('MISSING', key, f)
         continue

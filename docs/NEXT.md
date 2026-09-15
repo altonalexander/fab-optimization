@@ -5,6 +5,59 @@ One list, ordered by what gates what. The C++ placeholders stay in
 benchmark's open items in [`bench/README.md`](../bench/README.md#still-open);
 this page is the programme they hang off. Dates are when an item was written.
 
+## 0. After the replicate batch (opened 2026-09-15, gates everything below)
+
+The replicate batch (ADR 0017 §12.11) settled the order of the next work:
+the solver wins on the hard seed on every replicate and loses on the easy
+seeds on every replicate, so the two things to fix first are the constraint
+itself and the operating point it was calibrated at. In order, each gating
+the next:
+
+1. [ ] **Fix the queue-time window open** (ADR 0016 §8). It opens at the
+      *start* of the entrance step in `instance.dispatch()`; SMT2020 opens it
+      at *completion*. Move the open to `free_up_lots()`. At native scale the
+      entrance step eats a median 36% of the window, so this is not tidying:
+      the scale-10 operating point was chosen partly because of it. **Every
+      result depends on the definition; everything reruns after this.**
+2. [ ] **Bring the scale back toward 1.** On the corrected window, sweep
+      queue-time scale downward (10 → 1) and release rate on all five seeds
+      with the sort keys only — cheap and bit-deterministic. Find the lowest
+      scale at which the fab is viable under `qt`; the goal is the dataset's
+      own windows, not a multiplier.
+3. [ ] **Recalibrate the operating point across seeds, not on seed 0.** At
+      the current point the tuned rule is at 97–99.7% on seeds 1–3, so
+      there is nothing to win there. **Pre-register** a stress criterion on
+      a policy-independent quantity before any solver run (e.g. tuned `qt`
+      below 95% on-time on every seed) and pick the lowest load that meets
+      it. Do not drop seeds after seeing solver results; make the operating
+      point hard on all of them.
+4. [ ] **Solver replicates at that point on all five seeds**, including seed
+      4, the second hard draw that has no solver runs today.
+5. [ ] **Coverage toward 100% where the solver is eligible.** A decision is
+      the solver's only when the freed tool holds a token for a lot in its
+      queue; the 60 s cycle, one token per tool, carried-over tokens and a
+      5 ms budget leave ~31% of real choices to the fallback (0017 §12.11.4).
+      Candidates, cleanest first: re-solve a family on demand when a tool
+      frees without a token; a ranked token list per tool instead of one;
+      a shorter cycle. All cost wall clock; measure staleness as ADR 0002
+      asks rather than assume it.
+6. [ ] **Transport time, so a reticle move costs something.** PySCFabSim
+      moves lots and masks for free, which is why the reticle library
+      (ADR 0014) never binds and why an assignment solver has least to offer
+      here (§2 below). SMT2020 ships no transport data, so this is a
+      modelled parameter to declare and sweep, not a dataset fact: an
+      inter-bay lot move time and a reticle transfer time between scanners
+      (minutes, not hours). With either non-zero, a mask on the wrong
+      scanner idles a tool, the coupling the solver exists to exploit
+      appears, and 0013/0014's "untested rather than refuted" becomes
+      testable. Sequence it after 1–4 so it lands on a fab whose constraint
+      and load are already right.
+7. [ ] **Objective audit and the imitation floor** (§3b). The easy-seed loss
+      has a signature — shorter cycle time, thin lateness on every product —
+      that says the objective prefers short jobs to thin-margin dates. Check
+      the urgency curve just above CR = 1 first; then fit the objective to
+      reproduce `qt` on an easy seed before learning anything.
+
 ## 1. Find the knee (running, 2026-09-09)
 
 The dispatcher cannot raise throughput or utilization at the current start

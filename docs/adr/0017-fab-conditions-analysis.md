@@ -744,3 +744,88 @@ sides whenever either changes.
 
 **v0.2.0 was released with the §12.8 numbers.** They are not wrong, they are
 conservative; §12.9 already said so. The figures here supersede them.
+
+## 12.11 The replicate batch, 2026-09-15: the win is seed-dependent
+
+§12.10 was one solver run against one rule run on one seed. Overnight
+2026-09-14/15 we ran the solid version: every sort key on seeds 0–4 (one run
+each — the sort keys are bit-deterministic, §12.11.3), and the symmetric
+solver (tuned `qt` fallback) three times on seeds 0 and 1. Seed 2's three
+replicates were started; one finished and the other two were **stopped by
+decision on 2026-09-15** so the paper could be rewritten on what was in hand.
+Seeds 3 and 4 have no solver runs.
+
+### 12.11.1 Paired, per seed
+
+| seed | `qt` tuned on-time | `slate` on-time (3 replicates) | tardiness `qt` → `slate` | verdict |
+|---|---:|---:|---:|---|
+| 0 | 89.60% | 96.10 / 91.21 / 95.61% | 524 → 77 / 174 / 89 | solver better on every replicate |
+| 1 | 99.65% | 97.79 / 97.62 / 99.08% | 20 → 127 / 57 / 36 | rule better on every replicate |
+| 2 | 98.47% | 97.41% (n=1) | 42 → 67 | rule better (n=1) |
+
+Throughput, violations, scrap (zero) and stationarity are indistinguishable
+on every seed. Cycle time is 0.4–1.1 days shorter under the solver everywhere.
+
+So §12.10's "+6.5 points, 6.8× less tardiness" is replicate **a** of seed 0.
+The seed-0 range is +1.6 to +6.5 points and 3.0–6.8× on tardiness, and the
+win holds on all three replicates. On seed 1 the solver loses by 0.6–2.0
+points on all three. The paper's headline is now the pair, not the number.
+
+### 12.11.2 The seeds are not equally hard, and the untuned rule says which
+
+| seed | `qt` untuned on-time | `qt` tuned on-time | `slate` mean |
+|---|---:|---:|---:|
+| 0 | 81.66% | 89.60% | 94.31% |
+| 4 | 85.27% | 95.51% | not run |
+| 1 | 92.70% | 99.65% | 98.16% |
+| 2 | 93.95% | 98.47% | 97.41% (n=1) |
+| 3 | 95.51% | 96.99% | not run |
+
+Seeds differ only in their random stream (breakdowns, repair times, process
+time spread, sampling/rework draws, tie-breaks), but the drawn 270-day
+histories differ a lot in stress: a nine-fold range in untuned tardiness on
+identical demand. WIP at day 90 does not predict it (all within 7%). The
+untuned rule's on-time — available before any solver run — ranks them.
+**We chose seeds 0/1/2 by number before this table existed**, and so
+replicated the solver on one hard seed and two easy ones while the second
+hard seed (4) has no solver runs. Seed 4 replicates are the next experiment.
+
+### 12.11.3 Sort keys are bit-deterministic
+
+`qt50_1.00.json` and `qt50_s0_repeat.json` are digit-identical with the same
+fingerprint (`f39ba74ce011049e`) over the full 180-day window. One run per
+sort key per seed is the complete measurement. The solver is not: its 5 ms
+per-family budget is wall-clock, and the seed-0 replicates span 4.9 on-time
+points — the honest error bar on every solver claim.
+
+### 12.11.4 Coverage, split
+
+Raw coverage (46%) counts decisions with nothing to decide. Instrumented on
+the second wave (`decisions_forced/choice/choice_covered`, and a candidate-set
+histogram), from seed 1 replicate c over 3.87M decisions:
+
+| candidate set | share of all decisions | share made by solver |
+|---|---:|---:|
+| 1 lot | 12.6% | 34% |
+| 1 lot, other tools idle | 31.4% | 12% |
+| 2 lots | 5.5% | 45% |
+| 3–5 lots | 11.7% | 58% |
+| 6+ lots | 38.8% | 75% |
+| **≥ 2 lots (a real choice)** | **56.0%** | **68.6%** |
+
+44% of decisions have one candidate. Of the decisions with a choice the
+solver makes 69%, rising to 75% where six or more lots wait; the fallback's
+share is concentrated where the choice is small or absent. A 20-day seed-0
+probe gives the same effective coverage (69.0%).
+
+### 12.11.5 What this changes
+
+- The paper (`docs/paper/`) is rewritten with results as the spine: five-seed
+  viability, the paired table, the difficulty table, the coverage split, ADR
+  0016 §8 in threats, and the calibration episode compressed to half a page
+  with its tables in an appendix.
+- The README headline now quotes the seed-0 replicate range and says the
+  solver loses on an easy seed.
+- ADR 0016 §8 (window opens at start, not completion, of the entrance step)
+  applies to every row here; the fix and a full re-run come before the
+  robustness sweep.
