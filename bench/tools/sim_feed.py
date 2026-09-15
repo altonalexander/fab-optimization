@@ -279,6 +279,28 @@ def transport_key(seconds):
     return '' if seconds <= 0 else f'_tr{seconds:g}'
 
 
+def qt_tuning_key(dispatcher):
+    """Checkpoint key fragment for the QT rule's promote threshold.
+
+    `qt` is not one rule, it is a family: QT_PROMOTE_FRAC decides how much of
+    a window's length may remain before a saveable lot is promoted, and 0.50
+    (the tuned value the paper runs) warms a MEASURABLY different fab from
+    1.0 (the default). The dispatcher name in the checkpoint key is `qt` for
+    both, so until 2026-09-15 a fab warmed under one could be, and silently
+    was, resumed under the other -- the ADR 0013 §3.5 failure again, with a
+    third cause after the qualification matrix and queue-time enforcement.
+
+    Unlike every other fragment here this one is NOT empty at the default.
+    An existing `_qt_` checkpoint was built under whatever the environment
+    happened to hold, and that provenance was never recorded, so it cannot be
+    claimed for either value. Non-empty orphans all of them, which forces a
+    rebuild once and is the safe direction.
+    """
+    if dispatcher != 'qt':
+        return ''
+    return f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}'
+
+
 def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
               parts=None, trim=None, cqt=False, cqt_scale=1.0,
               cqt_max_rework=3, transport_s=0.0):
@@ -297,6 +319,7 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
             f'{trim_mod.key(trim)}'
             f'{cqt_key(cqt, cqt_scale, cqt_max_rework)}'
             f'{transport_key(transport_s)}'
+            f'{qt_tuning_key(dispatcher)}'
             f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
