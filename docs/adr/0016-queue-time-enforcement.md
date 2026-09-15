@@ -311,3 +311,37 @@ Un-inerting the solver's q-time term is no longer only gated on "enforcement
 punishes." It is gated on having `qt` priced at an admissible operating point,
 because `qt` is the number the un-inerted solver has to beat. Beating `cr` on
 scrap would prove nothing it does not already get for free.
+
+---
+
+## 8. Known deviation, 2026-09-15: the window opens at the wrong instant
+
+SMT2020 defines a queue-time window from the **completion** of the entrance
+step to the **start** of the exit step. §3.1 of this record says the same
+("when a lot leaves a step that opens a window, record the deadline"). The
+implementation does not: `instance.dispatch()` sets `lot.cqt_deadline =
+current_time + window` when the entrance step **starts processing**, so the
+entrance step's own setup and processing time are counted against the window.
+
+The exit side is correct (checked at the start of the closing step). The net
+effect is a window **stricter than the dataset specifies**, by the entrance
+step's duration — small against a 240-hour window, material against a 10-hour
+one when the entrance step is a furnace batch or a long diffusion.
+
+**Every result in ADR 0017 and in the paper was measured under this stricter
+definition.** The comparisons remain fair, because every policy faced the
+same windows on the same fab, and every reported effect is conservative in the
+sense that the correct definition can only reduce violations. But the absolute
+numbers — violations/day, scrap, the scale-10 operating point itself — are
+properties of a constraint tighter than SMT2020's, and the paper's §3.3 is
+wrong to call the start-of-processing instant "the industry definition."
+
+**Not fixed now, deliberately.** Changing the definition mid-batch would
+invalidate the replicates against their baselines. It will be fixed — the
+open moves to `free_up_lots()`, where the entrance step completes — as the
+first change after the current replicate batch, and **before the robustness
+sweep over queue-time scale and start rate.** That fix requires re-running
+every result, since all of them depend on the window definition; the sweep is
+the natural occasion.
+
+Caught in review by Alton, from the dataset's definition, not from the code.
