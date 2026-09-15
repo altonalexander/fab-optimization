@@ -49,7 +49,7 @@ PySCFabSim [8] is an open discrete-event simulator built for this testbed. It mo
 
 The simulator simplifies in ways that matter for the reading of any result [9]:
 
-- **Transport time is zero** in this configuration. Nothing moves between tools; a lot is available at its next family the instant it finishes. (This is why a reticle-exclusivity constraint we tested earlier never bound — a mask move is free.)
+- **Transport is a delay, not a resource.** The dataset's one transport row gives every family-to-family move a uniform draw of 5–10 minutes, which the simulator adds to the lot's availability time but not to the tool's: a completed lot has accrued about 32 hours of transport over a 38-day cycle time, and no move ever waits for a vehicle or contends with another. (A reticle-exclusivity constraint we tested earlier never bound because masks are plentiful, not because moves are free; the mask library charges 15 minutes per scanner-to-scanner move.)
 - **Delay steps are a pseudo-toolset** of 400 stations rather than a modelled wait.
 - **There is no storage or stocker capacity.**
 - **Queue-time constraints are parsed and ignored** upstream. This is the gap §3.3 closes.
@@ -84,7 +84,7 @@ A queue-time window is a limit on how long a lot may wait between two specific s
 
 SMT2020 defines the window from the **completion** of the opening step to the **start** of the closing step. Our implementation checks the closing side correctly but opens the window when the opening step **starts** processing, so the opening step's own setup and processing time are counted against the window. This is a deviation from the dataset's definition and makes every window **stricter** than specified; §7.3 sizes it and states what it does and does not affect. A window length is `cqt_time × s`, where `s` is a scale we sweep; the results here use **s = 10**, so windows are 10–240 hours. On violation the lot is **reworked**: its processed steps are rolled back to the opening step and it redoes that work. The route's own rework is modelled identically and reuses the mechanism.
 
-The first version reworked without limit, and it turned the fab into an absorbing state: over 30 cold days at s = 8, 422 violations fell on twelve lots, six of which were reworked twenty or more times and one 83 times, concentrated on six step orders. Those lots never left; WIP climbed while fab-wide utilisation *fell* to 30 %, because trapped work on a handful of steps starved the rest. That is not a fab, it is a missing termination rule. A real fab scraps material that has failed too often, and the scrap is precisely the loss this constraint class is supposed to introduce. We therefore **scrap** a lot after its third rework (`cqt_max_rework = 3`): it leaves the active set and is deliberately *not* counted as a completion, so it reduces throughput and never inflates on-time.
+The first version reworked without limit, and it turned the fab into an absorbing state: over 30 cold days at s = 8, 422 violations fell on twelve lots, six of which were reworked twenty or more times and one 83 times, concentrated on six step orders. Those lots never left; WIP climbed while fab-wide utilisation *fell* to 30 %, because trapped work on a handful of steps starved the rest. That is not a fab, it is a missing termination rule. A real fab scraps material that has failed too often, and the scrap is precisely the loss this constraint class is supposed to introduce. We therefore **scrap** a lot after its third rework (`cqt_max_rework = 3`): it leaves the active set and is deliberately *not* counted as a completion, so it reduces throughput and never inflates on-time. The testbed's own queue-time paper [10] expects a violated lot to be scrapped outright; rework-then-scrap is our declared choice, more lenient on material and harsher on capacity.
 
 Three controls establish that the machinery has no side effects of its own:
 
@@ -108,7 +108,7 @@ Every policy is consulted at the same point: a tool has freed, and the simulator
 
 ### 4.1 FIFO and critical ratio
 
-`fifo` orders by hot-lot priority, then release time. `cr` orders by priority, then the critical ratio `(due − now) / remaining processing`. Neither is aware that queue-time windows exist, and — since the windows are hours while due dates are days — neither will prioritise a lot two hours from lapsing over one that is merely old.
+`fifo` orders by hot-lot priority, then release time. `cr` orders by priority, then the critical ratio `(due − now) / remaining processing`; this is the shape of the dispatch rule the testbed itself prescribes per tool (`rule_HotLotFIRST` with ranking `HP; RSETUP; CR`), so `cr` is the dataset's own baseline rather than one we chose. Neither is aware that queue-time windows exist, and — since the windows are hours while due dates are days — neither will prioritise a lot two hours from lapsing over one that is merely old.
 
 ### 4.2 QT: a queue-time-aware sort key
 
@@ -251,7 +251,7 @@ The rule result rests on five seeds of a deterministic policy and is the stronge
 
 ### 7.2 One fab, one scenario
 
-Everything is LVHM. Tools within a family are identical; reticles never bind; transport is free. That is precisely the environment in which an assignment solver has least to offer, and nothing here speaks to the high-volume/low-mix scenario or to a fab with a binding coupling constraint.
+Everything is LVHM. Tools within a family are identical; reticles never bind; transport is a fixed delay with no resource behind it. That is precisely the environment in which an assignment solver has least to offer, and nothing here speaks to the high-volume/low-mix scenario or to a fab with a binding coupling constraint.
 
 ### 7.3 The queue-time window is stricter than the dataset specifies
 
@@ -323,6 +323,8 @@ The simulator is the work of the Research Group Production Systems; the testbed 
 [8] Research Group Production Systems, *PySCFabSim*, MIT licence. <https://github.com/prosysscience/PySCFabSim-release>
 
 [9] *What PySCFabSim simplifies, and what that hides*, decision record 0008 in [6].
+
+[10] D. Kopp, M. Hassoun, A. Kalir, and L. Mönch, "Integrating critical queue time constraints into SMT2020 simulation models," in *Proc. Winter Simulation Conference*, 2020.
 
 </div>
 

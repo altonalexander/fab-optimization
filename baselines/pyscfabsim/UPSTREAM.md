@@ -129,6 +129,8 @@ is recoverable from upstream at the SHA above.
     2026-09-15 the open was in `dispatch()` at the *start* of the entrance
     step, charging that step's own time against the window (ADR 0016 §8);
     the checkpoint key carries a trailing `c` for the corrected definition.
+    The rework/scrap loop is also entered for a violated lot on its last
+    route step (six LVHM routes end on an exit step; ADR 0016 §9).
 
 Also modified but not load-bearing: `.gitignore` (5 lines), and
 `chart_jobs.html` / `chart_tools.html`, which are regenerated run outputs rather

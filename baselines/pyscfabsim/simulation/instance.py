@@ -242,7 +242,21 @@ class Instance:
             # queue-time window at the right instant (ADR 0016 §8).
             done_step = lot.actual_step
             done_idx = len(lot.processed_steps)
-            while len(lot.remaining_steps) > 0:
+            # A lot whose EXIT step is the last step of its route has no
+            # remaining steps, so the loop below -- which is where a missed
+            # window is reworked or scrapped -- would never run and the
+            # violated lot would ship as a completion. Enter it once anyway
+            # in that case (docs/audit, synthetic test
+            # test_rework_returns_to_entrance_and_scraps_at_cap). SIX of the
+            # ten SMT2020 LVHM routes end on an exit step (1, 2, 3, 5, 7, 8),
+            # so before 2026-09-15 a lot that missed its final window was
+            # counted as a violation and then shipped as a completion, never
+            # reworked or scrapped. Every published row carries that
+            # undercount on those six routes' last window (docs/audit).
+            first = True
+            while len(lot.remaining_steps) > 0 or (
+                    first and lot.cqt_violated and self.cqt_rework and lot.actual_step is not None):
+                first = False
                 old_step = None
                 if lot.actual_step is not None:
                     lot.processed_steps.append(lot.actual_step)
@@ -300,6 +314,11 @@ class Instance:
                     # or it would fire on the next window this lot opens.
                     lot.cqt_violated = False
                     lot.cqt_open_step = None
+                if not lot.remaining_steps:
+                    # Entered only for the last-step rework case above and
+                    # the rollback found nothing to roll back to: the route
+                    # is complete.
+                    break
                 lot.actual_step, lot.remaining_steps = lot.remaining_steps[0], lot.remaining_steps[1:]
                 if lot.actual_step.has_to_perform():
                     self.dm.free_up_lots(self, lot)

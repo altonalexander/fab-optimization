@@ -13,7 +13,7 @@ seeds on every replicate, so the two things to fix first are the constraint
 itself and the operating point it was calibrated at. In order, each gating
 the next:
 
-1. [x] **Fix the queue-time window open** (ADR 0016 §8) — *code done 2026-09-15 on `cqt-window-fix`; nothing re-run yet.* It opens at the
+1. [x] **Fix the queue-time window open** (ADR 0016 §8) — *code done 2026-09-15 on `cqt-window-fix`; nothing re-run yet.* Also fixed the same day: a lot missing its **final** window shipped as a completion instead of being reworked or scrapped, on the six routes that end on an exit step (ADR 0016 §9). Spec audit and synthetic tests: `docs/audit/smt2020-columns.md`, `bench/tests/test_cqt_mechanism.py`. It opens at the
       *start* of the entrance step in `instance.dispatch()`; SMT2020 opens it
       at *completion*. Move the open to `free_up_lots()`. At native scale the
       entrance step eats a median 36% of the window, so this is not tidying:
@@ -41,24 +41,18 @@ the next:
       frees without a token; a ranked token list per tool instead of one;
       a shorter cycle. All cost wall clock; measure staleness as ADR 0002
       asks rather than assume it.
-6. [~] **Lot transport time** — *`--transport-s` built 2026-09-15; 3-day cold
-      smoke at 300 s: throughput −4 %, cycle time +0.4 d, as it should. Not yet
-      run at length.* Correction to the first draft of this item: reticle moves are
-      NOT free — the mask library (ADR 0014) already charges `transport_s`
-      (900 s by default) on every scanner-to-scanner move, landed in the
-      setup. What is free is the **lot**: PySCFabSim carries a per-step
-      `transport_time` that the dataset never fills, and `get_times` already
-      adds it after each step. `--transport-s` fills it with one constant on
-      every family-to-family move (never into a Delay hold), keyed into the
-      checkpoint name (`_tr300`). SMT2020 ships no transport data, so it is
-      a declared modelling parameter to sweep (minutes, not hours). Why it
-      matters for the solver question: with lot moves costing time, a lot is
-      not at its next family the instant it finishes, so "which tool, now"
-      and "which tool, in five minutes" stop being the same decision, and
-      the look-ahead horizon (ADR 0010) the planner already carries becomes
-      load-bearing. The reticle question stays as §2 states it: the masks
-      have to be *scarce* (copies, volume) before transport between scanners
-      can bind. Sequence after 1–4.
+6. [~] **Transport as a resource, not a delay** — *`--transport-s` built
+      2026-09-15 (overrides the dataset draw with a constant; 0 keeps the
+      dataset); 3-day smoke at 300 s: throughput −4 %, CT +0.4 d.* Second
+      correction to this item (docs/audit/smt2020-columns.md F6): the
+      dataset is not transport-free. `fromto.txt` gives every
+      family-to-family move U(5, 10) min, the loader applies it to 3,714 of
+      4,013 steps, and a lot accrues ~32 h of it per cycle. What is free is
+      the *resource*: no vehicle, no contention, and the tool is released
+      without the move. So the knob that would create the coupling an
+      assignment solver exploits is not a longer delay but a **capacitated
+      move** — a transport resource lots queue for — and reticle scarcity
+      (§2) for the masks. Sequence after 1–4.
 7. [ ] **Objective audit and the imitation floor** (§3b). The easy-seed loss
       has a signature — shorter cycle time, thin lateness on every product —
       that says the objective prefers short jobs to thin-margin dates. Check

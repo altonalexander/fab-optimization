@@ -404,3 +404,27 @@ change is what the windows report:
   read. It also means the warm-up rule produces a different fab now, which
   is one more reason nothing from before the fix is comparable with
   anything after it.
+
+## 9. Second defect, 2026-09-15: a window that closes on the last route step was never enforced
+
+Found by the synthetic test written for §8 (`bench/tests/test_cqt_mechanism.py`,
+`test_rework_returns_to_entrance_and_scraps_at_cap`), not by a run. Rework and
+scrap live inside `free_up_lots()`'s `while len(lot.remaining_steps) > 0`
+loop. A lot whose **exit** step is the **last** step of its route has no
+remaining steps when that step completes, so the loop never runs: the
+violation had been counted at dispatch, and the lot then shipped as a
+completion — never reworked, never scrapped.
+
+**Six of the ten LVHM routes end on an exit step** (1, 2, 3, 5, 7, 8; the
+spec audit's F3). So every published row counted those violations and
+applied no consequence to them: rework and scrap are undercounted, and
+throughput and on-time are overstated, by the share of misses that fell on
+those six routes' final window — one of ~26 windows per route, so on the
+order of a few percent of violations, and the same for every policy.
+
+Fixed by entering the loop once when a violated lot has nothing left to do,
+so the rollback (or the scrap) applies; a rollback that finds nothing to
+roll back to breaks out and the route completes as before. Detection-only
+behaviour is untouched (the extra entry requires `cqt_rework`), which the
+fifo invariance check re-confirms. Re-running everything after §8 already
+covers this.

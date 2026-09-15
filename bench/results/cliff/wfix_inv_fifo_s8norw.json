@@ -15,7 +15,7 @@
   "rows": [
     {
       "rule": "fifo",
-      "wall_s": 662.2,
+      "wall_s": 667.5,
       "decisions": 880334,
       "fingerprint": "861f3df6da156276",
       "throughput": 2380,
