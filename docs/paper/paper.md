@@ -2,7 +2,7 @@
 
 <div class="meta" markdown="1">
 **Alton Alexander** · Front Analytics · alton@frontanalytics.com<br>
-Draft for review, September 2026 · Code and data: <https://github.com/altonalexander/fab-optimization> (this document built at commit `a4eac76`)
+Draft for review, September 2026 · Code and data: <https://github.com/altonalexander/fab-optimization> (this document built at commit `33ed99b`)
 </div>
 
 <div class="abstract" markdown="1">
@@ -400,7 +400,7 @@ The solver's first two replicates against the untuned rule lost decisively: 48 g
 
 ## 10. Reproducibility
 
-All code, data, result files and decision records are at <https://github.com/altonalexander/fab-optimization>, Apache-2.0. This document is built from commit `a4eac76` by `docs/paper/build/`: `paper_data.py` consolidates the result files, `figures.py` renders every figure, and `build_pdf.py` generates every table and this PDF, so no number in the tables was typed.
+All code, data, result files and decision records are at <https://github.com/altonalexander/fab-optimization>, Apache-2.0. This document is built from commit `33ed99b` by `docs/paper/build/`: `paper_data.py` consolidates the result files, `figures.py` renders every figure, and `build_pdf.py` generates every table and this PDF, so no number in the tables was typed.
 
 The simulator is PySCFabSim at its pinned upstream commit with the divergences listed in `baselines/pyscfabsim/UPSTREAM.md`. The solver uses OR-Tools **9.15.6755** with CP-SAT, 1 search worker, a 5 ms per-family budget, relative gap 0.02, and a 60-second simulated planning cycle. A typical solver row is produced by
 
