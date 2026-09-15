@@ -238,12 +238,17 @@ def cqt_key(enforce, scale, max_rework=3):
     (adr/0016 §6), capped scraps them. Only when enforcement is on, so every
     non-cqt checkpoint filename is still unchanged. Checkpoints built before
     the cap existed carry no 'r' fragment and are therefore orphaned rather
-    than silently reused, which is the point.
+    than silently reused, which is the point. The trailing 'c' does the
+    same for the window-open definition.
     """
     if not enforce:
         return ''
     base = '_cqt' if abs(scale - 1.0) < 1e-9 else f'_cqt{scale:g}'
-    return base + ('' if max_rework is None else f'r{int(max_rework)}')
+    # 'c' = the window opens at COMPLETION of the entrance step (ADR 0016
+    # §8, 2026-09-15). Checkpoints warmed under the earlier start-of-step
+    # definition carry no 'c' and are orphaned rather than reused: the two
+    # definitions produce different fabs.
+    return base + ('' if max_rework is None else f'r{int(max_rework)}') + 'c'
 
 
 def mix_key(parts):
@@ -266,9 +271,17 @@ def mix_key(parts):
     return f'_mix{h.hexdigest()}'
 
 
+def transport_key(seconds):
+    """Checkpoint key fragment for lot transport time (NEXT.md §0.6). A fab
+    warmed with moves costing time has different WIP from one warmed with
+    free moves; empty at zero so every existing filename is unchanged."""
+    seconds = float(seconds or 0.0)
+    return '' if seconds <= 0 else f'_tr{seconds:g}'
+
+
 def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
               parts=None, trim=None, cqt=False, cqt_scale=1.0,
-              cqt_max_rework=3):
+              cqt_max_rework=3, transport_s=0.0):
     """Where the shared warm-up checkpoint for this configuration lives.
 
     The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
@@ -283,18 +296,19 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
             f'_day{day:g}{overlay_mod.key(overlay)}{mix_key(parts)}'
             f'{trim_mod.key(trim)}'
             f'{cqt_key(cqt, cqt_scale, cqt_max_rework)}'
+            f'{transport_key(transport_s)}'
             f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
 def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
               parts=None, trim=None, cqt=False, cqt_scale=1.0,
-              cqt_max_rework=3):
+              cqt_max_rework=3, transport_s=0.0):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
     pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay,
                     parts, trim, cqt, cqt_scale,
-                    cqt_max_rework).replace('_h0.ckpt',
+                    cqt_max_rework, transport_s).replace('_h0.ckpt',
                                                          '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
@@ -1730,6 +1744,10 @@ def main():
                         'pristine one unlabelled. Omit for the pristine fab.')
     p.add_argument('--cqt', action='store_true',
                    help='enforce the dataset queue-time windows (adr/0016)')
+    p.add_argument('--transport-s', type=float, default=0.0,
+                   help='lot transport time in seconds on every family-to-family '
+                        'move (NEXT.md §0.6). SMT2020 ships none; 0 = free moves, '
+                        'as every published row. Keys the checkpoint.')
     p.add_argument('--cqt-max-rework', type=int, default=3,
                    help='scrap a lot after this many queue-time reworks; 0 '
                         'means unbounded (adr/0016 §6)')
@@ -1883,7 +1901,7 @@ def main():
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
         a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days,
         ov, a.starts_part_map, a.trim_obj, a.cqt, a.cqt_scale,
-        _mx(a))
+        _mx(a), transport_s=a.transport_s)
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1902,7 +1920,7 @@ def main():
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
                          a.batch_strat, a.days, ov, a.starts_part_map,
-                         a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
+                         a.trim_obj, a.cqt, a.cqt_scale, _mx(a), transport_s=a.transport_s)
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1954,6 +1972,7 @@ def main():
             instance.cqt_enforce = bool(a.cqt)
             instance.cqt_scale = float(a.cqt_scale or 1.0)
             instance.cqt_max_rework = _mx(a)
+            sim_runner.apply_transport(instance, a.transport_s)
             n = scale_starts(instance, a.starts_scale)
             if n:
                 print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
@@ -1989,6 +2008,10 @@ def main():
         instance.cqt_enforce = bool(a.cqt)
         instance.cqt_scale = float(a.cqt_scale or 1.0)
         instance.cqt_max_rework = _mx(a)
+        nt = sim_runner.apply_transport(instance, a.transport_s)
+        if nt:
+            print(f'  transport {a.transport_s:g}s on {nt} family-to-family moves',
+                  file=sys.stderr)
         if a.starts_part_map:
             n = scale_starts(instance, 1.0, a.starts_part_map)
             print(f'  start mix: {n} future releases re-timed for '
@@ -2036,7 +2059,7 @@ def main():
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
                               a.batch_strat, a.days, ov, a.starts_part_map,
-                              a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
+                              a.trim_obj, a.cqt, a.cqt_scale, _mx(a), transport_s=a.transport_s)
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)

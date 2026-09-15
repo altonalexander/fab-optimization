@@ -237,6 +237,11 @@ class Instance:
             lot.free_since = self.current_time
             step_found = False
             scrapped = False
+            # The step that has just COMPLETED, and the index it is about to
+            # take in processed_steps. Both are needed below to open a
+            # queue-time window at the right instant (ADR 0016 §8).
+            done_step = lot.actual_step
+            done_idx = len(lot.processed_steps)
             while len(lot.remaining_steps) > 0:
                 old_step = None
                 if lot.actual_step is not None:
@@ -312,6 +317,31 @@ class Instance:
                 self.done_lots.append(lot)
                 for plugin in self.plugins:
                     plugin.on_lot_done(self, lot)
+            # OPEN a queue-time window (ADR 0016 §8). SMT2020 defines the
+            # window from the COMPLETION of the entrance step to the START of
+            # the exit step. The clock is read here, when the entrance step
+            # has just finished, so its own setup and processing time no
+            # longer count against the window (they did until 2026-09-15,
+            # which made every window stricter than the dataset specifies --
+            # by a median 36% of the window at native scale).
+            #
+            # Only a step that was actually PERFORMED and still STANDS opens
+            # one: a step this lot skipped (sampling) never ran, and a step
+            # the route's own rework or a queue-time rework has just rolled
+            # back is no longer done. `processed_steps[done_idx] is done_step`
+            # is exact under both, because rollback truncates the list to
+            # before that index; an `in` test would not be, since re-entrant
+            # routes put the same Step object in the list many times.
+            if (self.cqt_enforce and done_step is not None
+                    and lot.actual_step is not None
+                    and len(lot.processed_steps) > done_idx
+                    and lot.processed_steps[done_idx] is done_step):
+                fs = getattr(done_step, 'cqt_for_step', None)
+                if isinstance(fs, (int, float)) and done_step.cqt_time:
+                    lot.cqt_waiting = fs
+                    lot.cqt_window_s = done_step.cqt_time * self.cqt_scale
+                    lot.cqt_deadline = self.current_time + lot.cqt_window_s
+                    lot.cqt_open_step = done_step
 
             for plugin in self.plugins:
                 plugin.on_lot_free(self, lot)
@@ -330,14 +360,13 @@ class Instance:
             lot.waiting_time += self.current_time - lot.free_since
             if lot.actual_step.batch_max > 1:
                 lot.waiting_time_batching += self.current_time - lot.free_since
-            # Queue-time windows (ADR 0016). The clock is read HERE, at the
-            # start of processing, which is the industry definition: material
-            # degrades while it waits, and the wait ends when the next
-            # operation begins, not when the lot joins a queue.
-            #
-            # CLOSE before OPEN: one step can both close an inbound window and
-            # open an outbound one, and doing it the other way round would
-            # have a step close the window it had just opened.
+            # Queue-time windows (ADR 0016): CLOSE. The window ends when the
+            # exit step STARTS processing -- material degrades while it
+            # waits, and the wait ends when the next operation begins, not
+            # when the lot joins a queue. The window is OPENED in
+            # free_up_lots(), when the entrance step completes (ADR 0016 §8;
+            # until 2026-09-15 it was opened here, at the start of the
+            # entrance step, which charged that step's own time against it).
             #
             # Note the original commented-out code stored the window LENGTH
             # in cqt_deadline where it needed an absolute time -- the correct
@@ -354,13 +383,6 @@ class Instance:
                             plugin.on_cqt_violated(self, machine, lot)
                     lot.cqt_waiting = None
                     lot.cqt_deadline = None
-                fs = getattr(st, 'cqt_for_step', None)
-                if isinstance(fs, (int, float)) and st.cqt_time:
-                    lot.cqt_waiting = fs
-                    lot.cqt_window_s = st.cqt_time * self.cqt_scale
-                    lot.cqt_deadline = (self.current_time
-                                        + lot.cqt_window_s)
-                    lot.cqt_open_step = st
         # compute times for lot and machine
         lot_time, machine_time, setup_time = self.get_times(self.setups, lots, machine)
         # Mount the photomask (ADR 0014). Moving one between scanners costs

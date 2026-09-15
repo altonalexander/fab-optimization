@@ -2,11 +2,11 @@
 
 <div class="meta" markdown="1">
 **Alton Alexander** · Front Analytics · alton@frontanalytics.com<br>
-Draft for review, September 2026 · Code and data: <https://github.com/altonalexander/fab-optimization> (this document built at commit `33ed99b`)
+Draft for review, September 2026 · Code and data: <https://github.com/altonalexander/fab-optimization> (this document built at commit `4d13f37`)
 </div>
 
 <div class="abstract" markdown="1">
-**Abstract.** Every time a machine in a wafer fab frees up, a dispatching decision picks the next lot. Almost all production fabs make that decision with a sort key — a priority rule that ranks the waiting lots one at a time. The alternative is to solve an assignment across all waiting lots and all free tools at once. This paper asks a narrow question: on a realistic simulated fab, does the assignment formulation beat the best sort key we could build, and by how much? We use the public SMT2020 low-volume/high-mix testbed inside the PySCFabSim discrete-event simulator, add enforcement of the queue-time windows the dataset already carries (with rework on violation and scrap after repeated failure), and compare FIFO, critical ratio, a queue-time-aware sort key we call QT, and a per-family CP-SAT assignment solver, every policy resumed from one shared warmed checkpoint over 180 simulated days at full load. Three results. First, the sort key decides whether the fab is *viable*, not merely how efficient it is: on five independent seeds QT holds work-in-process stationary with zero scrap, while FIFO and critical ratio diverge on the same fab at a consistent +8 to +16 lots/day. Second, against the tuned QT, the solver's advantage depends on how hard the seed's drawn history is. On the hard seed, where the tuned rule reaches 89.6 % on-time, all three solver replicates beat it — by +1.6 to +6.5 on-time points and 3 to 7× less total tardiness — at identical throughput and zero scrap. On an easy seed, where the rule is at 99.65 %, the solver lands 0.6 to 2.0 points below it on every replicate. Third, the solver's 46 % share of dispatch decisions understates its role: 44 % of all decisions have exactly one candidate lot, and among the decisions with a choice the solver makes 69 %, rising to 75 % when six or more lots wait. The solver costs 3 to 7× the wall clock of the rule. We also report a calibration failure that inverted an earlier replicated verdict, a deviation in our queue-time window definition that makes every window stricter than the dataset specifies, and the measurement controls that caught both.
+**Abstract.** Every time a machine in a wafer fab frees up, a dispatching decision picks the next lot. Almost all production fabs make that decision with a sort key — a priority rule that ranks the waiting lots one at a time. The alternative is to solve an assignment across all waiting lots and all free tools at once. This paper asks a narrow question: on a realistic simulated fab, does the assignment formulation beat the best sort key we could build, and by how much? We use the public SMT2020 low-volume/high-mix testbed inside the PySCFabSim discrete-event simulator, add enforcement of the queue-time windows the dataset already carries (with rework on violation and scrap after repeated failure), and compare FIFO, critical ratio, a queue-time-aware sort key we call QT, and a per-family CP-SAT assignment solver, every policy resumed from one shared warmed checkpoint over 180 simulated days at full load. Three results. First, the sort key decides whether the fab is *viable*, not merely how efficient it is: on five independent seeds QT holds work-in-process stationary with zero scrap, while FIFO and critical ratio diverge on the same fab at a consistent +8 to +16 lots/day. Second, against the tuned QT, the solver's advantage depends on how hard the seed's drawn history is. On the hard seed, where the tuned rule reaches 89.6 % on-time, all three solver replicates beat it — by +1.6 to +6.5 on-time points and 3 to 7× less total tardiness — at identical throughput and zero scrap. On an easy seed, where the rule is at 99.65 %, the solver lands 0.6 to 2.0 points below it on every replicate. Third, the solver's 46 % share of dispatch decisions understates its role: 44 % of all decisions have exactly one candidate lot, and among the decisions with a choice the solver makes 69 %, rising to 75 % when six or more lots wait. The solver costs 3 to 7× the wall clock of the rule. We also report a calibration failure that inverted an earlier replicated verdict, a deviation in our queue-time window definition that makes every window stricter than the dataset specifies — by a median 4 % at the scale we ran and by more than the whole window for one pair in ten at native scale — and the measurement controls that caught both.
 </div>
 
 ## 1. Introduction
@@ -362,19 +362,19 @@ Everything is LVHM. Tools within a family are identical; reticles never bind; tr
 
 ### 7.3 The queue-time window is stricter than the dataset specifies
 
-As §3.3 states, our window opens at the start of the opening step rather than at its completion, so the opening step's processing time is charged against it. Sized from the dataset (per-piece steps counted for a 25-wafer lot):
+As §3.3 states, our window opens at the start of the opening step rather than at its completion, so the opening step's processing time is charged against it. Sized from the dataset (the step carrying `STEP_CQT` is the opening step and the step it names is the closing one; per-piece steps counted for a 25-wafer lot):
 
 |  | native windows (scale 1) | as run (scale 10) |
 | --- | ---: | ---: |
 | window length, min / median / max (h) | 1 / 2 / 24 | 10 / 20 / 240 |
-| entrance-step time ÷ window, median | 36% | 3.6% |
-| mean | 39% | 3.9% |
-| 90th percentile | 67% | 6.7% |
-| worst of the 264 pairs | 181% | 18% |
+| entrance-step time ÷ window, median | 44% | 4.4% |
+| mean | 61% | 6.1% |
+| 90th percentile | 174% | 17.4% |
+| worst of the 264 pairs | 284% | 28% |
 
 *Table 11. The fraction of each queue-time window consumed by the opening step's own processing time, over the 264 window-carrying steps, at the dataset's native window lengths and at the scale we ran.*
 
-At scale 10, the windows were on median about 4 % shorter than intended, and identically so for every policy. The paired comparisons stand, and every absolute number — violations, scrap, the tuned threshold — will move slightly in every policy's favour when the definition is corrected. The definition does bear on the operating point. At native scale the opening step alone consumes a third of a typical window and exceeds the whole window for the worst pair, so the native-scale infeasibility that led us to scale 10 was at least partly manufactured by this deviation. The correction is recorded as the first change after this batch and will require re-running every result in this paper; the robustness sweep over queue-time scale (§9) must re-establish the viable scale from the corrected window rather than assume 10.
+At scale 10, the windows were on median about 4 % shorter than intended, up to 28 % for the worst pair, and identically so for every policy. The paired comparisons stand, and every absolute number — violations, scrap, the tuned threshold — will move in every policy's favour when the definition is corrected. The definition does bear on the operating point. At native scale the opening step alone consumes 44 % of a typical window, and for one pair in ten it is longer than the whole window, so those windows could never have been met under the old definition however the fab was dispatched. The native-scale infeasibility that led us to scale 10 was therefore substantially manufactured by this deviation. The correction is recorded as the first change after this batch and will require re-running every result in this paper; the robustness sweep over queue-time scale (§9) must re-establish the viable scale from the corrected window rather than assume 10.
 
 ### 7.4 Baseline containment
 
@@ -400,7 +400,7 @@ The solver's first two replicates against the untuned rule lost decisively: 48 g
 
 ## 10. Reproducibility
 
-All code, data, result files and decision records are at <https://github.com/altonalexander/fab-optimization>, Apache-2.0. This document is built from commit `33ed99b` by `docs/paper/build/`: `paper_data.py` consolidates the result files, `figures.py` renders every figure, and `build_pdf.py` generates every table and this PDF, so no number in the tables was typed.
+All code, data, result files and decision records are at <https://github.com/altonalexander/fab-optimization>, Apache-2.0. This document is built from commit `4d13f37` by `docs/paper/build/`: `paper_data.py` consolidates the result files, `figures.py` renders every figure, and `build_pdf.py` generates every table and this PDF, so no number in the tables was typed.
 
 The simulator is PySCFabSim at its pinned upstream commit with the divergences listed in `baselines/pyscfabsim/UPSTREAM.md`. The solver uses OR-Tools **9.15.6755** with CP-SAT, 1 search worker, a 5 ms per-family budget, relative gap 0.02, and a 60-second simulated planning cycle. A typical solver row is produced by
 

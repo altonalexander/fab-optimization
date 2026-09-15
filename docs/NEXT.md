@@ -13,7 +13,7 @@ seeds on every replicate, so the two things to fix first are the constraint
 itself and the operating point it was calibrated at. In order, each gating
 the next:
 
-1. [ ] **Fix the queue-time window open** (ADR 0016 §8). It opens at the
+1. [x] **Fix the queue-time window open** (ADR 0016 §8) — *code done 2026-09-15 on `cqt-window-fix`; nothing re-run yet.* It opens at the
       *start* of the entrance step in `instance.dispatch()`; SMT2020 opens it
       at *completion*. Move the open to `free_up_lots()`. At native scale the
       entrance step eats a median 36% of the window, so this is not tidying:
@@ -33,7 +33,7 @@ the next:
       point hard on all of them.
 4. [ ] **Solver replicates at that point on all five seeds**, including seed
       4, the second hard draw that has no solver runs today.
-5. [ ] **Coverage toward 100% where the solver is eligible.** A decision is
+5. [~] **Coverage toward 100% where the solver is eligible** — *`--slate-on-demand` built 2026-09-15; 3-day cold smoke: effective coverage 69 → 78 %, raw 50 → 56 %, 12.6k demand solves, wall +28 %. Not yet run at length.* A decision is
       the solver's only when the freed tool holds a token for a lot in its
       queue; the 60 s cycle, one token per tool, carried-over tokens and a
       5 ms budget leave ~31% of real choices to the fallback (0017 §12.11.4).
@@ -41,17 +41,24 @@ the next:
       frees without a token; a ranked token list per tool instead of one;
       a shorter cycle. All cost wall clock; measure staleness as ADR 0002
       asks rather than assume it.
-6. [ ] **Transport time, so a reticle move costs something.** PySCFabSim
-      moves lots and masks for free, which is why the reticle library
-      (ADR 0014) never binds and why an assignment solver has least to offer
-      here (§2 below). SMT2020 ships no transport data, so this is a
-      modelled parameter to declare and sweep, not a dataset fact: an
-      inter-bay lot move time and a reticle transfer time between scanners
-      (minutes, not hours). With either non-zero, a mask on the wrong
-      scanner idles a tool, the coupling the solver exists to exploit
-      appears, and 0013/0014's "untested rather than refuted" becomes
-      testable. Sequence it after 1–4 so it lands on a fab whose constraint
-      and load are already right.
+6. [~] **Lot transport time** — *`--transport-s` built 2026-09-15; 3-day cold
+      smoke at 300 s: throughput −4 %, cycle time +0.4 d, as it should. Not yet
+      run at length.* Correction to the first draft of this item: reticle moves are
+      NOT free — the mask library (ADR 0014) already charges `transport_s`
+      (900 s by default) on every scanner-to-scanner move, landed in the
+      setup. What is free is the **lot**: PySCFabSim carries a per-step
+      `transport_time` that the dataset never fills, and `get_times` already
+      adds it after each step. `--transport-s` fills it with one constant on
+      every family-to-family move (never into a Delay hold), keyed into the
+      checkpoint name (`_tr300`). SMT2020 ships no transport data, so it is
+      a declared modelling parameter to sweep (minutes, not hours). Why it
+      matters for the solver question: with lot moves costing time, a lot is
+      not at its next family the instant it finishes, so "which tool, now"
+      and "which tool, in five minutes" stop being the same decision, and
+      the look-ahead horizon (ADR 0010) the planner already carries becomes
+      load-bearing. The reticle question stays as §2 states it: the masks
+      have to be *scarce* (copies, volume) before transport between scanners
+      can bind. Sequence after 1–4.
 7. [ ] **Objective audit and the imitation floor** (§3b). The easy-seed loss
       has a signature — shorter cycle time, thin lateness on every product —
       that says the objective prefers short jobs to thin-margin dates. Check

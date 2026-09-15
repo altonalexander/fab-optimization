@@ -309,14 +309,17 @@ def t_cqt_dev():
     for f in sorted(glob.glob(os.path.join(ds, 'route_*.txt'))):
         steps = list(csv.DictReader(open(f), delimiter='\t'))
         by = {st['STEP']: st for st in steps}
+        # STEP_CQT points FORWARD: the step carrying it is the ENTRANCE (the
+        # window opens when it completes) and the step it names is the exit.
+        # The first version of this table had the roles reversed and measured
+        # the exit step's time; corrected 2026-09-15.
         for st in steps:
             c = st.get('STEP_CQT', '')
             if not c or c not in by:
                 continue
             w = float(st['CQT']) * units[st['CQTUNITS']]
-            e = by[c]
-            pt = float(e['PTIME']) * units[e['PTUNITS']]
-            if e.get('PTPER') == 'per_piece':
+            pt = float(st['PTIME']) * units[st['PTUNITS']]
+            if st.get('PTPER') == 'per_piece':
                 pt *= 25
             fr.append(pt / w)
             wins.append(w)
