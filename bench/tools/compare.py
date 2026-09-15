@@ -273,7 +273,8 @@ def make_rule(spec, instance, args):
             instance, solver=args.solver, cycle_s=args.cycle,
             budget_s=args.budget, pressure=pressure, threads=args.threads,
             lazy=not args.no_lazy, fallback=args.slate_fallback, horizon_s=args.slate_horizon,
-            on_demand=bool(getattr(args, 'slate_on_demand', False)))
+            on_demand=bool(getattr(args, 'slate_on_demand', False)),
+            objective=getattr(args, 'slate_objective', 'v1'))
     return spec          # a plain name; sim_runner resolves it
 
 
@@ -698,6 +699,10 @@ def main():
     p.add_argument('--slate-fallback', default='cr',
                    choices=['score', 'cr', 'qt'],
                    help='how the slate scores a lot it holds no token for')
+    p.add_argument('--slate-objective', default='v1', choices=['v1', 'v2'],
+                   help='v1 = the objective every published row used; v2 = '
+                        'monotone due term through cr 1-3 and no per-lot '
+                        'process time in the cost numerator (ADR 0017 §12.12)')
     p.add_argument('--slate-on-demand', action='store_true',
                    help='re-solve a family on the spot when a tool frees with '
                         'two or more lots waiting and the slate holds no token '

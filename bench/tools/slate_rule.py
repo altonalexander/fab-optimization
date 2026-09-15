@@ -57,6 +57,33 @@ import fabslate
 # violation reworks the lot, and a lot that misses too often is scrapped.
 QTIME_INERT = 1e9
 
+# Objective versions (ADR 0017 §12.12). 'v1' is the objective every published
+# row was produced with. 'v2' answers the audit's two findings:
+#   - the due term is monotone through the cr 1-3 band where waiting lots
+#     actually sit (v1 was flat above 2 and reached only 2x at cr = 1);
+#   - the cost numerator no longer carries the lot's own process time, which
+#     within a family of identical tools only ranked lots shortest-job-first
+#     (91% order agreement on the warmed fab). A fixed reference keeps
+#     setup relative to *something* without ranking by job length.
+OBJECTIVES = ('v1', 'v2')
+REF_PROCESS_S = 3600.0
+
+
+def due_term(cr, objective='v1'):
+    """Due-date multiplier on urgency as a function of critical ratio."""
+    if objective == 'v2':
+        # 1x at cr >= 3, 2x at 1.5, 3x at 1; below 1 the v1 steep term rides
+        # on top, continuous at cr = 1.
+        u = min(3.0, max(1.0, 3.0 / max(cr, 0.02)))
+        if cr < 1.0:
+            u *= min(50.0, 1.0 / max(cr, 0.02))
+        return u
+    u = 1.0 + max(0.0, 2.0 - cr)
+    if cr < 1.0:
+        u *= min(50.0, 1.0 / max(cr, 0.02))
+    return u
+
+
 
 def qtime_slack_s(lot, t):
     """Seconds until this lot's open queue-time window lapses, for the C++
@@ -114,11 +141,14 @@ class SlateRule:
 
     def __init__(self, instance, solver='cpsat', cycle_s=60.0, budget_s=0.005,
                  pressure='full', threads=1, lazy=True, lib_path=None,
-                 fallback='cr', horizon_s=900.0, on_demand=False):
+                 fallback='cr', horizon_s=900.0, on_demand=False, objective='v1'):
         if pressure not in self.TIERS:
             raise ValueError(f'pressure must be one of {self.TIERS}')
         if fallback not in self.FALLBACKS:
             raise ValueError(f'fallback must be one of {self.FALLBACKS}')
+        if objective not in OBJECTIVES:
+            raise ValueError(f'objective must be one of {OBJECTIVES}')
+        self.objective = objective
         # On-demand re-solve (docs/NEXT.md §0.5). With the 60 s cycle, one
         # token per tool, carried-over tokens and a 5 ms budget, ~31% of the
         # decisions with a real choice fall to the fallback (adr/0017
@@ -538,7 +568,8 @@ class SlateRule:
             # forbids two of them at once.
             'reticle': (self._reticles.lot_reticle(lot)
                         if self._reticles is not None else ''),
-            'step_process_s': step.processing_time.avg(),
+            'step_process_s': (REF_PROCESS_S if self.objective == 'v2'
+                               else step.processing_time.avg()),
             'due_s': lot.deadline_at,
             'waiting_s': max(0.0, t - (lot.free_since or t)),
         }
@@ -562,9 +593,7 @@ class SlateRule:
         # a lot twice as late is twice as urgent, which is the ordering that
         # held on-time under load where the old x3 cap did not (ADR 0012 s3).
         cr = lot.cr(t)
-        u *= 1.0 + max(0.0, 2.0 - cr)
-        if cr < 1.0:
-            u *= min(50.0, 1.0 / max(cr, 0.02))
+        u *= due_term(cr, self.objective)
 
         # Ageing, so a lot cannot be starved indefinitely by a stream of more
         # urgent work. Deliberately weak: one week of queueing doubles it.
@@ -712,7 +741,7 @@ class SlateRule:
     def _score(self, lot, time, machine, setup):
         """The linearized form of SolverExporter::cost. Lower is better."""
         step = lot.actual_step
-        proc = step.processing_time.avg()
+        proc = REF_PROCESS_S if self.objective == 'v2' else step.processing_time.avg()
         time_cost = (setup or 0.0) + proc
         return time_cost / max(self._urgency(lot, time), 0.01)
 
@@ -747,6 +776,7 @@ class SlateRule:
             'solver': self.planner.solver,
             'solver_available': self.planner.solver_available,
             'pressure': self.pressure,
+            'objective': self.objective,
             'cycle_s': self.cycle_s,
             'builds': self.builds,
             'on_demand': self.on_demand,

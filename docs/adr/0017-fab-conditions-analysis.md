@@ -902,3 +902,31 @@ tools are identical, so it only ranks lots by job length. Dividing it out
 easy-seed gap without touching the hard-seed win. (c) Re-run this audit on
 a *stressed* snapshot (mid-window on seed 0) before any of it, since day 90
 is warm but not stressed. None of this has been run.
+
+### 12.12.1 Objective v2, built and re-audited the same day
+
+`--slate-objective v2` (`slate_rule.due_term`, `REF_PROCESS_S`): the due
+term is `clamp(3/cr, 1, 3)` above cr = 1 with the steep term unchanged
+below it, and the cost numerator carries a fixed 3,600 s reference instead
+of the lot's own process time. v1 remains the default and is what every
+published row used. Same snapshot, same script, both versions:
+
+| | v1 | v2 |
+|---|---:|---:|
+| due term ≠ 1 | 0.7% of lots | 70.9% of lots (p50 1.13×, p90 1.23×, max 2.1×) |
+| within-family variance: time cost | 42.8% | 0.0% |
+| q-time boost | 30.5% | 42.1% |
+| hot-lot base | 14.0% | 25.2% |
+| due date | 4.1% | 14.2% |
+| downstream / ageing | 4.8% / 3.8% | 9.6% / 8.9% |
+| order agreement with shortest-job-first | **90.9%** | **48.1%** (chance) |
+| order agreement with critical ratio | 63.0% | 66.3% |
+
+The shortest-job-first bias is gone. The objective is now, in order, the
+queue-time override, the hot-lot flag, the due date, congestion and age.
+Critical-ratio agreement moved only three points because the q-time boost
+(2–4×) and the hot-lot flag (2×) still outrank a due term whose p90 is
+1.23×; whether that is right is the imitation-floor question (§3b of
+NEXT.md), not something to tune by hand here. **No run has been made with
+v2.** The first should be the seed-1 pair (tuned `qt` vs `slate v2`), on
+the corrected window, since seed 1 is where v1 lost.

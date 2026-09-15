@@ -23,7 +23,8 @@ os.environ['QT_PROMOTE_FRAC'] = '0.50'
 
 import cloudpickle  # noqa: E402
 import slate_rule  # noqa: E402
-from slate_rule import qtime_slack_s, QTIME_INERT  # noqa: E402
+from slate_rule import qtime_slack_s, QTIME_INERT, due_term, REF_PROCESS_S  # noqa: E402
+OBJ = sys.argv[2] if len(sys.argv) > 2 else 'v1'
 
 CK = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
     REPO, 'bench/snapshots/SMT2020_LVHM_seed0_qt_Demand_day90_cqt10r3_h270.ckpt')
@@ -34,7 +35,9 @@ inst.cqt_enforce, inst.cqt_scale = True, 10.0
 t = inst.current_time
 print(f'checkpoint day {t / 86400:.1f}, active lots {len(inst.active_lots)}')
 
-rule = slate_rule.SlateRule(inst, solver='cpsat', pressure='full', fallback='qt', horizon_s=0.0)
+rule = slate_rule.SlateRule(inst, solver='cpsat', pressure='full', fallback='qt', horizon_s=0.0,
+                            objective=OBJ)
+print(f'objective {OBJ}')
 lots = rule._ready_lots(inst)
 rule._family_wip = slate_rule._family_counts(lots)
 print(f'waiting lots {len(lots)}')
@@ -61,8 +64,8 @@ for lot in lots:
     step = lot.actual_step
     base = max(float(lot.priority), 0.01)
     cr = lot.cr(t)
-    due1 = 1.0 + max(0.0, 2.0 - cr)
     due2 = min(50.0, 1.0 / max(cr, 0.02)) if cr < 1.0 else 1.0
+    due1 = due_term(cr, OBJ) / due2          # the above-1 part alone
     wait = max(0.0, t - (lot.free_since or t))
     age = 1.0 + min(1.0, wait / 604800.0)
     rem = lot.remaining_steps
@@ -90,7 +93,7 @@ for lot in lots:
     inert = slack >= QTIME_INERT
     boost_cost = 1.0 + 600.0 / max(slack, 60.0)
     boost_pen = 1.0 + 3600.0 / max(slack, 60.0)
-    proc = step.processing_time.avg()
+    proc = REF_PROCESS_S if OBJ == 'v2' else step.processing_time.avg()
     # setup range over the family's tools right now
     setups = []
     for m in inst.family_machines.get(step.family, ()):
@@ -104,6 +107,7 @@ for lot in lots:
                      age=age, down=down, load=load, batch=batch, u=u_rule, slack=slack, inert=inert,
                      boost_cost=boost_cost, boost_pen=boost_pen, proc=proc, smin=smin, smax=smax,
                      cost_min=cost_min, cost_max=cost_max, pen=pen, wait=wait,
+                     real_proc=step.processing_time.avg(),
                      open_win=lot.cqt_waiting is not None))
 
 print()
@@ -122,7 +126,7 @@ print(f'{"open q-time window":34s} {n_open} lots ({100 * n_open / len(rows):.1f}
       f'saveable & fed to solver (not inert): {n_live} ({100 * n_live / len(rows):.1f}%)')
 print()
 print('=== multipliers on urgency (Python side)')
-summ('due, gentle  1+max(0,2-cr)', [r['due1'] for r in rows])
+summ('due, above cr=1 (' + OBJ + ')', [r['due1'] for r in rows])
 summ('due, steep   min(50,1/cr) if cr<1', [r['due2'] for r in rows])
 summ('ageing       1+min(1,wait/7d)', [r['age'] for r in rows])
 summ('downstream   0.8..1.25', [r['down'] for r in rows])
@@ -217,7 +221,7 @@ for fam, idx in by_fam.items():
         for b in range(a + 1, len(idx)):
             ra, rb = rows[idx[a]], rows[idx[b]]
             dc = ra['cost_min'] - rb['cost_min']
-            dp = ra['proc'] - rb['proc']
+            dp = ra['real_proc'] - rb['real_proc']
             if dc == 0 or dp == 0:
                 continue
             if (dc < 0) == (dp < 0):
