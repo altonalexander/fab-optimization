@@ -344,4 +344,26 @@ sweep over queue-time scale and start rate.** That fix requires re-running
 every result, since all of them depend on the window definition; the sweep is
 the natural occasion.
 
+**Size of the deviation (2026-09-15, from the dataset, no runs touched).**
+For the 264 q-time pairs, the entrance step's own processing time (per-piece
+steps counted for a 25-wafer lot) is the fraction of the window that the bug
+charges:
+
+| | native windows (scale 1) | as run (scale 10) |
+|---|---|---|
+| window, min / median / max | 1 h / 2 h / 24 h | 10 h / 20 h / 240 h |
+| entrance time ÷ window, median | 36% | 3.6% |
+| mean | 39% | 3.9% |
+| 90th percentile | 67% | 6.7% |
+| worst pair | 181% | 18% |
+
+At scale 10 the windows were on median ~4% shorter than intended, the same
+handicap for every policy, so the paired results stand and will move slightly
+in every policy's favour after the fix. At native scale the bug is enormous:
+the entrance step alone consumes a third of a typical window and exceeds the
+whole window for the worst pair. **The native-scale infeasibility that led to
+the scale-10 operating point was therefore at least partly manufactured by
+this bug.** The robustness sweep must re-establish the viable scale from the
+corrected window rather than assume 10.
+
 Caught in review by Alton, from the dataset's definition, not from the code.
