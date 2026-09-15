@@ -101,4 +101,68 @@ is bit-identical to detection-only, and conservation. All pass.
 - F7: the AutoSched `uniform` convention. Obtain the format document.
 - The same audit for batching, PM and breakdown *timing* (attach `FOA`
   first-occurrence, `move_event` on breakdown) with synthetic tests.
-- The offline re-derivation of every reported counter from lot histories.
+- [done] The offline re-derivation of every reported counter from lot
+  histories: see "Counter re-derivation" below. No simulator defect found.
+
+## Counter re-derivation (audit item 3, 2026-09-15)
+
+`bench/tools/rederive.py`. A plugin records the raw history during a run --
+one row per step start, one per step completion, one per release and
+completion -- and an offline pass rebuilds every reported number from that
+history alone. The violation count is rebuilt from the dataset's own window
+table and the recorded timestamps, never from `cqt_waiting`, `cqt_deadline`
+or the violation flag, so a disagreement between the simulator's bookkeeping
+and the data shows up as a count difference.
+
+Four configurations, 20 days, seed 0, all agree EXACTLY:
+
+| run | lots | violations | reworks | scraps |
+|---|---|---|---|---|
+| fifo, scale 10 | 1,181 | 1 | 1 | 0 |
+| fifo, scale 1 | 385 | 6,150 | 4,909 | 1,215 |
+| qt, scale 1 | 911 | 2,193 | 2,036 | 134 |
+| qt, scale 10, detection-only | 1,056 | 0 | 0 | 0 |
+
+Throughput, cycle time, on-time %, tardiness, conservation
+(`seen = done + scrapped + WIP`) and `counter_cqt_scrapped ==
+len(scrapped_lots)` match in every run.
+
+**No simulator defect was found.** Every initial disagreement was a defect in
+the checker, and each one is worth recording because each is a trap for
+anyone else reading this code:
+
+1. **Step order is not unique across routes.** 264 windows span only 208
+   distinct orders, and up to 10 steps share one order. A window table keyed
+   by order matches entrance steps against other products' exits. Key by step
+   identity.
+2. **`lot_end_time` at dispatch is a PREDICTION.** `move_event` pushes a
+   completion later when the machine breaks down or enters PM. The window
+   opens at the true completion; using the prediction read a 0.25 h span as
+   10.29 h. Take the completion from the next `on_lot_free`.
+3. **The route has its own rework.** 52 steps carry `REWORK`; it truncates
+   `processed_steps` exactly as a queue-time rollback does. Separate them by
+   the landing step (a queue-time rollback lands on the window's entrance,
+   which carries `STEP_CQT`): 82 rollbacks on the fifo/scale-10 run, of which
+   1 was queue-time.
+4. **A chained window's entrance can be voided.** 96 windows are chained --
+   one window's exit is the next one's entrance -- so a violation AT that step
+   rolls the lot back past it. The simulator correctly opens no window from a
+   rolled-back step; a checker that does over-counts by 442 on the fifo
+   scale-1 run.
+5. **Inferring a rollback from the next dispatch censors the horizon.** 184
+   lots on the qt/scale-1 run were rolled back and never started another step,
+   so the rollback was invisible. Read the processed-step count at the free
+   event instead.
+
+One check was reframed rather than fixed: cycle time is **not** equal to
+`waiting + processing + transport`. `processing_time` is process + load +
+unload only, so the span also absorbs setup and any breakdown or PM that lands
+while the lot is on the tool -- a mean 6-14 h per lot. The one-sided invariant
+is what holds and is what is asserted: the accumulators never exceed elapsed
+time.
+
+Also noted, not a defect but a reporting hazard: on a run with **no warm-up**
+the reported cycle time is dominated by initial WIP, whose `release_at` is
+backdated before t=0 (1,177 of the 1,181 completions on the fifo/scale-10
+run). The published protocol warms up first, which is what makes the number
+mean anything.
