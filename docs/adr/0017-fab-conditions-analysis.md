@@ -829,3 +829,76 @@ probe gives the same effective coverage (69.0%).
 - ADR 0016 §8 (window opens at start, not completion, of the entrance step)
   applies to every row here; the fix and a full re-run come before the
   robustness sweep.
+
+## 12.12 Every term of the objective, audited on a real fab (2026-09-15)
+
+`bench/tools/audit_objective.py` loads a warmed checkpoint, takes every
+waiting lot, and evaluates each term of the solver's cost with the rule's
+own code — the audit §7.5 of the paper said had never been done. Seed 0,
+`qt`-warmed, day 90, scale 10; 1,108 lots waiting in 41 families.
+
+| term | where | distribution over waiting lots | active? |
+|---|---|---|---|
+| base `lot.priority` | Python | 10 for all but hot lots (20); max 20 | hot-lot flag only |
+| due, gentle `1+max(0,2−cr)` | Python | cr min 1.44, p10 2.44, p50 2.67; term ≠ 1 on **0.7%** of lots | nearly inert |
+| due, steep `min(50,1/cr)` if cr<1 | Python | **no waiting lot has cr < 1** at this instant | inert here |
+| ageing `1+min(1,wait/7d)` | Python | p50 1.03, max 1.34 | weak, as designed |
+| downstream `0.8–1.25` | Python | p10 1.07, p50 1.21; ≠ 1 on 99.9% | active |
+| batch cohort `×1.1` | Python | on 17% of lots | weak |
+| q-time boost `1+600/max(s,60)`, window-relative | C++ cost | on the 13.5% of lots with a live window: p50 **2.13×**, max 4.2× | active, as intended after §12.4 |
+| q-time penalty `1+3600/max(s,60)` | C++ unassigned | same lots: p50 7.8×, max 19.9× | active |
+| time cost `setup+process` | C++ | process p10 0.3 h, p50 1.1 h, p90 7.5 h; setup min is **0 h for every lot** (a matching tool is always free) | dominant |
+
+**What moves the objective.** Variance decomposition of log(cost) *within
+families* — the only comparison the solver ever makes — pooled over the 41
+families:
+
+| term | share of within-family variance |
+|---|---:|
+| time cost (process time) | 42.8% |
+| q-time boost | 30.5% |
+| hot-lot base priority | 14.0% |
+| downstream congestion | 4.8% |
+| due date, gentle | 4.1% |
+| ageing | 3.8% |
+| due date, steep; batch | 0.0% |
+
+**Order agreement.** Over 30,991 within-family lot pairs, the solver's cost
+order agrees with **shortest-processing-time order 90.9%** of the time and
+with **critical-ratio order 63.0%**. At this operating point the objective
+is, to first order, *shortest job first, with a queue-time override and a
+hot-lot bump*; the due date barely enters until a lot is already late.
+
+**Why this is the easy-seed mechanism.** §12.11.1's loss on seed 1 had the
+signature of cycle time falling while thin lateness appeared on every
+product. That is exactly a shortest-job-first objective: it buys flow at
+the expense of the marginal lot, and the tuned `qt` — pure critical-ratio
+order among unpromoted lots — cannot lose that trade because it never makes
+it. On the hard seed enough lots sit near or below cr = 1 that the steep
+term and the q-time boost dominate, and the assignment pays.
+
+**Two findings about the term the paper corrected.**
+
+1. The window-relative boost is live for windows opened after resume, but
+   the seed 0/1/2 checkpoints (built 2026-09-13) predate `lot.cqt_window_s`
+   (added 2026-09-14), so the ~290 windows open *at* day 90 report raw
+   slack and are inert until they close (≤ 240 h). On the order of 0.1% of
+   the windows in a 180-day run; it does not move a result, but a
+   checkpoint should carry the field, and the key now changes with the
+   definition anyway (§8 of 0016).
+2. `BatchGroup::should_fire()` compares `min_qtime_slack_s` with
+   `1.2 × process_s` in **seconds**, so the window-relative pseudo-seconds
+   (0–600) would fire every partial batch at once — but that method is only
+   called from `test_main.cpp`, never from the planner. Inert by absence,
+   noted so nobody wires it in without converting.
+
+**What to change, in order.** (a) The gentle due term is flat above cr = 2
+and reaches only 2× at cr = 1; a critical-ratio *ordering* needs a term that
+is monotone through the whole 1–3 band where the waiting lots actually sit.
+(b) Process time in the numerator is the shortest-job-first bias; the
+intended reading was "cost of occupying the tool", but within a family the
+tools are identical, so it only ranks lots by job length. Dividing it out
+(or capping its spread) is the single change most likely to close the
+easy-seed gap without touching the hard-seed win. (c) Re-run this audit on
+a *stressed* snapshot (mid-window on seed 0) before any of it, since day 90
+is warm but not stressed. None of this has been run.
