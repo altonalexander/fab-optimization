@@ -272,7 +272,8 @@ def make_rule(spec, instance, args):
         return slate_rule.SlateRule(
             instance, solver=args.solver, cycle_s=args.cycle,
             budget_s=args.budget, pressure=pressure, threads=args.threads,
-            lazy=not args.no_lazy, fallback=args.slate_fallback, horizon_s=args.slate_horizon)
+            lazy=not args.no_lazy, fallback=args.slate_fallback, horizon_s=args.slate_horizon,
+            on_demand=bool(getattr(args, 'slate_on_demand', False)))
     return spec          # a plain name; sim_runner resolves it
 
 
@@ -298,7 +299,7 @@ def warm_checkpoint(args):
                             args.warmup_days, args.batch_strat, args.days, ov,
                             mix, tr, getattr(args, 'cqt', False),
                             getattr(args, 'cqt_scale', 1.0),
-                            _mxr(args))
+                            _mxr(args), transport_s=getattr(args, 'transport_s', 0.0))
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
               f'{args.warmup_days:g} (horizon >= {args.days}d'
@@ -318,14 +319,16 @@ def warm_checkpoint(args):
               + ([f'--cqt-scale={args.cqt_scale:g}']
                  if abs(getattr(args, 'cqt_scale', 1.0) - 1.0) > 1e-9 else []) \
               + ([f'--cqt-max-rework={int(getattr(args, "cqt_max_rework", 3))}']
-                 if getattr(args, 'cqt', False) else [])
+                 if getattr(args, 'cqt', False) else []) \
+              + ([f'--transport-s={getattr(args, "transport_s", 0.0):g}']
+                 if getattr(args, 'transport_s', 0.0) else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                                 args.warmup_days, args.batch_strat, args.days,
                                 ov, mix, tr, getattr(args, 'cqt', False),
                                 getattr(args, 'cqt_scale', 1.0),
-                                _mxr(args))
+                                _mxr(args), transport_s=getattr(args, 'transport_s', 0.0))
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
@@ -459,6 +462,13 @@ def run_one(spec, args):
     instance.cqt_rework = not bool(getattr(args, 'cqt_no_rework', False))
     _mx = getattr(args, 'cqt_max_rework', 3)
     instance.cqt_max_rework = None if not _mx else int(_mx)
+    # Lot transport (NEXT.md §0.6): in the checkpoint key, so a resumed fab
+    # was warmed with the same move cost; applied again here because it is
+    # idempotent and a freshly built fab needs it too.
+    nt = sim_runner.apply_transport(instance, getattr(args, 'transport_s', 0.0))
+    if nt:
+        print(f'  transport {args.transport_s:g}s on {nt} family-to-family moves',
+              flush=True)
 
     # The q-time counters live on the instance and are therefore PICKLED INTO
     # THE CHECKPOINT: a resumed run starts with the warm-up's totals already
@@ -688,6 +698,11 @@ def main():
     p.add_argument('--slate-fallback', default='cr',
                    choices=['score', 'cr', 'qt'],
                    help='how the slate scores a lot it holds no token for')
+    p.add_argument('--slate-on-demand', action='store_true',
+                   help='re-solve a family on the spot when a tool frees with '
+                        'two or more lots waiting and the slate holds no token '
+                        'for any of them (NEXT.md §0.5). Fills the coverage gap '
+                        'between 60 s cycles at the cost of extra solves.')
     p.add_argument('--slate-horizon', type=float, default=900.0,
                    help='plan lots arriving within this many fab-seconds too (ADR 0010); 0 = queue only')
     p.add_argument('--overlay', default=None,
@@ -712,6 +727,10 @@ def main():
     p.add_argument('--cqt-scale', type=float, default=1.0,
                    help='multiply every queue-time window: >1 loosens, <1 '
                         'tightens. The Y axis of adr/0017 grid.')
+    p.add_argument('--transport-s', type=float, default=0.0,
+                   help='lot transport time in seconds on every family-to-family '
+                        'move (NEXT.md §0.6). SMT2020 ships none; 0 = free moves, '
+                        'as every published row. Keys the warm-up checkpoint.')
     p.add_argument('--cqt-max-rework', type=int, default=3,
                    help='scrap a lot after this many queue-time reworks. 0 '
                         'means unbounded, which is what produced the '

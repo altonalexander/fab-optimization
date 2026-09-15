@@ -109,6 +109,36 @@ def build(dataset, days, seed, plugins, batch_strat, build_days=None,
     return FileInstance(files, build_to, True, plugins, None, batch_strat), run_to
 
 
+
+def apply_transport(instance, seconds):
+    """Give every family-to-family move a fixed transport time (NEXT.md §0.6).
+
+    PySCFabSim carries a per-step `transport_time` distribution that the
+    dataset never fills (ConstantDistribution(0)) and `Instance.get_times`
+    already adds it to the lot's time after the current step -- so a lot is
+    not available at its next family until the move is over. SMT2020 ships
+    no transport data, so this is a declared modelling parameter, not a
+    dataset fact: one constant, charged on every step whose family differs
+    from the previous step's, and never on a Delay pseudo-step (a route hold
+    is not a move). Zero leaves the instance exactly as loaded. Idempotent,
+    so it is safe to apply after a checkpoint restore as well as after a
+    build. Returns the number of steps it set.
+    """
+    from tools import ConstantDistribution
+    seconds = float(seconds or 0.0)
+    if seconds <= 0:
+        return 0
+    n = 0
+    for route in instance.routes.values():
+        prev = None
+        for st in route.steps:
+            fam = str(st.family)
+            if prev is not None and fam != prev and not fam.startswith('Delay'):
+                st.transport_time = ConstantDistribution(seconds)
+                n += 1
+            prev = fam
+    return n
+
 def run(instance, run_to, dispatcher, before_dispatch=None,
         after_dispatch=None, stream=sys.stderr):
     """Pump the simulation to completion. Returns True if Ctrl-C stopped it.
