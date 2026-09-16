@@ -566,6 +566,14 @@ def run_one(spec, args):
                      - cqt_base['scrapped']),
         'rework_enabled': bool(getattr(instance, 'cqt_rework', True)),
         'max_rework': getattr(instance, 'cqt_max_rework', None),
+        # Hold-before-entry (Instance.hold_blocks). hold_events counts every
+        # time a queued lot was passed over by the gate -- a lot held across
+        # ten decisions counts ten -- cumulative over warm-up and window.
+        'hold_frac': getattr(instance, 'cqt_hold_frac', None),
+        'hold_max_h': (getattr(instance, 'cqt_hold_max_s', 0) / 3600.0
+                       if getattr(instance, 'cqt_hold_frac', None) is not None else None),
+        'hold_events': (instance._hold_state()['held']
+                        if getattr(instance, 'cqt_hold_frac', None) is not None else 0),
         'warmup': cqt_base,
         'cumulative': {
             'violations': getattr(instance, 'counter_cqt_violated', 0),

@@ -91,6 +91,18 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
         cand = [l for l in cand if instance.mask_free(l, machine)]
         if not cand:
             return machine, None
+    # Hold-before-entry (Instance.hold_blocks): same shape as the mask filter.
+    # A held lot stays queued and is simply not a candidate this instant; a
+    # tool left with nothing but held lots parks, and wake_hold_waiters
+    # re-offers it. Applies to every rule, the slate included.
+    if getattr(instance, 'cqt_hold_frac', None) is not None:
+        kept = [l for l in cand if not instance.hold_blocks(l)]
+        if len(kept) < len(cand):
+            instance._hold_state()['held'] += len(cand) - len(kept)
+        if not kept:
+            instance.park_for_hold(machine)
+            return machine, None
+        cand = kept
     wl = sorted(cand, key=lambda k: k.ptuple)
     # select lots to dispatch
     lot = wl[0]

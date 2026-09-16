@@ -1,3 +1,4 @@
+import collections
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 import os
@@ -70,6 +71,107 @@ class Instance:
     #
     # None restores the old unbounded behaviour, for reproducing the above.
     cqt_max_rework = 3
+
+    # Hold-before-entry (docs/notes/2026-09-16-scrap-band): do not START a
+    # window the lot is unlikely to finish. Every rule -- and the slate --
+    # only ORDERS a tool's queue: a free tool always takes a lot, so nothing
+    # could decline to open a window whose exit tool is already backed up.
+    # Real fabs keep queue-time zones with exactly this gate.
+    #
+    # A lot waiting at an ENTRANCE step is held when the exit family's
+    # estimated wait -- lots queued there divided by the family's recent start
+    # rate -- exceeds CQT_HOLD_FRAC of the (scaled) window. A held lot is
+    # released after CQT_HOLD_MAX_H hours regardless, so a hold can delay but
+    # never strand. Unset = off, and every earlier row is unchanged.
+    cqt_hold_frac = (float(os.environ['CQT_HOLD_FRAC'])
+                     if os.environ.get('CQT_HOLD_FRAC') else None)
+    cqt_hold_max_s = float(os.environ.get('CQT_HOLD_MAX_H', '24')) * 3600.0
+    HOLD_RATE_N = 64                 # recent starts per family for the rate
+    HOLD_RATE_MIN = 8                # fewer than this: no estimate, no hold
+
+    def _hold_state(self):
+        d = self.__dict__
+        if '_hold' not in d:         # absent on checkpoints from before holds
+            d['_hold'] = {'starts': {}, 'exit': {}, 'q': {}, 'parked': set(),
+                          'held': 0, 'released': 0}
+        return d['_hold']
+
+    def note_starts(self, family, n):
+        s = self._hold_state()['starts'].setdefault(family, collections.deque(maxlen=self.HOLD_RATE_N))
+        s.append((self.current_time, n))
+        self._hold_state()['q'].clear()      # a start changes the queue it measured
+
+    def _exit_family(self, lot, step):
+        cache = self._hold_state()['exit']
+        k = id(step)
+        if k not in cache:
+            fam = None
+            for st in lot.remaining_steps:
+                if st.order == step.cqt_for_step:
+                    fam = st.family
+                    break
+            cache[k] = fam
+        return cache[k]
+
+    def exit_wait_estimate(self, family):
+        """Seconds a lot joining `family` now would wait, or None if unknown."""
+        h = self._hold_state()
+        ck = (family, self.current_time)
+        if ck in h['q']:
+            return h['q'][ck]
+        if len(h['q']) > 4096:
+            h['q'].clear()
+        starts = h['starts'].get(family)
+        est = None
+        if starts and len(starts) >= self.HOLD_RATE_MIN:
+            span = self.current_time - starts[0][0]
+            if span > 0:
+                rate = sum(n for _, n in starts) / span
+                # Lots waiting to START a window are excluded: they are the
+                # ones being gated, and counting them would let a window whose
+                # entrance and exit share a family hold itself shut.
+                queued = len({l.idx for m in self.family_machines.get(family, ())
+                              for l in m.waiting_lots
+                              if not isinstance(getattr(l.actual_step, 'cqt_for_step', None), (int, float))})
+                est = queued / rate
+        h['q'][ck] = est
+        return est
+
+    def hold_blocks(self, lot):
+        """Should this lot be kept from starting its entrance step right now?"""
+        step = lot.actual_step
+        if (self.cqt_hold_frac is None or not self.cqt_enforce or step is None
+                or not isinstance(step.cqt_for_step, (int, float)) or not step.cqt_time):
+            return False
+        if self.current_time - (lot.free_since or 0) >= self.cqt_hold_max_s:
+            return False
+        fam = self._exit_family(lot, step)
+        if fam is None:
+            return False
+        est = self.exit_wait_estimate(fam)
+        return est is not None and est > self.cqt_hold_frac * step.cqt_time * self.cqt_scale
+
+    def park_for_hold(self, machine):
+        h = self._hold_state()
+        h['parked'].add(machine)
+
+    def wake_hold_waiters(self):
+        """Re-offer tools that went idle only because their lots were held.
+
+        Same reason as wake_mask_waiters: an idle tool has no event of its own
+        coming, and the thing that releases a hold (a queue elsewhere draining,
+        or the hold cap expiring) happens off that tool.
+        """
+        if self.cqt_hold_frac is None:
+            return
+        h = self._hold_state()
+        h['q'].clear()               # lots just joined queues; re-measure
+        if not h['parked']:
+            return
+        for m in h['parked']:
+            if self.free_machines[m.idx] and m.waiting_lots:
+                self.usable_machines.add(m)
+        h['parked'].clear()
 
     def eligible(self, lot, machine):
         """Can `machine` run `lot` at the step it is waiting for?
@@ -368,10 +470,13 @@ class Instance:
         # can make work runnable on an idle tool that has no event of its own
         # coming. Re-offer those tools here or they stay parked.
         self.wake_mask_waiters()
+        self.wake_hold_waiters()
 
     def dispatch(self, machine: Machine, lots: List[Lot]):
         # remove machine and lot from active sets
         self.reserve_machine_lot(lots, machine)
+        if self.cqt_hold_frac is not None:
+            self.note_starts(machine.family, len(lots))
         lwam = self.lot_waiting_at_machine[machine.family]
         self.lot_waiting_at_machine[machine.family] = (lwam[0] + len(lots),
                                                        lwam[1] + sum([self.current_time - l.free_since for l in lots]))

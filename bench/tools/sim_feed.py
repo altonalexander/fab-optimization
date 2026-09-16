@@ -309,6 +309,20 @@ def qt_tuning_key(dispatcher):
     return f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}'
 
 
+def hold_key():
+    """Checkpoint key fragment for hold-before-entry (Instance.cqt_hold_frac).
+
+    A fab warmed with holds has different WIP in front of every entrance step
+    from one warmed without, so the two must never share a checkpoint. Empty
+    when holds are off, so every existing filename is unchanged.
+    """
+    f = os.getenv('CQT_HOLD_FRAC')
+    if not f:
+        return ''
+    return (f'_hq{int(round(float(f) * 100)):03d}'
+            f'm{int(round(float(os.getenv("CQT_HOLD_MAX_H", "24"))))}')
+
+
 def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
               parts=None, trim=None, cqt=False, cqt_scale=1.0,
               cqt_max_rework=3, transport_s=0.0):
@@ -328,6 +342,7 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
             f'{cqt_key(cqt, cqt_scale, cqt_max_rework)}'
             f'{transport_key(transport_s)}'
             f'{qt_tuning_key(dispatcher)}'
+            f'{hold_key()}'
             f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
