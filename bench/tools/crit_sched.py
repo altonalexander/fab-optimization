@@ -70,6 +70,7 @@ class CritSched(FeedTheBatch):
         self.assigned = {}         # lot idx -> planned start
         self.planned_at = None
         self.parked = set()
+        self.debug = {}
 
     def bind(self, instance):
         if self.instance is not instance:
@@ -199,7 +200,16 @@ class CritSched(FeedTheBatch):
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.BUDGET_S
         solver.parameters.num_workers = 1
+        t_solve = _time.time()
         res = solver.Solve(m)
+        self.debug[fam] = {
+            'cands': len(cands), 'waiting': sum(1 for c in cands if c[0] in self._waiting and c[3] is c[0].actual_step),
+            'windowed': sum(1 for c in cands if c[4] is not None),
+            'groups': len(gl), 'tools': len(tools),
+            'free_tools': sum(1 for t in tools if inst.free_machines[t.idx]),
+            'status': solver.StatusName(res), 'wall_s': round(_time.time() - t_solve, 2),
+            'obj': solver.ObjectiveValue() if res in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None,
+        }
         if res not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             self.stats['plan_fail'] += 1
             return

@@ -251,3 +251,12 @@ wall at 16-proc load; first batch ETA ~21:00Z, all 20 ~23:30Z — revised from
 22:00Z). A1 not launched yet: waiting for the seed 0/2 checkpoints, then a
 short end-to-end sanity cell (must resume qp050b_h270, no rebuild, cons≈1.0)
 before CLAIM.
+
+**2026-09-16 lead** — T4 debug (`bench/tools/crit_debug.py`): one plan on
+warmed scale 1 s0 is OPTIMAL in 0.7–1.2 s per family (47–70 candidates,
+5–7 groups); free furnaces get batches at t=0, holds only where members are
+inbound. The smoke's "29k holds" are re-offers of parked tools on every lot
+free, not real stalls. CLAIM 4 slots: `bench/tools/crit_ab.sh v1` — crit
+(QTF_LOOKAHEAD=6 elsewhere) × scales 5,1 × seeds 0,2, 15 d, same qp050
+checkpoints as qtf_ab. ETA ~45 min. Output `bench/results/crit_ab/`.
+Coordinator: A1 can take ≤4 slots until this releases (8 warm-ups + 4 + 4).
