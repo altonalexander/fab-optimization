@@ -394,3 +394,8 @@ scales 8/5/3, 13 min at scale 1; warm-ups 18–40 min):
 Order once the A/B confirms: warm-ups 4/2 (can start now at no risk, since they're qt, not qtfw;
 I'll hold them until A2 frees slots) → qtfw at 3 and 5 → scales 4/2 → the rest →
 confirmations. A2 status: 12/48 cells done at 23:45Z; ETA ~01:30Z.
+
+**2026-09-16 23:15Z coordinator** — CLAIM 4 slots: qt(b) warm-ups, scales 4 and 2 × seeds
+0,2,1,3,4 (10), `grid_warmups.sh 4 "4 2"`, started 23:14Z, ETA ~01:00Z.
+Driver `bench/results/grid/warmups/driver_42.log`. Coordinator total 12 (A2 8 + 4).
+(Correction: my two previous entries were stamped 23:25Z/23:50Z; the real clock was ~23:10Z.)
