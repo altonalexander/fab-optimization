@@ -125,6 +125,16 @@ def test_rework_returns_to_entrance_and_scraps_at_cap():
     assert lot not in inst.done_lots and lot not in inst.active_lots
 
 
+def test_scrap_on_first_violation():
+    """`--cqt-max-rework 0`: the semantics of the testbed's own queue-time
+    paper (WSC 2020, violated lots "have to be scrapped"). One violation, NO
+    rework, the lot leaves as scrap. Until 2026-09-16 the CLI read 0 as
+    unbounded, so this could not be expressed at all (audit F4)."""
+    inst = run(build(65, rework=True, max_rework=0))
+    assert counters(inst) == (1, 0, 1, 0, 1), counters(inst)
+    assert inst.scrapped_lots[0].cqt_scrapped
+
+
 def test_detection_only_counts_but_completes():
     inst = run(build(65, rework=False))
     v, rw, sc, done, scr = counters(inst)

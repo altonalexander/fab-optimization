@@ -279,10 +279,19 @@ def make_rule(spec, instance, args):
 
 
 def _mxr(args):
-    """The queue-time rework cap, as the checkpoint key wants it. 0 on the
-    command line means unbounded, which the key represents as no fragment."""
+    """The queue-time rework cap, as the checkpoint key wants it.
+
+    NEGATIVE means unbounded, which the key represents as no fragment. Zero
+    means scrap on the FIRST violation -- the semantics of the testbed's own
+    queue-time paper (WSC 2020: violated lots "have to be scrapped"), which
+    until 2026-09-16 could not be expressed at all because 0 was read as
+    unbounded (audit finding F4). The simulator needs no change for it: a cap
+    of 0 makes the first rework exceed the cap, so the lot is scrapped before
+    any rework is counted.
+    """
     v = getattr(args, 'cqt_max_rework', 3)
-    return None if not v else int(v)
+    v = 3 if v is None else int(v)
+    return None if v < 0 else v
 
 
 def warm_checkpoint(args):
@@ -461,8 +470,7 @@ def run_one(spec, args):
     instance.cqt_enforce = bool(getattr(args, 'cqt', False))
     instance.cqt_scale = float(getattr(args, 'cqt_scale', 1.0) or 1.0)
     instance.cqt_rework = not bool(getattr(args, 'cqt_no_rework', False))
-    _mx = getattr(args, 'cqt_max_rework', 3)
-    instance.cqt_max_rework = None if not _mx else int(_mx)
+    instance.cqt_max_rework = _mxr(args)
     # Lot transport (NEXT.md §0.6): in the checkpoint key, so a resumed fab
     # was warmed with the same move cost; applied again here because it is
     # idempotent and a freshly built fab needs it too.
@@ -737,11 +745,14 @@ def main():
                         'move (NEXT.md §0.6). SMT2020 ships none; 0 = free moves, '
                         'as every published row. Keys the warm-up checkpoint.')
     p.add_argument('--cqt-max-rework', type=int, default=3,
-                   help='scrap a lot after this many queue-time reworks. 0 '
-                        'means unbounded, which is what produced the '
+                   help='scrap a lot after this many queue-time reworks. '
+                        '0 = scrap on the FIRST violation, the semantics of '
+                        "the testbed's own queue-time paper (WSC 2020). "
+                        'NEGATIVE = unbounded, which is what produced the '
                         'absorbing state of adr/0016 §6: 422 violations on 12 '
                         'lots, one reworked 83 times, utilisation 30%% '
-                        'against an 80%% control.')
+                        'against an 80%% control. (Until 2026-09-16, 0 meant '
+                        'unbounded and scrap-on-first was inexpressible.)')
     p.add_argument('--trim', default=None,
                    help='right-size the tool set from a trim table beside the '
                         'dataset, e.g. --trim trim-82 (adr/0015)')
