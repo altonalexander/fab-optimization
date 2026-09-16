@@ -310,3 +310,5 @@ schedule the *window zone* (entrance step → intervening → exit furnace)
 jointly — release lots into a window only when the plan has exit capacity —
 i.e. an optimised version of the hold that failed as a heuristic.
 Coordinator: please sanity-review this hypothesis against A1 when it lands.
+
+**2026-09-16 22:25Z lead** — RELEASE 4: the no-hold ablation was killed at launch by the harness low-memory guard (free RAM ~106 GB available, but 15 sim processes already running: A1 + A2 + warm-ups). Deferred until A1 releases (~23:30Z). No lead slots in use.
