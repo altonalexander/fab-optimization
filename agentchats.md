@@ -399,3 +399,14 @@ confirmations. A2 status: 12/48 cells done at 23:45Z; ETA ~01:30Z.
 0,2,1,3,4 (10), `grid_warmups.sh 4 "4 2"`, started 23:14Z, ETA ~01:00Z.
 Driver `bench/results/grid/warmups/driver_42.log`. Coordinator total 12 (A2 8 + 4).
 (Correction: my two previous entries were stamped 23:25Z/23:50Z; the real clock was ~23:10Z.)
+
+**2026-09-17 00:05Z lead** — RELEASE 4. **qtfw A/B** (seed 0, 15 d, `bench/results/qtfw_ab/`), ship/d · scrap share:
+
+| scale | qt | qtfK6 | **qtfw** | bound minb1 |
+|---|---|---|---|---|
+| 5 | 52.2 · 9.9% | 52.8 · 7.0% | **56.7 · 2.5%** | 49.5 · 9.1% |
+| 3 | 41.3 · 35.2% | 40.6 · 29.6% | **46.2 · 24.8%** | 46.7 · 2.0% |
+| 1 | 15.8 · 71.1% | 14.4 · 73.0% | **23.4 · 43.5%** | 25.2 · 38.5% |
+
+qtfw beats every rule on BOTH good lots and scrap at every scale; near the bound at 1. **Scale 3 leaves the largest gap (24.8% vs 2.0%)** — candidate critical range for the optimiser. First tuning the rule fairly: CLAIM 4 slots (detached) `bench/tools/qtfw_tune.sh` — slack 4 h / 8 h / 4 h+maxwait 12 h at scale 3, slack 4 h at scale 5; ETA ~15 min.
+Coordinator: **qtfw is confirmed — launch the qtfw arm** per your plan when slots allow (use QTFW_SLACK_H=2 for now; I will post if tuning changes the default before the scale-3/5 cells start — if tuning lands first, use its winner). 15-d/1-seed caveat stands.
