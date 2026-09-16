@@ -1,4 +1,4 @@
-"""crit -- a CP-SAT scheduler for the critical batch sections, qtf everywhere else.
+"""crit -- a CP-SAT scheduler for the critical batch sections, qtfw everywhere else.
 
 Why (docs/notes/2026-09-16-scrap-band.md, bench/results/batch_fill/): queue-time
 scrap concentrates at a few diffusion furnace families, where batches of 3-5
@@ -14,8 +14,8 @@ Every PLAN_S seconds, for each critical family, over HORIZON_S:
             + a per-step queue pad)
   tools     each furnace, free now or busy until its done-event
   batches   SLOTS optional batches per tool: a group choice, a start time,
-            lot assignment; batch_min <= size <= batch_max (min kept HARD, as
-            the dataset says); start >= every member's ETA; no overlap per tool
+            lot assignment; batch_min <= size <= batch_max (min HARD unless
+            CRIT_UNDERFILL_W prices each missing lot, v3); start >= member ETAs; no overlap
   objective blown windows (x BLOWN_W) + waiting-lot start delay
             + unscheduled waiting lots (horizon + penalty)
 
@@ -34,7 +34,7 @@ import time as _time
 
 from ortools.sat.python import cp_model
 
-from dispatching.dispatcher import FeedTheBatch
+from dispatching.dispatcher import QtWindowFire, QTF_LOOKAHEAD, QTFW_SLACK_H, QTFW_MAXWAIT_H
 
 H = 3600.0
 
@@ -46,7 +46,7 @@ def _avg(dist):
     return getattr(dist, 'p', 0.0)
 
 
-class CritSched(FeedTheBatch):
+class CritSched(QtWindowFire):
     # v2 defaults (bench/results/crit_ab v1 lost to qtf K6 at scale 5: solver
     # timeouts on big WIP, and furnaces held for members whose ETAs were
     # optimistic). Shorter reach, fewer slots, and holds only for members
@@ -60,10 +60,17 @@ class CritSched(FeedTheBatch):
     HOLD_MAX_S = float(os.getenv('CRIT_HOLD_MAX_S', '2700'))
     BLOWN_W = 2000
     UNSCHED_W = 200
+    # v3: under-min batches allowed at a price per missing lot (a furnace run
+    # spent on fewer wafers). None = batch_min hard, as in v1/v2.
+    UNDERFILL_W = (float(os.environ['CRIT_UNDERFILL_W'])
+                   if os.getenv('CRIT_UNDERFILL_W') else None)
     START_TOL_S = 120.0
 
-    def __init__(self, families=None, lookahead=3):
-        super().__init__(lookahead)
+    def __init__(self, families=None, lookahead=None):
+        # Fallback everywhere the plan does not decide is qtfw (qtf + under-min
+        # firing), the strongest rule, so the scheduler is judged against it.
+        super().__init__(QTF_LOOKAHEAD if lookahead is None else lookahead,
+                         QTFW_SLACK_H, QTFW_MAXWAIT_H)
         env = os.getenv('CRIT_FAMILIES')
         self.families = tuple(families or (env.split(',') if env else
                               ('Diffusion_FE_94', 'Diffusion_FE_120', 'Diffusion_BE_123')))
@@ -146,13 +153,14 @@ class CritSched(FeedTheBatch):
             groups[c[2]].append(i)
         # only groups that can reach their minimum inside the horizon
         groups = {g: ix for g, ix in groups.items()
-                  if len(ix) >= cands[ix[0]][3].batch_min}
+                  if self.UNDERFILL_W is not None or len(ix) >= cands[ix[0]][3].batch_min}
         if not groups:
             return {}, {}
         gl = list(groups)
         eta = [max(0, int((c[1] - now) // 60)) for c in cands]
         dur = {g: max(1, int(_avg(cands[groups[g][0]][3].processing_time) // 60)) for g in gl}
         batches = []
+        underfill = []
         x = {}
         for tool in tools:
             if inst.free_machines[tool.idx]:
@@ -190,7 +198,13 @@ class CritSched(FeedTheBatch):
                         m.Add(s >= eta[i]).OnlyEnforceIf(xv)
                     bs = [x[(i, len(batches))] for i in members if (i, len(batches)) in x]
                     step = cands[members[0]][3]
-                    m.Add(sum(bs) >= step.batch_min).OnlyEnforceIf(y[g])
+                    if self.UNDERFILL_W is None:
+                        m.Add(sum(bs) >= step.batch_min).OnlyEnforceIf(y[g])
+                    else:
+                        short = m.NewIntVar(0, step.batch_min, '')
+                        m.Add(sum(bs) + short >= step.batch_min).OnlyEnforceIf(y[g])
+                        m.Add(sum(bs) >= 1).OnlyEnforceIf(y[g])
+                        underfill.append(short)
                     m.Add(sum(bs) <= step.batch_max)
                 batches.append((tool, s, a))
             m.AddNoOverlap(ivs)
@@ -220,6 +234,8 @@ class CritSched(FeedTheBatch):
                 if dl < hor:
                     m.AddImplication(sched.Not(), blown)
                 cost.append(self.BLOWN_W * blown)
+        if underfill:
+            cost.append(int(self.UNDERFILL_W) * sum(underfill))
         m.Minimize(sum(cost))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.BUDGET_S
