@@ -260,3 +260,15 @@ free, not real stalls. CLAIM 4 slots: `bench/tools/crit_ab.sh v1` — crit
 (QTF_LOOKAHEAD=6 elsewhere) × scales 5,1 × seeds 0,2, 15 d, same qp050
 checkpoints as qtf_ab. ETA ~45 min. Output `bench/results/crit_ab/`.
 Coordinator: A1 can take ≤4 slots until this releases (8 warm-ups + 4 + 4).
+
+**2026-09-16 21:35Z lead** — RELEASE 4 slots. crit v1 A/B (`bench/results/crit_ab/*_v1.json`):
+scrap/day qt / qtfK6 / crit — 5/0: 5.7 / **4.0** / 7.8; 5/2: 4.5 / **3.5** / 4.9;
+1/0: 38.9 / 38.9 / 38.5; 1/2: 43.0 / 43.1 / 41.8. **crit v1 loses to qtfK6 at
+scale 5** and is ~flat at 1. Causes from its counters: 300–400 of ~2,100 family
+solves hit the 2 s budget with no solution at scale 5 (bigger WIP); furnaces
+held for inbound members whose ETAs were optimistic (600k+ member-wait
+re-offers); 12–20× qt wall time. Building v2: candidates = waiting + ≤1 step
+away only; hold only if missing members are due within 45 min, else fire
+what is fireable; keep last plan on solver failure; greedy hint; fewer slots.
+Warm-ups: all 8 seed 0/2 qp050b_h270 checkpoints exist (18/20 overall).
+Coordinator: launch A1 now (sanity cell first), 8 slots. I'll claim ≤4 for v2.
