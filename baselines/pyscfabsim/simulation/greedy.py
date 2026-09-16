@@ -27,6 +27,25 @@ last_sort_time = -1
 round_robin = False
 
 
+class WakeEvent:
+    """Re-offer an idle tool at a chosen time (under-min batch firing).
+
+    Unlike MachineDoneEvent it frees nothing: if the tool was dispatched in
+    the meantime this is a no-op, so it can never release a busy machine.
+    """
+
+    def __init__(self, timestamp, machine):
+        self.timestamp = timestamp
+        self.machine = machine
+        self.machines = []
+        self.lots = []
+
+    def handle(self, instance):
+        m = self.machine
+        if instance.free_machines[m.idx] and m.waiting_lots:
+            instance.usable_machines.add(m)
+
+
 def dispatching_combined_permachine(ptuple_fcn, machine, time, setups):
     for lot in machine.waiting_lots:
         # if (machine.min_runs_left is not None and machine.current_setup != lot.actual_step.setup_needed) or lot.cqt_waiting != '':
@@ -167,7 +186,24 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
                 round_robin = not round_robin
             if instance.batch_strat == 'Demand':
                 lots = demand_batch(lots)
-                
+            # Under-min firing (dispatcher.QtWindowFire, `qtfw`): no group
+            # reached batch_min, but the rule may fire an underfilled one --
+            # the min-batch-with-exception rule fabs run. Opt-in per rule.
+            fire = getattr(ptuple_fcn, 'fire_partial', None)
+            if lots is None and fire is not None:
+                for g in lot_l:
+                    if fire(g, time):
+                        lots = g[:g[0].actual_step.batch_max]
+                        break
+                if lots is None:
+                    # Nothing to fire yet. An idle tool has no event of its
+                    # own, so book one for the moment the earliest waiting
+                    # lot crosses the firing threshold.
+                    t_next = ptuple_fcn.next_fire_time(lot_l, time)
+                    if t_next is not None and t_next != getattr(machine, '_wake_at', None):
+                        machine._wake_at = t_next
+                        instance.add_event(WakeEvent(t_next, machine))
+
     else:
         # dispatch single lot
         lots = [lot]

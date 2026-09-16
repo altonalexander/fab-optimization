@@ -247,6 +247,59 @@ class FeedTheBatch:
 
 QTF_LOOKAHEAD = int(os.getenv('QTF_LOOKAHEAD', '3'))
 
+
+class QtWindowFire(FeedTheBatch):
+    """`qtfw`: qtf, plus firing a batch BELOW batch_min to save a window.
+
+    bench/results/bound_ab: with batch_min = 1 everywhere, qt's scrap share at
+    window scale 3 falls from 35 % to 2 % -- nearly all tight-window scrap is
+    lots waiting for batch partners. Real fabs run a minimum batch with
+    exceptions; this is that exception, and nothing more:
+
+      fire an underfilled same-route-step group when one of its lots is inside
+      a live window with less than QTFW_SLACK_H hours left (default 2), or --
+      optionally -- when its oldest lot has waited QTFW_MAXWAIT_H (default off).
+
+    The cost is real: an underfilled furnace run spends a full cycle on fewer
+    wafers (bound_ab scale 5: shipped 52.2 -> 49.5/day at batch_min = 1). That
+    trade is what an optimiser should make better than this threshold.
+    """
+
+    def __init__(self, lookahead=3, slack_h=2.0, maxwait_h=None):
+        super().__init__(lookahead)
+        self.slack_s = slack_h * 3600.0
+        self.maxwait_s = None if maxwait_h is None else maxwait_h * 3600.0
+
+    def fire_partial(self, group, time):
+        for l in group:
+            if (l.cqt_waiting is not None and l.cqt_deadline is not None
+                    and l.actual_step.order == l.cqt_waiting
+                    and 0 < l.cqt_deadline - time < self.slack_s):
+                return True
+        if self.maxwait_s is not None:
+            return time - min(l.free_since for l in group) >= self.maxwait_s
+        return False
+
+    def next_fire_time(self, groups, time):
+        """Earliest future instant any waiting group would qualify, or None."""
+        best = None
+        for g in groups:
+            for l in g:
+                if (l.cqt_waiting is not None and l.cqt_deadline is not None
+                        and l.actual_step.order == l.cqt_waiting):
+                    t = l.cqt_deadline - self.slack_s + 1.0
+                    if time < t < l.cqt_deadline:
+                        best = t if best is None else min(best, t)
+            if self.maxwait_s is not None:
+                t = min(l.free_since for l in g) + self.maxwait_s
+                if t > time:
+                    best = t if best is None else min(best, t)
+        return best
+
+
+QTFW_SLACK_H = float(os.getenv('QTFW_SLACK_H', '2'))
+QTFW_MAXWAIT_H = float(os.environ['QTFW_MAXWAIT_H']) if os.getenv('QTFW_MAXWAIT_H') else None
+
 # Whether `qt`'s window tier reaches batch formation (greedy.py). Until
 # 2026-09-16 it did not -- the batch key skipped slot 1 and read the slack rank
 # inverted, so qt protected windows everywhere EXCEPT batch tools, where the
@@ -257,6 +310,8 @@ Dispatchers.qt_ptuple_for_lot.batch_qtime_tier = QT_BATCH_TIER
 
 QTF_RULE = FeedTheBatch(QTF_LOOKAHEAD)
 QTF_RULE.batch_qtime_tier = QT_BATCH_TIER
+QTFW_RULE = QtWindowFire(QTF_LOOKAHEAD, QTFW_SLACK_H, QTFW_MAXWAIT_H)
+QTFW_RULE.batch_qtime_tier = QT_BATCH_TIER
 
 dispatcher_map = {
     'fifo': Dispatchers.fifo_ptuple_for_lot,
@@ -265,5 +320,6 @@ dispatcher_map = {
     'cr': Dispatchers.cr_ptuple_for_lot,
     'qt': Dispatchers.qt_ptuple_for_lot,
     'qtf': QTF_RULE,
+    'qtfw': QTFW_RULE,
     'random': Dispatchers.random_ptuple_for_lot,
 }

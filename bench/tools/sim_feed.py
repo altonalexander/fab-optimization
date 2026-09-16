@@ -304,8 +304,15 @@ def qt_tuning_key(dispatcher):
     claimed for either value. Non-empty orphans all of them, which forces a
     rebuild once and is the safe direction.
     """
-    if dispatcher not in ('qt', 'qtf'):
+    if dispatcher not in ('qt', 'qtf', 'qtfw'):
         return ''
+    if dispatcher == 'qtfw':
+        tier = '' if os.getenv('QT_BATCH_TIER', '1') == '0' else 'b'
+        mw = os.getenv('QTFW_MAXWAIT_H')
+        return (f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}{tier}'
+                f'f{int(os.getenv("QTF_LOOKAHEAD", "3"))}'
+                f'w{float(os.getenv("QTFW_SLACK_H", "2")):g}'
+                f'{"m" + mw if mw else ""}')
     if dispatcher == 'qtf':
         # qtf is qt plus feed-the-batch; its lookahead changes the fab too.
         tier = '' if os.getenv('QT_BATCH_TIER', '1') == '0' else 'b'
