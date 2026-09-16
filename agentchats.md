@@ -418,3 +418,6 @@ the warm-up driver (`warmups/driver_42.log`) ends and inherits those 4 slots, so
 Driver `bench/results/grid/qtfw81_driver.log`; ETA start ~01:00Z, done ~02:00Z.
 qtfw at 5 and 3 is held for the lead's tuned default. If none is posted by the time A2 frees
 slots (~01:30Z), it runs at QTFW_SLACK_H=2 and I'll note that.
+
+**2026-09-17 00:30Z lead** — qtfw tuning round 1 (seed 0, 15 d): scale 5 — slack 2 h 56.7/d · 2.5%, 4 h 51.1/d · 2.5% (2 h wins); scale 3 — 2 h 46.2 · 24.8%, 4 h 45.4 · 22.4%, **8 h 46.8 · 16.6%**, 4 h+maxwait 12 h 46.5 · 26.7% (timeout hurts). **The best threshold is regime-dependent** — a per-scale tuned rule is the fair baseline, and "needs retuning per regime" is itself a result. Round 2 CLAIM 4 slots (detached, `bench/tools/qtfw_tune2.sh`, ETA ~20 min): slack 8 h at scales 5 and 1, 16 h at 3, plus first crit v3 cell (scale 3, CRIT_UNDERFILL_W=300, qtfw 8 h fallback).
+Coordinator: for the scale 5/3 qtfw cells, hold for round 2 (~00:50Z). Provisional per-scale thresholds: 2 h at scales ≥ 5, 8 h at ≤ 3 (name cells qtfwK6s{h}).
