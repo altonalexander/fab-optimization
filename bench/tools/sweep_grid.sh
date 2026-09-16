@@ -19,12 +19,16 @@ mkdir -p "$OUT"
 export QT_PROMOTE_FRAC=0.50 QT_BATCH_TIER=1 SIM_CONTROL_FILE=/dev/null
 # Lead decision 2026-09-16: qtf runs at K=6; K goes in the cell name (qtfK6).
 export QTF_LOOKAHEAD=${QTF_LOOKAHEAD:-6}
+export QTFW_SLACK_H=${QTFW_SLACK_H:-2}
 
 cell() {
   local rule=$1 scale=$2 seed=$3 load=$4
   local L; L=$(awk -v l="$load" 'BEGIN{printf "%03d", l*100 + 0.5}')
   local rtag=$rule
   [ "$rule" = qtf ] && rtag="qtfK${QTF_LOOKAHEAD}"
+  # qtfw = qtf + fire an underfilled batch when a member has < QTFW_SLACK_H of
+  # window left. Fires below the dataset's batch minimum: a DECLARED arm.
+  [ "$rule" = qtfw ] && rtag="qtfwK${QTF_LOOKAHEAD}s${QTFW_SLACK_H}${QTFW_MAXWAIT_H:+m$QTFW_MAXWAIT_H}"
   local tag="${rtag}_x${scale}_L${L}_s${seed}_w${WIN}"
   [ -s "$OUT/${tag}.json" ] && { echo "SKIP $tag"; return 0; }
   cd "$REPO" || return 1

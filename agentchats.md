@@ -360,3 +360,37 @@ Built rule `qtfw` (commit 8d0f90c): qtf + fire an underfilled same-step+part gro
 Deviation note for the user: firing below the dataset batch_min is a declared deviation (min-batch-with-exception, as fabs run it). Main-result framing to confirm with the user; run as a parallel arm now.
 CLAIM 4 slots (detached): `bench/tools/qtfw_ab.sh` — qtfw at scales 5/3/1 + qtfK6 at 3, seed 0, 15 d. ETA ~20 min. `bench/results/qtfw_ab/`.
 Coordinator: add `qtfw` to A2/grid once this A/B confirms; and please revisit the grid axis — scale 3 is now the critical range.
+
+**2026-09-16 23:50Z coordinator** — (1) **Viable definition changed, as agreed with lead:**
+`analyse_grid.py` now tests stability as WIP drift = (last-third mean −
+first-third mean) / days between the thirds' centres, < +5/day on every seed,
+AND scrap share ≤ 15 %. The final-third OLS slope is still printed as
+`max slope`, diagnostic only. A1 re-read: viable = qt and qtfK6 at scales 8
+and 5; everything else BREAKS on scrap. Max drift anywhere in A1 is +1.8/day.
+(2) **Withdrawn hypothesis noted.** The batch-min bound (35 %→2 % at scale 3) settles
+it: the furnace minimum is the constraint.
+(3) **qtfw arm prepared, NOT launched** (waiting on lead's qtfw A/B):
+`sweep_grid.sh` exports `QTFW_SLACK_H` (default 2) and names cells
+`qtfwK6s2_…` (+`m<h>` if `QTFW_MAXWAIT_H` is set, matching sim_feed's key).
+Usage: `sweep_grid.sh J "qtfw" "8 5 4 3 2 1" "0 2 1 3 4" 1.00 60`.
+Declared arm: it fires below the dataset batch minimum, and the user must
+confirm it before it becomes the main result.
+Caveat: qtfw moves scale-3 WIP a long way from the qt warm-up it resumes, so
+the first third is a big transient. The drift test handles stability, but good/d
+and share over 60 d will understate the steady state. Take the 90-day confirmation for
+qtfw at scale 3 too.
+
+*Compute estimate* (measured A1 walls at ~16 procs: qt/qtfK6 60-d cell 25–30 min at
+scales 8/5/3, 13 min at scale 1; warm-ups 18–40 min):
+
+| block | cells | core-h | wall @ 8 slots |
+|---|---|---|---|
+| warm-ups scales 4, 2 × seeds 0–4 | 10 | ~5 | ~40 min |
+| qtfw 60 d × {8,5,3,1} × 5 seeds | 20 | ~9 | ~70 min |
+| scales 4, 2 × {qt, qtfK6, qtfw, fifo} × 5 seeds (cr dropped: dominated everywhere) | 40 | ~17 | ~2.1 h |
+| 90-d confirmations: {qt, qtfK6} × {8,5} × seeds 0,2 + qtfw × {5,3} × seeds 0,2 | 12 | ~8 | ~1 h |
+| **total** | **82** | **~39** | **~5 h @ 8, ~3.3 h @ 12** |
+
+Order once the A/B confirms: warm-ups 4/2 (can start now at no risk, since they're qt, not qtfw;
+I'll hold them until A2 frees slots) → qtfw at 3 and 5 → scales 4/2 → the rest →
+confirmations. A2 status: 12/48 cells done at 23:45Z; ETA ~01:30Z.
