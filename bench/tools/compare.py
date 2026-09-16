@@ -275,6 +275,11 @@ def make_rule(spec, instance, args):
             lazy=not args.no_lazy, fallback=args.slate_fallback, horizon_s=args.slate_horizon,
             on_demand=bool(getattr(args, 'slate_on_demand', False)),
             objective=getattr(args, 'slate_objective', 'v1'))
+    if spec == 'crit':
+        # CP-SAT scheduler for the critical batch families, qtf elsewhere.
+        # Tuned by CRIT_* env vars (bench/tools/crit_sched.py).
+        import crit_sched
+        return crit_sched.CritSched()
     return spec          # a plain name; sim_runner resolves it
 
 

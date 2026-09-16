@@ -162,7 +162,9 @@ class Instance:
         coming, and the thing that releases a hold (a queue elsewhere draining,
         or the hold cap expiring) happens off that tool.
         """
-        if self.cqt_hold_frac is None:
+        # Also used by scheduling rules that hold tools (crit_sched), which
+        # run without the entry gate -- so key on parked tools existing.
+        if self.cqt_hold_frac is None and '_hold' not in self.__dict__:
             return
         h = self._hold_state()
         h['q'].clear()               # lots just joined queues; re-measure

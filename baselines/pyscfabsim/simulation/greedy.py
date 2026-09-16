@@ -81,6 +81,17 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
             break
     if getattr(ptuple_fcn, 'wants_instance', False):
         ptuple_fcn.bind(instance)        # dispatcher.FeedTheBatch
+    # A scheduling rule (bench/tools/crit_sched.CritSched) may decide this
+    # tool outright: a planned batch, or [] = hold the tool idle for members
+    # still on their way. Parked tools are re-offered by wake_hold_waiters.
+    ov = getattr(ptuple_fcn, 'override', None)
+    if ov is not None:
+        planned = ov(instance, machine)
+        if planned is not None:
+            if not planned:
+                instance.park_for_hold(machine)
+                return machine, None
+            return machine, planned
     dispatching_combined_permachine(ptuple_fcn, machine, time, instance.setups)
     # The mask filter is applied HERE and not in `eligible` (ADR 0014 §3.3):
     # a lot queues on its machines once, when it becomes available, and a
