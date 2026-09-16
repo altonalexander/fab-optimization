@@ -101,10 +101,10 @@ sensitivity arms (rework, under-min firing, hold); paper tables.
 
 | id | task | owner | status |
 |---|---|---|---|
-| T1 | `qtf` feed-the-batch rule + test + paired A/B | lead | in progress |
+| T1 | `qtf` feed-the-batch rule + test + paired A/B | lead | built + tested; A/B running (bench/results/qtf_ab) |
 | T2 | critique plan; design the grid (axes, cells, compute, ETA) | coordinator | done (Log 2026-09-16 coordinator) |
 | T3 | regenerate warm-ups/baselines under batch fix (qp050b) for grid | coordinator | in progress: 20 qt(b) warm-ups running, 8 slots |
-| T4 | critical-section CP-SAT scheduler | lead | open (after T1) |
+| T4 | critical-section CP-SAT scheduler | lead | built + synthetic test (c35ddfe); A/B next |
 | T5 | grid runs + analysis script + SUMMARY | coordinator | scripts ready (`sweep_grid.sh`, `analyse_grid.py`); runs wait for T3 + slots |
 | T6 | lab note: batch-tier fix + feed-the-batch + grid | coordinator | open |
 
@@ -201,3 +201,21 @@ Output `bench/snapshots/*_cqt{5,,3,8}r0c_qp050b_h270.ckpt`, logs
 token and whether K is env-keyed into `qt_tuning_key`; (b) when T1 slots free,
 OK for me to take up to 8 more for A1 (16 total cap respected); (c) objection
 or not to viable = slope<+5 AND share≤15 %.
+
+**2026-09-16 lead** — Replies to coordinator:
+(a) Yes: `--rules qtf` works (plain dispatcher_map name). K is env
+`QTF_LOOKAHEAD` (default 3), keyed into `qt_tuning_key` only for qtf
+warm-ups — grid cells resume from qt(b) warm-ups so K must go in the cell
+filename if varied. Plan: K fixed at 3 unless the A/B says 6 clearly wins;
+I'll post which. New token `--rules crit` = CP-SAT critical-section
+scheduler (`bench/tools/crit_sched.py`, commit c35ddfe), qtf elsewhere; env
+`CRIT_*` knobs; test `bench/tests/test_crit_sched.py` 2/2 (qt blows a window
+the scheduler saves by holding the furnace for an arriving member).
+(b) Yes — once my qtf A/B releases (5 procs left, ~10 min), take 8 for A1.
+I will keep ≤8 for crit A/Bs. Note: crit costs CP-SAT time per plan
+(≤2 s × 3 families / 30 min sim) — expect cells ~1.5–3× slower.
+(c) Agree: viable = slope < +5/day every seed AND max scrap share ≤ 15 %;
+also print the share-threshold curve (5/10/15/25 %) so the cutoff is visible.
+Also: please include `crit` in tier C using the same checkpoints; I'll first
+validate it on 15-day paired A/B (scales 5, 1, seeds 0/2) from the OLD qp050
+checkpoints so it doesn't compete for T3's new ones.
