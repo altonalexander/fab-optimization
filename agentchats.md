@@ -314,3 +314,43 @@ Coordinator: please sanity-review this hypothesis against A1 when it lands.
 **2026-09-16 22:25Z lead** — RELEASE 4: the no-hold ablation was killed at launch by the harness low-memory guard (free RAM ~106 GB available, but 15 sim processes already running: A1 + A2 + warm-ups). Deferred until A1 releases (~23:30Z). No lead slots in use.
 
 **2026-09-16 22:50Z lead** — A1 partial read (24/32): at scale 5 qt 54.9 good/d 7.5% share vs qtfK6 53.7 / 8.4% over 60 d (the 15-d qtf edge does not hold); fifo/cr 27–32%; scale 1 every rule 74–75%. Several qt-family cells flagged BREAKS on slope +6–10 — coordinator please check whether that is post-warm-up transient in a 60-d window before we trust the verdict. CLAIM 4 slots (detached nohup): batch-min bound — qt from qp050 checkpoints with every batch_min=1: scale 3 seed 0 base + minb1, scales 5 and 1 seed 0 minb1 (bases exist). 15 d, ETA ~15 min, `bench/results/bound_ab/`.
+
+**2026-09-16 23:25Z coordinator** — RELEASE 8 slots (A1 done 23:09Z, 32/32 rc=0;
+warm-ups also done 21:48Z, 20/20 rc=0 — those 2 slots released then).
+A2 raised to 8: original driver (4 jobs, seed-major 1→3→4) plus
+`sweep_grid.sh 4 … "4"` (`A2b_driver.log`) on seed 4 only. CLAIM stays 8 total
+for A2, ETA ~01:30Z. Coordinator total 8 (+ lead 4 = 12).
+
+A1 read (`bench/results/grid/A1_SUMMARY.txt`, n=2, seeds 0/2, 60 d). good lots/day · scrap share:
+
+| scale | qt | qtfK6 | fifo | cr | best |
+|---|---|---|---|---|---|
+| 8 | 56.5 · 2.3 % | **56.8 · 1.0 %** | 52.5 · 15.2 % | 44.9 · 30.6 % | qtfK6 ≈ qt |
+| 5 | **54.7 · 7.9 %** | 53.9 · 8.7 % | 46.7 · 26.5 % | 42.7 · 31.9 % | qt (qtfK6 −1.4 %) |
+| 3 | 37.2 · 33.9 % | **37.4 · 34.6 %** | 35.6 · 38.2 % | 32.6 · 44.1 % | qtfK6 ≈ qt |
+| 1 | 13.8 · 75.7 % | 14.5 · 74.0 % | **14.5 · 74.0 %** | 14.0 · 75.3 % | all within 5 % |
+
+**Slope verdict review:** the +6..+10 BREAKS on qt/qtfK6 at 8/5/3 are not
+climbs. Last-third mean WIP is within ±3 % of the first third and end WIP ≤
+day-90 WIP in every flagged cell. Causes: a post-warm-up dip then rebound, and
+10-day WIP swings of ±100–150 lots that make a 20-day OLS tail ±10/day noise
+(`bench/tools/grid_wip_trace.py`). **Proposal (not applied):** stability =
+first-third→last-third mean-WIP drift per day < +5 on every seed; final-third
+slope stays as a diagnostic; confirm with 90-day windows for scales 8/5 × qt,
+qtfK6 × seeds 0/2 (8 cells). Under it: viable at 8 and 5 = qt, qtfK6 only;
+nothing viable at 3 or 1 (scrap). Lead: agree/object?
+
+**On the 22:25Z hypothesis:** A1 supports it, with a caveat.
+(1) qtfK6 buys nothing over qt at 60 d (scale 5 slightly worse; the 15-d
+edge was noise), and crit v1/v2 lost. Two furnace-side levers, no gain.
+(2) At scale 1, fifo = qtfK6 = cr = qt within 5 %: ordering is irrelevant
+there, so the loss is capacity/timing, not sequencing at the exit.
+(3) Caveat: "transit > window in 36–57 %" can't mean processing+transport
+(cqt_window_slack: no window infeasible, tightest 1.46× min), so it must
+include queueing at the entrance tool or intervening steps. That is
+consistent with "born upstream" but also with "exit-tool queue at release
+time", so check which queue the time is spent in before building the zone model.
+The batch-min=1 bound is the right discriminator: if it doesn't move scale-3/1
+scrap, the furnace isn't the constraint. (4) The zone model means admission
+control, which idles entrance capacity. Judge it on good lots/day, not scrap
+share; the hold heuristic hurt on exactly that.
