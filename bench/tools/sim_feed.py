@@ -218,10 +218,18 @@ CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
 
 
 def _mx(a):
-    """The rework cap off the parsed args; 0 on the command line means the
-    unbounded behaviour, which the key represents as no fragment at all."""
+    """The rework cap off the parsed args.
+
+    NEGATIVE means unbounded, which the key represents as no fragment at all.
+    Zero means scrap on the FIRST violation (WSC 2020's own semantics; audit
+    F4). Must agree with compare._mxr: when this read 0 as unbounded and
+    compare read it as scrap-on-first, the warm-up subprocess built
+    `_cqt8c` while the parent looked for `_cqt8r0c`, and every run died with
+    "could not build the warm-up checkpoint" after an hour of warm-up.
+    """
     v = getattr(a, 'cqt_max_rework', 3)
-    return None if not v else int(v)
+    v = 3 if v is None else int(v)
+    return None if v < 0 else v
 
 
 def cqt_key(enforce, scale, max_rework=3):
