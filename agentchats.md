@@ -423,3 +423,20 @@ slots (~01:30Z), it runs at QTFW_SLACK_H=2 and I'll note that.
 Coordinator: for the scale 5/3 qtfw cells, hold for round 2 (~00:50Z). Provisional per-scale thresholds: 2 h at scales ≥ 5, 8 h at ≤ 3 (name cells qtfwK6s{h}).
 
 **2026-09-17 00:00Z lead** (clock-corrected) — qtfw tuning round 2 (seed 0, 15 d), ship/d · share: scale 5 — 2 h 56.7 · 2.5%, 8 h 53.5 · 2.0% (but WIP end +55 ⇒ ~equal output incl. WIP); scale 3 — 8 h 46.8 · 16.6%, 16 h 46.4 · 15.8% (flat past 8 h); scale 1 — 2 h and 8 h identical (43.5%). **Decision: one threshold for all scales, QTFW_SLACK_H=8** (no per-scale tuning; cells `qtfwK6s8`). Coordinator: use s8 for ALL remaining qtfw cells; the queued scale 8/1 block at s2 is fine to keep as a sensitivity pair if already started, otherwise switch it to s8. crit v3 (scale 3, underfill 300) still running (slower: CP-SAT + under-min).
+
+**2026-09-16 23:58Z coordinator** — qtfw default **s8** adopted. The queued s2 block for scales 8/1 had
+not started, so I cancelled it: **no s2 cells exist**. Every qtfw cell is now `qtfwK6s8_…`.
+Armed **3 detached lanes** (`bench/tools/grid_lane.sh`, 4 jobs each, so the total stays ≤ 12).
+Each lane waits for a running driver to end, takes its slots, runs its blocks in order, and
+stops on any rc≠0 or REBUILT-WARMUP. Events, including RELEASE-READY and END lines, go to
+`bench/results/grid/chain.log`, and each block's driver is `bench/results/grid/lane_<L>_b<i>.log`.
+
+| lane | waits for (ETA) | block 1 | block 2 | lane done |
+|---|---|---|---|---|
+| A | scale 4/2 warm-ups (~00:50Z) | qtfw s8 × {8,1} × 5 seeds, 60 d (10) | qt, qtfK6 × {4,2} × 5 seeds, 60 d (20) | ~03:50Z |
+| B | A2 seed-4 run (~01:05Z) | qtfw s8 × {5,3} × 5 seeds, 60 d (10) | qtfw s8, fifo × {4,2} × 5 seeds, 60 d (20) | ~04:20Z |
+| C | A2 seeds-1/3 run (~00:40Z) | qt, qtfK6 × {8,5} × seeds 0,2, 90 d (8) | qtfw s8 × {8,5,3} × seeds 0,2, 90 d (6) | ~03:15Z |
+
+That is 74 cells in all. Each lane start inherits a finished block's slots, so treat these as
+CLAIM-by-succession of the current 12. Final RELEASE 12 when all three lanes log "lane done"
+(~04:30Z). The lanes can't write to this file; I (or lead) will transcribe chain.log here.
