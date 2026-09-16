@@ -1,4 +1,5 @@
 import os
+from collections import defaultdict
 
 from classes import Lot, Machine
 from randomizer import Randomizer
@@ -159,6 +160,93 @@ class Dispatchers:
             return r.random.uniform(0, 99999),
 
 
+class FeedTheBatch:
+    """`qtf`: qt, plus upstream promotion of lots that complete a stalled batch.
+
+    docs/notes (batch fill, 2026-09-16): at tight windows the diffusion
+    furnaces spend 120-165 tool-hours a day FREE with lots queued, because no
+    same-route-step group has reached batch_min. Reordering at the furnace
+    cannot fix that -- there is nothing fireable to order. The lever is
+    upstream: a lot K or fewer steps short of a batch step whose group is
+    waiting below its minimum should jump its current queue.
+
+    Tier order: qt's window rescue first (a lot about to blow its own window
+    still wins), then feed, then everything else in qt's order. Among feeders,
+    the group with the most urgent member (earliest window deadline, else
+    longest wait) goes first.
+
+    Needs the instance, which the upstream rule signature does not carry;
+    greedy.py sets `.instance` before each decision when `wants_instance`.
+    """
+    wants_instance = True
+    batch_qtime_tier = True
+    REFRESH_S = 600.0
+
+    def __init__(self, lookahead=3):
+        self.lookahead = lookahead
+        self.instance = None
+        self._deficit = {}           # group key -> urgency (lower = sooner)
+        self._built_at = None
+        self._next_batch = {}        # id(actual_step) -> step_name or None
+
+    def bind(self, instance):
+        """Attach to `instance`; a new fab (or a resumed pickle) drops caches."""
+        if self.instance is not instance:
+            self.instance = instance
+            self._deficit, self._built_at, self._next_batch = {}, None, {}
+
+    def _refresh(self, time):
+        inst = self.instance
+        if self._built_at is not None and time - self._built_at < self.REFRESH_S:
+            return
+        groups = defaultdict(list)
+        seen = set()
+        for m in inst.machines:
+            for l in m.waiting_lots:
+                st = l.actual_step
+                if l.idx in seen or st is None or st.batch_max <= 1:
+                    continue
+                seen.add(l.idx)
+                groups[(st.step_name, l.part_name)].append(l)
+        deficit = {}
+        for key, ls in groups.items():
+            if len(ls) >= ls[0].actual_step.batch_min:
+                continue
+            urg = min((l.cqt_deadline for l in ls
+                       if l.cqt_waiting is not None and l.cqt_deadline is not None
+                       and l.actual_step.order == l.cqt_waiting and l.cqt_deadline > time),
+                      default=None)
+            deficit[key] = urg if urg is not None else min(l.free_since for l in ls) + 7 * 86400
+        self._deficit, self._built_at = deficit, time
+
+    def _feeds(self, lot):
+        st = lot.actual_step
+        k = id(st)
+        if k not in self._next_batch:
+            nb = None
+            for s in lot.remaining_steps[:self.lookahead]:
+                if s.batch_max > 1:
+                    nb = s.step_name
+                    break
+            self._next_batch[k] = nb
+        nb = self._next_batch[k]
+        return None if nb is None else self._deficit.get((nb, lot.part_name))
+
+    def __call__(self, lot, time, machine=None, setups=None):
+        base = Dispatchers.qt_ptuple_for_lot(lot, time, machine, setups)
+        if self.instance is None:
+            return base
+        self._refresh(time)
+        urg = self._feeds(lot) if lot.actual_step is not None and lot.actual_step.batch_max <= 1 else None
+        feed = (0, urg) if urg is not None else (1, 0.0)
+        if machine is not None:
+            lot.ptuple = base[:3] + feed + base[3:]
+            return lot.ptuple
+        return base[:2] + feed + base[2:]
+
+
+QTF_LOOKAHEAD = int(os.getenv('QTF_LOOKAHEAD', '3'))
+
 # Whether `qt`'s window tier reaches batch formation (greedy.py). Until
 # 2026-09-16 it did not -- the batch key skipped slot 1 and read the slack rank
 # inverted, so qt protected windows everywhere EXCEPT batch tools, where the
@@ -167,11 +255,15 @@ class Dispatchers:
 QT_BATCH_TIER = os.getenv('QT_BATCH_TIER', '1') != '0'
 Dispatchers.qt_ptuple_for_lot.batch_qtime_tier = QT_BATCH_TIER
 
+QTF_RULE = FeedTheBatch(QTF_LOOKAHEAD)
+QTF_RULE.batch_qtime_tier = QT_BATCH_TIER
+
 dispatcher_map = {
     'fifo': Dispatchers.fifo_ptuple_for_lot,
     'lifo_org': Dispatchers.lifo_ptuple_for_lot_vergammeln,
     'lifo_anders': Dispatchers.lifo_ptuple_for_lot,
     'cr': Dispatchers.cr_ptuple_for_lot,
     'qt': Dispatchers.qt_ptuple_for_lot,
+    'qtf': QTF_RULE,
     'random': Dispatchers.random_ptuple_for_lot,
 }

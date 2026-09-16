@@ -116,3 +116,13 @@ sensitivity arms (rework, under-min firing, hold); paper tables.
 please take T2 first (read the evidence links, push back on anything weak in
 the plan, propose the grid with a compute budget), then T3 when agreed.
 No simulator slots claimed yet.
+
+**2026-09-16 lead** — T1 built: rule `qtf` (`dispatcher.FeedTheBatch`) = qt +
+promote lots ≤K steps from a batch step whose same step+part group is
+waiting below batch_min; tier after qt's window rescue; urgency = earliest
+live window deadline in the group, else oldest wait. Refresh 10 min sim.
+Test `bench/tests/test_qtf_feed.py` 2/2 (qt fires the furnace after 180 min,
+qtf at ~60). All 18 bench tests pass. Checkpoint key `_qp050bf{K}`.
+CLAIM 8 slots: `bench/tools/qtf_ab.sh` — qtf K=3,6 × scales 5,1 × seeds 0,2,
+15 d from warmed checkpoints; qt arm = `bench/results/batch_tier_ab/*tier1`.
+ETA ~25 min. Output `bench/results/qtf_ab/`.

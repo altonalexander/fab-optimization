@@ -304,8 +304,13 @@ def qt_tuning_key(dispatcher):
     claimed for either value. Non-empty orphans all of them, which forces a
     rebuild once and is the safe direction.
     """
-    if dispatcher != 'qt':
+    if dispatcher not in ('qt', 'qtf'):
         return ''
+    if dispatcher == 'qtf':
+        # qtf is qt plus feed-the-batch; its lookahead changes the fab too.
+        tier = '' if os.getenv('QT_BATCH_TIER', '1') == '0' else 'b'
+        return (f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}{tier}'
+                f'f{int(os.getenv("QTF_LOOKAHEAD", "3"))}')
     # 'b': the window tier reaches batch formation (dispatcher.QT_BATCH_TIER).
     # Every qt checkpoint before 2026-09-16 was warmed without it, so the
     # suffix goes on the FIXED fab and leaves those files valid for =0.

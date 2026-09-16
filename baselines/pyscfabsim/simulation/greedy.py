@@ -79,6 +79,8 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
     if machine is None:
         for machine in instance.usable_machines:
             break
+    if getattr(ptuple_fcn, 'wants_instance', False):
+        ptuple_fcn.bind(instance)        # dispatcher.FeedTheBatch
     dispatching_combined_permachine(ptuple_fcn, machine, time, instance.setups)
     # The mask filter is applied HERE and not in `eligible` (ADR 0014 §3.3):
     # a lot queues on its machines once, when it becomes available, and a
