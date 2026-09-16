@@ -111,14 +111,33 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
         lot_m = defaultdict(lambda: [])
         for w in wl:
             lot_m[w.actual_step.step_name + '_' + w.part_name].append(w) 
+        if getattr(ptuple_fcn, 'batch_qtime_tier', False):
+            # `qt` (dispatcher.QT_BATCH_TIER): its slot 1 is the at-risk flag
+            # and slot 2 the slack rank, NOT setup. The upstream key below
+            # skips slot 1, which leaves rank -- 0 for nothing-to-save,
+            # positive for savable -- sorting savable groups LAST
+            # (bench/tests/test_qt_batch_tier.py). Fireable groups first, so a
+            # savable group below batch_min never idles a tool that could run
+            # another; then the window tier; then fill; then the rest of qt.
+            # Min-before-fill is order-equivalent to upstream's fill-before-
+            # min: a group below min always has the lower fill.
+            batch_key = lambda l: (
+                l[0].ptuple[0],
+                0 if len(l) >= l[0].actual_step.batch_min else 1,
+                l[0].ptuple[1], l[0].ptuple[2],
+                -min(1, len(l) / l[0].actual_step.batch_max),
+                *(l[0].ptuple[3:]),
+            )
+        else:
+            batch_key = None
         lot_l = sorted(list(lot_m.values()),
-                       key=lambda l: (
+                       key=batch_key or (lambda l: (
                            l[0].ptuple[0],  # min run setup 
                            #l[0].ptuple[1],  # cqt
                            -min(1, len(l) / l[0].actual_step.batch_max),  # then maximize the batch size
                            0 if len(l) >= l[0].actual_step.batch_min else 1,  # then take min batch size into account
                            *(l[0].ptuple[2:]),  # finally, order based on prescribed priority rule
-                       ))
+                       )))
         lots: List[Lot] = lot_l[0]
         if instance.rpt_route is not None:
             if len(lots) >= lots[0].actual_step.batch_min:

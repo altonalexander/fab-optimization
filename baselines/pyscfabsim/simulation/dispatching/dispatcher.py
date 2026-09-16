@@ -159,6 +159,14 @@ class Dispatchers:
             return r.random.uniform(0, 99999),
 
 
+# Whether `qt`'s window tier reaches batch formation (greedy.py). Until
+# 2026-09-16 it did not -- the batch key skipped slot 1 and read the slack rank
+# inverted, so qt protected windows everywhere EXCEPT batch tools, where the
+# violations concentrate. 1 (default) is the fix; 0 reproduces every qt row
+# published before it. In the checkpoint key (sim_feed.qt_tuning_key).
+QT_BATCH_TIER = os.getenv('QT_BATCH_TIER', '1') != '0'
+Dispatchers.qt_ptuple_for_lot.batch_qtime_tier = QT_BATCH_TIER
+
 dispatcher_map = {
     'fifo': Dispatchers.fifo_ptuple_for_lot,
     'lifo_org': Dispatchers.lifo_ptuple_for_lot_vergammeln,

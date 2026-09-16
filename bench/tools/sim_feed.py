@@ -306,7 +306,11 @@ def qt_tuning_key(dispatcher):
     """
     if dispatcher != 'qt':
         return ''
-    return f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}'
+    # 'b': the window tier reaches batch formation (dispatcher.QT_BATCH_TIER).
+    # Every qt checkpoint before 2026-09-16 was warmed without it, so the
+    # suffix goes on the FIXED fab and leaves those files valid for =0.
+    tier = '' if os.getenv('QT_BATCH_TIER', '1') == '0' else 'b'
+    return f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}{tier}'
 
 
 def hold_key():
