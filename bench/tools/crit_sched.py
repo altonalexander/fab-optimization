@@ -47,12 +47,17 @@ def _avg(dist):
 
 
 class CritSched(FeedTheBatch):
+    # v2 defaults (bench/results/crit_ab v1 lost to qtf K6 at scale 5: solver
+    # timeouts on big WIP, and furnaces held for members whose ETAs were
+    # optimistic). Shorter reach, fewer slots, and holds only for members
+    # that are genuinely close.
     PLAN_S = float(os.getenv('CRIT_PLAN_S', '1800'))
-    HORIZON_S = float(os.getenv('CRIT_HORIZON_S', str(12 * H)))
-    SLOTS = int(os.getenv('CRIT_SLOTS', '3'))
-    LOOK = int(os.getenv('CRIT_LOOKAHEAD', '4'))
+    HORIZON_S = float(os.getenv('CRIT_HORIZON_S', str(8 * H)))
+    SLOTS = int(os.getenv('CRIT_SLOTS', '2'))
+    LOOK = int(os.getenv('CRIT_LOOKAHEAD', '1'))
     PAD_S = float(os.getenv('CRIT_PAD_S', '1800'))     # queue pad per upstream step
     BUDGET_S = float(os.getenv('CRIT_BUDGET_S', '2.0'))
+    HOLD_MAX_S = float(os.getenv('CRIT_HOLD_MAX_S', '2700'))
     BLOWN_W = 2000
     UNSCHED_W = 200
     START_TOL_S = 120.0
@@ -71,6 +76,7 @@ class CritSched(FeedTheBatch):
         self.planned_at = None
         self.parked = set()
         self.debug = {}
+        self.eta = {}              # lot idx -> (family, eta at last plan)
 
     def bind(self, instance):
         if self.instance is not instance:
@@ -98,13 +104,16 @@ class CritSched(FeedTheBatch):
                     break
                 if s.batch_max > 1 and k > 0:
                     break          # another batch step first: too uncertain
-                eta += _avg(s.processing_time) + _avg(s.transport_time) + (self.PAD_S if k > 0 or lot not in self._waiting else 0)
+                p, tr = _avg(s.processing_time), _avg(s.transport_time)
+                if k == 0 and lot not in self._waiting:
+                    eta += 0.5 * p + tr            # in process here: about half done
+                else:
+                    eta += self.PAD_S + p + tr     # queued here (or later): wait + run
         return out
 
     def _replan(self, now):
         inst = self.instance
         self._waiting = {l for m in inst.machines for l in m.waiting_lots}
-        self.plan, self.assigned = {}, {}
         t0 = _time.time()
         for fam in self.families:
             tools = inst.family_machines.get(fam, ())
@@ -113,7 +122,17 @@ class CritSched(FeedTheBatch):
             cands = self._candidates(fam, now)
             if not cands:
                 continue
-            self._solve(fam, tools, cands, now)
+            ok = self._solve(fam, tools, cands, now)
+            if ok:
+                # Replace this family's plan only on success: a solver timeout
+                # keeps the previous plan rather than dropping to no plan.
+                for t in tools:
+                    self.plan.pop(t.idx, None)
+                self.plan.update(ok[0])
+                self.assigned = {k: v for k, v in self.assigned.items() if self.eta.get(k, (None,))[0] != fam}
+                self.assigned.update(ok[1])
+                for c in cands:
+                    self.eta[c[0].idx] = (fam, c[1])
         self.planned_at = now
         self.stats['plans'] += 1
         self.stats['plan_wall_s'] += _time.time() - t0
@@ -129,7 +148,7 @@ class CritSched(FeedTheBatch):
         groups = {g: ix for g, ix in groups.items()
                   if len(ix) >= cands[ix[0]][3].batch_min}
         if not groups:
-            return
+            return {}, {}
         gl = list(groups)
         eta = [max(0, int((c[1] - now) // 60)) for c in cands]
         dur = {g: max(1, int(_avg(cands[groups[g][0]][3].processing_time) // 60)) for g in gl}
@@ -141,6 +160,11 @@ class CritSched(FeedTheBatch):
             else:
                 ends = [e.timestamp for e in tool.events if hasattr(e, 'timestamp')]
                 avail = max(0, int((min(ends) - now) // 60)) if ends else 60
+            if avail >= hor:
+                # Busy past the horizon. v1 built NewIntVar(avail, hor) here,
+                # an empty domain: MODEL_INVALID, and the family went unplanned
+                # (the 300-400 "plan_fail" at scale 5 in crit_ab v1).
+                continue
             ivs = []
             prev_start = None
             for b in range(self.SLOTS):
@@ -212,8 +236,9 @@ class CritSched(FeedTheBatch):
         }
         if res not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             self.stats['plan_fail'] += 1
-            return
+            return None
         per_tool = collections.defaultdict(list)
+        assigned = {}
         for bi, (tool, s, a) in enumerate(batches):
             if not solver.Value(a):
                 continue
@@ -222,9 +247,8 @@ class CritSched(FeedTheBatch):
                 st = now + solver.Value(s) * 60
                 per_tool[tool.idx].append((st, members))
                 for li in members:
-                    self.assigned[li] = st
-        for k, v in per_tool.items():
-            self.plan[k] = sorted(v)
+                    assigned[li] = st
+        return {k: sorted(v) for k, v in per_tool.items()}, assigned
 
     # ---- execution -----------------------------------------------------------
     def override(self, instance, machine):
@@ -243,20 +267,26 @@ class CritSched(FeedTheBatch):
         by_idx = {l.idx: l for l in machine.waiting_lots}
         here = [by_idx[i] for i in members if i in by_idx]
         if now + self.START_TOL_S < start:
+            if start - now > self.HOLD_MAX_S:
+                # Too far out to justify idling a furnace: let the rule use it.
+                self.stats['fallback_far_start'] += 1
+                return None
             self.stats['hold_wait_start'] += 1
             return []
         if len(here) == len(members):
             queue.pop(0)
             self.stats['planned_batches'] += 1
             return here
+        missing_due = [self.eta.get(i, (None, float('inf')))[1] for i in members if i not in by_idx]
+        close = any(e <= now + self.HOLD_MAX_S for e in missing_due)
+        if close and now - start < self.HOLD_MAX_S:
+            self.stats['hold_wait_members'] += 1
+            return []
         step = here[0].actual_step if here else None
         if step is not None and len(here) >= step.batch_min:
             queue.pop(0)
             self.stats['partial_batches'] += 1
             return here[:step.batch_max]
-        if now - start < self.PLAN_S:
-            self.stats['hold_wait_members'] += 1
-            return []
         # plan is stale for this tool: drop it and let the rule act
         self.plan.pop(machine.idx, None)
         self.stats['fallback_stale'] += 1

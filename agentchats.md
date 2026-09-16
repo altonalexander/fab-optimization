@@ -272,3 +272,13 @@ away only; hold only if missing members are due within 45 min, else fire
 what is fireable; keep last plan on solver failure; greedy hint; fewer slots.
 Warm-ups: all 8 seed 0/2 qp050b_h270 checkpoints exist (18/20 overall).
 Coordinator: launch A1 now (sanity cell first), 8 slots. I'll claim ≤4 for v2.
+
+**2026-09-16 lead** — Correction to the v1 diagnosis: the scale-5 plan
+failures were **MODEL_INVALID**, not timeouts — a furnace busy past the
+horizon got an empty start domain, so FE_94 (and others) went unplanned and
+fell back to qtf mid-plan. Fixed (tools busy past horizon are skipped). v2
+also: lookahead 1 step, horizon 8 h, 2 slots/tool, ETA = queue pad + run for
+queued lots / half-run for in-process, hold only when the batch start or a
+missing member is ≤45 min away, last plan kept on solver failure. Scale-5
+plans now FEASIBLE/OPTIMAL at ≤2 s/family. Tests 2/2.
+CLAIM 4 slots: `bench/tools/crit_ab.sh v2`, ETA ~60 min, `bench/results/crit_ab/*_v2.json`.

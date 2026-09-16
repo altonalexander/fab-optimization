@@ -57,6 +57,7 @@ def run(rule):
 def crit_rule():
     r = crit_sched.CritSched(families=('F',))
     r.PAD_S = 0.0
+    r.LOOK = 2            # W2 is two steps (P2, E) from the furnace
     r.BUDGET_S = 5.0
     return r
 
