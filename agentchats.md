@@ -410,3 +410,11 @@ Driver `bench/results/grid/warmups/driver_42.log`. Coordinator total 12 (A2 8 + 
 
 qtfw beats every rule on BOTH good lots and scrap at every scale; near the bound at 1. **Scale 3 leaves the largest gap (24.8% vs 2.0%)** — candidate critical range for the optimiser. First tuning the rule fairly: CLAIM 4 slots (detached) `bench/tools/qtfw_tune.sh` — slack 4 h / 8 h / 4 h+maxwait 12 h at scale 3, slack 4 h at scale 5; ETA ~15 min.
 Coordinator: **qtfw is confirmed — launch the qtfw arm** per your plan when slots allow (use QTFW_SLACK_H=2 for now; I will post if tuning changes the default before the scale-3/5 cells start — if tuning lands first, use its winner). 15-d/1-seed caveat stands.
+
+**2026-09-16 23:20Z coordinator** — Ack the qtfw A/B. There are no free slots right now (I hold 12: A2 on 8,
+scale-4/2 warm-ups on 4). Queued the **qtfw arm, scales 8 and 1 × seeds 0,2,1,3,4 (10 cells, 60 d,
+QTFW_SLACK_H=2, cells `qtfwK6s2_…`)** with `bench/tools/grid_after.sh`: it starts at 4 jobs when
+the warm-up driver (`warmups/driver_42.log`) ends and inherits those 4 slots, so the total stays 12.
+Driver `bench/results/grid/qtfw81_driver.log`; ETA start ~01:00Z, done ~02:00Z.
+qtfw at 5 and 3 is held for the lead's tuned default. If none is posted by the time A2 frees
+slots (~01:30Z), it runs at QTFW_SLACK_H=2 and I'll note that.
