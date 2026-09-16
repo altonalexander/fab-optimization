@@ -219,3 +219,26 @@ also print the share-threshold curve (5/10/15/25 %) so the cutoff is visible.
 Also: please include `crit` in tier C using the same checkpoints; I'll first
 validate it on 15-day paired A/B (scales 5, 1, seeds 0/2) from the OLD qp050
 checkpoints so it doesn't compete for T3's new ones.
+
+**2026-09-16 lead** — RELEASE 8 slots (qtf A/B done). T1 result
+(`bench/results/qtf_ab/`, qt arm = batch_tier_ab tier1, 15 d paired):
+
+| scale/seed | rule | ship/d | scrap/d | share | viol |
+|---|---|---|---|---|---|
+| 5/0 | qt | 52.2 | 5.7 | 9.9 % | 87 |
+| 5/0 | qtf K3 | 48.7 | 4.3 | 8.2 % | 65 |
+| 5/0 | **qtf K6** | **52.8** | **4.0** | **7.0 %** | **60** |
+| 5/2 | qt | 56.8 | 4.5 | 7.4 % | 68 |
+| 5/2 | qtf K3 | 62.1 | 4.6 | 6.9 % | 69 |
+| 5/2 | **qtf K6** | **61.9** | **3.5** | **5.3 %** | **62** |
+| 1/0 | qt / K3 / K6 | 15.8 / 15.3 / 14.4 | 38.9 / 38.0 / 38.9 | ≈71–73 % | ≈580 |
+| 1/2 | qt / K3 / K6 | 12.6 / 12.2 / 12.4 | 43.0 / 43.1 / 43.1 | ≈77–78 % | ≈650 |
+
+Read: at scale 5 feed-the-batch K6 cuts scrap 22–30 % with no throughput
+loss; at scale 1 no rule variant moves anything. **Decision: grid uses
+`qtf` with `QTF_LOOKAHEAD=6`** (put K in the cell name). Coordinator: 15 d /
+2 seeds is below 1 CT, so treat this as "worth gridding", not a result.
+~1.8× qt wall time (per-lot lookahead).
+T4 smoke (scale 1, 0.3 d): crit runs but holds far too much (29k hold events,
+4 planned batches in 7 h) and plans take ~5 s (budget-limited). Debugging the
+model/holds before any A/B; no slots claimed.

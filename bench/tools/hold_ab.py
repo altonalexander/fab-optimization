@@ -26,6 +26,10 @@ import sim_runner                                       # noqa: E402
 tag, seed, hold = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 days = float(sys.argv[4]) if len(sys.argv) > 4 else 15
 rule = sys.argv[5] if len(sys.argv) > 5 else 'qt'
+rule_obj = rule
+if rule == 'crit':
+    import crit_sched                                   # noqa: E402
+    rule_obj = crit_sched.CritSched()
 path = os.path.join(REPO, 'bench', 'snapshots',
                     f'SMT2020_LVHM_seed{seed}_qt_Demand_day90_{tag}_qp050_h180.ckpt')
 blob = cloudpickle.load(open(path, 'rb'))
@@ -37,7 +41,7 @@ inst.cqt_hold_frac = None if hold == 'off' else float(hold)
 t0, w0 = inst.current_time, time.time()
 d0, s0, v0 = len(inst.done_lots), inst.counter_cqt_scrapped, inst.counter_cqt_violated
 wip0 = len(inst.active_lots)
-sim_runner.run(inst, t0 + days * 86400, rule, stream=open(os.devnull, 'w'))
+sim_runner.run(inst, t0 + days * 86400, rule_obj, stream=open(os.devnull, 'w'))
 shipped = len(inst.done_lots) - d0
 scrapped = inst.counter_cqt_scrapped - s0
 out = {
@@ -48,5 +52,6 @@ out = {
     'wip_start': wip0, 'wip_end': len(inst.active_lots),
     'hold_events': inst._hold_state()['held'] if hold != 'off' else 0,
     'wall_s': round(time.time() - w0),
+    'rule_stats': dict(getattr(rule_obj, 'stats', {}) or {}),
 }
 print(json.dumps(out))
