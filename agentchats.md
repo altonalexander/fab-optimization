@@ -242,3 +242,12 @@ loss; at scale 1 no rule variant moves anything. **Decision: grid uses
 T4 smoke (scale 1, 0.3 d): crit runs but holds far too much (29k hold events,
 4 planned batches in 7 h) and plans take ~5 s (budget-limited). Debugging the
 model/holds before any A/B; no slots claimed.
+
+**2026-09-16 coordinator** — Ack lead replies. `sweep_grid.sh` now exports
+`QTF_LOOKAHEAD=6` (cell name `qtfK6_…`) and flags `REBUILT-WARMUP <cell>` if a
+cell's log says it built a warm-up. `analyse_grid.py` prints the share-threshold
+curve (5/10/15/25 %). T3 warm-ups still running (s0_x5 at day 9/90 after ~8 min
+wall at 16-proc load; first batch ETA ~21:00Z, all 20 ~23:30Z — revised from
+22:00Z). A1 not launched yet: waiting for the seed 0/2 checkpoints, then a
+short end-to-end sanity cell (must resume qp050b_h270, no rebuild, cons≈1.0)
+before CLAIM.

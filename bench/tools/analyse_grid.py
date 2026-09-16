@@ -122,6 +122,14 @@ def main():
                     'vs_best': gap, 'share_mean': st.mean(shares), 'share_max': max(shares),
                     'ct_mean': st.mean(cts) if cts else None, 'slope_max': mxs,
                     'verdict': verdict, 'cells': cs})
+    # Share-threshold curve: which cells stay viable as the scrap cutoff moves.
+    print('\nviable (slope ok on every seed) by scrap-share cutoff:')
+    print(f'{"scale":>5} {"load":>5} {"win":>4} {"rule":<10} ' + ' '.join(f'{t:>5.0%}' for t in (.05, .10, .15, .25)))
+    for o in out:
+        ok = o['slope_max'] is not None and o['slope_max'] < 5 and len(o['cells']) == len(
+            [c for c in o['cells'] if c['slope'] is not None])
+        print(f'{o["scale"]:>5} {o["load"]:>5.2f} {o["window_days"]:>4} {o["rule"]:<10} '
+              + ' '.join(f'{("yes" if ok and o["share_max"] <= t else "no"):>5}' for t in (.05, .10, .15, .25)))
     if a.json:
         with open(a.json, 'w') as f:
             json.dump(out, f, indent=1)

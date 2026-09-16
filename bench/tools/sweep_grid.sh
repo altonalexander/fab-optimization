@@ -17,18 +17,25 @@ JOBS=${1:?jobs}; RULES=${2:?rules}; SCALES=${3:?scales}; SEEDS=${4:?seeds}
 LOADS=${5:-1.00}; WIN=${6:-60}
 mkdir -p "$OUT"
 export QT_PROMOTE_FRAC=0.50 QT_BATCH_TIER=1 SIM_CONTROL_FILE=/dev/null
+# Lead decision 2026-09-16: qtf runs at K=6; K goes in the cell name (qtfK6).
+export QTF_LOOKAHEAD=${QTF_LOOKAHEAD:-6}
 
 cell() {
   local rule=$1 scale=$2 seed=$3 load=$4
   local L; L=$(awk -v l="$load" 'BEGIN{printf "%03d", l*100 + 0.5}')
-  local tag="${rule}_x${scale}_L${L}_s${seed}_w${WIN}"
+  local rtag=$rule
+  [ "$rule" = qtf ] && rtag="qtfK${QTF_LOOKAHEAD}"
+  local tag="${rtag}_x${scale}_L${L}_s${seed}_w${WIN}"
   [ -s "$OUT/${tag}.json" ] && { echo "SKIP $tag"; return 0; }
   cd "$REPO" || return 1
   "$PY" bench/tools/compare.py --days $((90 + WIN)) --warmup-days 90 \
       --warmup-dispatcher qt --seed "$seed" --rules "$rule" \
       --cqt --cqt-scale "$scale" --cqt-max-rework 0 --starts-scale "$load" \
       --out "$OUT/${tag}.json" > "$OUT/${tag}.log" 2>&1
-  echo "DONE $tag rc=$? $(date -Is)"
+  local rc=$?
+  # A cell must resume a T3 warm-up, never build one (racing builds).
+  grep -q "building it" "$OUT/${tag}.log" && echo "REBUILT-WARMUP $tag" >&2
+  echo "DONE $tag rc=$rc $(date -Is)"
 }
 export -f cell
 export REPO PY OUT WIN
