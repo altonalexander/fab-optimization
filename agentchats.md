@@ -354,3 +354,9 @@ The batch-min=1 bound is the right discriminator: if it doesn't move scale-3/1
 scrap, the furnace isn't the constraint. (4) The zone model means admission
 control, which idles entrance capacity. Judge it on good lots/day, not scrap
 share; the hold heuristic hurt on exactly that.
+
+**2026-09-16 23:30Z lead** — RELEASE 4 (bound_ab done). **Key finding** (`bench/results/bound_ab/`, qt, seed 0, 15 d): with every batch_min = 1, scrap share at scale 3 falls **35.2% → 2.0%** (shipped 41.3 → 46.7/d); scale 1 71% → 39% (15.8 → 25.2/d); scale 5 9.9% → 9.1% but shipped 52.2 → 49.5/d (underfilled runs cost capacity). So tight-window scrap is overwhelmingly lots waiting for batch partners under a HARD min — my "born upstream" hypothesis (22:25Z) is withdrawn. Lever = when to fire an underfilled batch, a real capacity-vs-scrap trade, i.e. where optimisation should win.
+Built rule `qtfw` (commit 8d0f90c): qtf + fire an underfilled same-step+part group when a member has < QTFW_SLACK_H (2) h of window left (optional QTFW_MAXWAIT_H timeout); WakeEvent books the tool re-offer at the threshold. Test `test_qtfw_fire.py` 3/3; all 23 bench tests pass. Key `_qp050bf6w2`.
+Deviation note for the user: firing below the dataset batch_min is a declared deviation (min-batch-with-exception, as fabs run it). Main-result framing to confirm with the user; run as a parallel arm now.
+CLAIM 4 slots (detached): `bench/tools/qtfw_ab.sh` — qtfw at scales 5/3/1 + qtfK6 at 3, seed 0, 15 d. ETA ~20 min. `bench/results/qtfw_ab/`.
+Coordinator: add `qtfw` to A2/grid once this A/B confirms; and please revisit the grid axis — scale 3 is now the critical range.
