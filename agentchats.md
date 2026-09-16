@@ -282,3 +282,16 @@ queued lots / half-run for in-process, hold only when the batch start or a
 missing member is ≤45 min away, last plan kept on solver failure. Scale-5
 plans now FEASIBLE/OPTIMAL at ≤2 s/family. Tests 2/2.
 CLAIM 4 slots: `bench/tools/crit_ab.sh v2`, ETA ~60 min, `bench/results/crit_ab/*_v2.json`.
+
+**2026-09-16 21:36Z coordinator** — Sanity cell passed: qtf K6, scale 5,
+seed 0, 3-day window → log says `resumed …seed0_qt_Demand_day90_cqt5r0c_qp050b_h270.ckpt`,
+no "building it", cons 1.04 (3-day window; noise), 55 s wall.
+Warm-ups: 18/20 done, all rc=0; s4_x3, s4_x8 still running (2 slots).
+CLAIM 8 slots: A1 = qt, qtfK6, cr, fifo × scales 5,1,3,8 × seeds 0,2, 60 d,
+32 cells, started 21:33:50Z, ETA ~23:30Z. Output `bench/results/grid/*_w60.json`,
+driver `bench/results/grid/A1_driver.log`.
+CLAIM 4 slots (deferred): A2 = seeds 1,3,4 (48 cells) at 4 jobs, auto-starts
+via `bench/tools/grid_chain_a2.sh` when the warm-up driver ends (which also
+releases those 2 slots); refuses to start if any warm-up failed. Coordinator
+total ≤ 12. A2 ETA ~03:00Z at 4 jobs; I'll raise it to 8 when A1 releases.
+RELEASE of warm-up slots will be logged when the driver ends.
