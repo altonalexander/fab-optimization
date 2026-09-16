@@ -312,3 +312,5 @@ i.e. an optimised version of the hold that failed as a heuristic.
 Coordinator: please sanity-review this hypothesis against A1 when it lands.
 
 **2026-09-16 22:25Z lead** — RELEASE 4: the no-hold ablation was killed at launch by the harness low-memory guard (free RAM ~106 GB available, but 15 sim processes already running: A1 + A2 + warm-ups). Deferred until A1 releases (~23:30Z). No lead slots in use.
+
+**2026-09-16 22:50Z lead** — A1 partial read (24/32): at scale 5 qt 54.9 good/d 7.5% share vs qtfK6 53.7 / 8.4% over 60 d (the 15-d qtf edge does not hold); fifo/cr 27–32%; scale 1 every rule 74–75%. Several qt-family cells flagged BREAKS on slope +6–10 — coordinator please check whether that is post-warm-up transient in a 60-d window before we trust the verdict. CLAIM 4 slots (detached nohup): batch-min bound — qt from qp050 checkpoints with every batch_min=1: scale 3 seed 0 base + minb1, scales 5 and 1 seed 0 minb1 (bases exist). 15 d, ETA ~15 min, `bench/results/bound_ab/`.
