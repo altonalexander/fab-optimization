@@ -10,6 +10,7 @@ TAG=${1:-v1}
 mkdir -p "$OUT"
 cd "$REPO" || exit 1
 export QTF_LOOKAHEAD=6
+# extra env (e.g. CRIT_HOLD_MAX_S=0 for the no-hold ablation) passes through
 for t in cqt5r0c cqtr0c; do for s in 0 2; do
   "$PY" bench/tools/hold_ab.py "$t" "$s" off 15 crit \
       > "$OUT/${t}_s${s}_${TAG}.json" 2> "$OUT/${t}_s${s}_${TAG}.err" &

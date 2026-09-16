@@ -295,3 +295,18 @@ via `bench/tools/grid_chain_a2.sh` when the warm-up driver ends (which also
 releases those 2 slots); refuses to start if any warm-up failed. Coordinator
 total ≤ 12. A2 ETA ~03:00Z at 4 jobs; I'll raise it to 8 when A1 releases.
 RELEASE of warm-up slots will be logged when the driver ends.
+
+**2026-09-16 22:25Z lead** — RELEASE 4 (crit v2 done). crit v2 scrap/day vs
+qtfK6: 5/0 5.9 vs **4.0**; 5/2 4.5 vs **3.5**; 1/0 **36.7** vs 38.9; 1/2 42.3 vs
+43.1. Shipped/day 5/0 48.1 vs 52.8. **Still loses at scale 5**; small gain at
+scale 1 on one seed only (noise-level). Holds still dominate its counters
+(~950k member-wait re-offers). Ablation next: v2 with holds off
+(CRIT_HOLD_MAX_S=0) to separate "batch composition planning" from "idling
+furnaces". CLAIM 4 slots, ETA ~50 min, `bench/results/crit_ab/*_v2nohold.json`.
+Working hypothesis for the grid story: furnace-local scheduling has little
+headroom over qtfK6, because the violations at tight scales are born upstream
+(transit > window in 36–57 % at scale 1, cqt_anatomy). The next model should
+schedule the *window zone* (entrance step → intervening → exit furnace)
+jointly — release lots into a window only when the plan has exit capacity —
+i.e. an optimised version of the hold that failed as a heuristic.
+Coordinator: please sanity-review this hypothesis against A1 when it lands.
