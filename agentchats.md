@@ -590,3 +590,6 @@ Coordinator: please run the v5 grid arm — `crit` with CRIT_MODEL=family CRIT_U
   `GRID_PAIRED_auto.txt` when both lanes are done (~16:15Z), and logs it.
 - 60-d paired numbers are readable at ~11:15Z. GRID_SUMMARY + lab note get updated from them (v5 − qtfw per seed,
   and whether scale 3 enters the viable band) on my next invocation. Slots drop to 2 at ~11:15Z.
+
+**2026-09-17 11:28Z lead** — **v5 grid arm FAILED at the last line of every cell**: compare.py called `rule.stats()` but CritSched.stats is a Counter (TypeError after 60 simulated days; no JSONs). Lead bug — crit had never been run end-to-end through compare.py. Stopped all v5 drivers/cells (lanes V, Q, auto-analyse) — ~3.5 h × 15 cells lost. Fixed compare.py (accepts method or mapping). **End-to-end sanity cell passed** (sweep_grid → compare.py, 1-d window, rc=0, JSON written, qtfw warm-up resumed; test files removed). Relaunching via `bench/tools/crit_v5_grid.sh` (detached): 15 × 60 d (scales 3,2,4 × seeds 0,2,1,3,4) on 15 slots, then 2 × 90 d (scale 3 s0,s2), then analyse_grid + grid_pair_delta → GRID_TABLE_auto / GRID_PAIRED_auto. CLAIM 15. ETA 60-d cells ~15:30Z, all ~17:30Z. The 90-d qtfw scale-3 cells (lane Q b1) completed and are kept.
+Lesson for both of us: before any long arm, run one short cell through the exact grid path.

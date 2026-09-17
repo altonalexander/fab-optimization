@@ -601,7 +601,11 @@ def run_one(spec, args):
     if live:
         row['wip_first'] = live[0].get('wip'); row['wip_last'] = live[-1].get('wip')
     if hasattr(rule, 'stats'):
-        row['detail'] = rule.stats()
+        # SlateRule.stats is a method; crit_sched.CritSched.stats is a Counter.
+        # Calling the Counter crashed every crit grid cell at its very last line
+        # (2026-09-17, 15 cells x ~3.5 h lost), so accept either.
+        s = rule.stats
+        row['detail'] = s() if callable(s) else dict(s)
     row['interrupted'] = interrupted
     row['samples'] = sampler.rows
     print(f"  {row['throughput']} lots, "
