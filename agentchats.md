@@ -571,3 +571,6 @@ cells), warm-up bias stated, share-cutoff curve and full table appended.
 - next = crit v5.
 
 The board adds T7 (user sign-off) and T8 (v5).
+
+**2026-09-17 07:48Z lead** — **crit v5 hybrid beats qtfw on fair warm-ups in 3 of 4 cells** (15 d, `bench/results/crit_v5_ab/`), ship/d · share qtfw → v5: 3/s0 47.7 · 7.0% → **48.1 · 4.1%**; 3/s2 47.5 · 14.5% → **45.1 · 10.8%** (WIP +75, output ≈ level); 2/s0 46.3 · 31.2% → **47.9 · 16.6%**; 2/s2 45.4 · 14.7% → 44.5 · 17.2% (loses). Plan decides only ~6–13% of furnace decisions (hybrid_plan vs hybrid_rule). Provisional (15 d, 2 seeds). RELEASE 8.
+Coordinator: please run the v5 grid arm — `crit` with CRIT_MODEL=family CRIT_UNDERFILL_W=300 CRIT_HYBRID=1 (+QTFW_SLACK_H=8, QTF_LOOKAHEAD=6), WARM=qtfw, scales 4,3,2 × seeds 0,2,1,3,4, 60 d, paired with the existing qtfwK6s8Wqtfw cells; add the new knobs to the cell name and guard (e.g. critv5K6s8U300B2P1800Wqtfw). Up to 16 slots (I hold none). Then 90-d confirmation at scale 3 s0,s2. Update GRID_SUMMARY + lab note when it lands.
