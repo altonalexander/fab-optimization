@@ -103,10 +103,10 @@ sensitivity arms (rework, under-min firing, hold); paper tables.
 |---|---|---|---|
 | T1 | `qtf` feed-the-batch rule + test + paired A/B | lead | built + tested; A/B running (bench/results/qtf_ab) |
 | T2 | critique plan; design the grid (axes, cells, compute, ETA) | coordinator | done (Log 2026-09-16 coordinator) |
-| T3 | regenerate warm-ups/baselines under batch fix (qp050b) for grid | coordinator | in progress: 20 qt(b) warm-ups running, 8 slots |
+| T3 | regenerate warm-ups/baselines under batch fix (qp050b) for grid | coordinator | done: 30 qt(b) warm-ups, scales 8/5/4/3/2/1 × 5 seeds |
 | T4 | critical-section CP-SAT scheduler | lead | built + synthetic test (c35ddfe); A/B next |
-| T5 | grid runs + analysis script + SUMMARY | coordinator | scripts ready (`sweep_grid.sh`, `analyse_grid.py`); runs wait for T3 + slots |
-| T6 | lab note: batch-tier fix + feed-the-batch + grid | coordinator | open |
+| T5 | grid runs + analysis script + SUMMARY | coordinator | in progress: lanes A–E running; partial `bench/results/grid/GRID_SUMMARY.txt` |
+| T6 | lab note: batch-tier fix + feed-the-batch + grid | coordinator | draft `docs/notes/2026-09-17-where-rules-break.md` (update when crit arm + lanes land) |
 
 ---
 
@@ -492,3 +492,21 @@ Coordinator: crit arm scales = {4, 3, 2} (not 5, not 1) until the u600 result; l
 
 **2026-09-17 03:40Z lead** — Underfill weight A/B (seed 0, 15 d), ship/d · share: scale 5 — qtfw s8 53.5 · 2.0%, crit u300 52.8 · 8.8%, **crit u600 50.0 · 2.1%** (WIP +52 ⇒ output ≈ level); scale 3 — qtfw s8 46.8 · 16.6%, **crit u300 45.8 · 11.9%**, crit u600 46.5 · 13.5%. No single weight wins both: u600 ties qtfw at 5, u300 is best at 3. Same regime-dependence as qtfw threshold — to be reported, not hidden. Grid arm stays u300 (critical range). RELEASE 2 (u600 done). CLAIM 2: `bench/tools/crit_arm_x2.sh` (crit scale 2 s0,s2, 60 d), ETA ~4.5 h.
 Idea queued (not started): make the underfill price state-dependent (e.g. scale with the family queue length or blown-window risk) so one setting works across regimes.
+
+**2026-09-17 03:25Z coordinator** — chain.log transcript: lane A b1 (qtfw s8 × {8,1}) END 01:59Z,
+10 cells, then b2 (qt, qtfK6 × {4,2}) started. Lane B b1 (qtfw s8 × {5,3}) END 02:04Z, 10 cells, then b2
+(qtfw s8, fifo × {4,2}) started. Lane C b1 (90-d qt/qtfK6 × {8,5}) END 02:24Z, 8 cells, then b2 (90-d
+qtfw × {8,5,3}) started. No STOP events. Count at 03:16Z: 16 grid processes (my 12 + lead 4),
+plus the long-running dashboard `sim_feed --kafka` feed, which is not ours.
+**Queued the lead's request** as lanes D and E (2 jobs each). Both take lane C's 4 slots when lane C b2 ends (~04:15Z):
+D = `crit` × scale 4 × seeds 0,2, 60 d (`critK6s8U300B2P1800`), ETA ~08:45Z;
+E = qtfw s8 × {4,2} × seeds 0,2, 90 d, ETA ~05:40Z. My total stays 12.
+**T6 draft:** `docs/notes/2026-09-17-where-rules-break.md`. **Partial grid:** `bench/results/grid/GRID_SUMMARY.txt`.
+**Trap found, please read:** qtfw's BREAKS at 4/3/2 are drift, and the drift is WIP re-equilibrating
+*upward* from the qt warm-up (qtfw keeps lots alive: scale 3 ~1500 → ~1830 plateau). The 60-d scale-3
+qtfw share (9.6 %) is optimistic, and the 90-d seed-0 cell reads 12.0 % with drift +2.7. crit resumes the same
+qt warm-ups, so it has the same bias, probably larger. **Proposal:** build qtfw-warmed checkpoints
+(`--warmup-dispatcher qtfw`, key `_qp050bf6w8` exists) for scales 4/3/2 × 5 seeds (15 warm-ups,
+~50 min each ≈ 12 core-h) and run the headline qtfw rows plus the crit arm from them. That changes the paired
+baseline: rules would then resume a qtfw fab, so plain-rule rows keep the qt warm-up. Lead: agree? The
+running crit cells (qt-warmed) stay valid as paired vs qtfw on the same warm-up, but should be labelled.
