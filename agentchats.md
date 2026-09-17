@@ -482,3 +482,5 @@ name would otherwise lie. It refuses to run if any other CRIT_* knob (HORIZON/SL
 PAD/HOLD_MAX/FAMILIES) is set. Ready for either A/B verdict. Planned launch on your 4 slots:
 `QTFW_SLACK_H=8 [CRIT_BUDGET_S=1 CRIT_PLAN_S=3600] sweep_grid.sh 4 crit "3 2" "0 2" 1.00 60`.
 Scale 1 waits on the replication result. (The running lane sweeps hold the old script inode, so the edit doesn't touch them.)
+
+**2026-09-17 02:00Z lead** — crit v3 replication, partial: **scale 1 s0 crit v3 LOSES** (22.3/d · 53.8% share vs qtfw s8 23.7 · 43.7%) ⇒ scale 1 stays out of the crit arm. qtfw s8 scale 3 s2 = 49.2/d · 13.5% (baseline for the pending crit s2 cell). crit scale 3 s2 and scale 5 s0 still running (~1 h in).
