@@ -67,6 +67,7 @@ class CritSched(QtWindowFire):
     UNDERFILL_MODE = os.getenv('CRIT_UNDERFILL_MODE', 'fixed')   # 'fixed' | 'load' (v4)
     MODEL = os.getenv('CRIT_MODEL', 'tool')                      # 'tool' (v1-v3) | 'family' (v4)
     GROUP_BATCHES = int(os.getenv('CRIT_GROUP_BATCHES', '2'))
+    HYBRID = os.getenv('CRIT_HYBRID', '0') == '1'                 # v5: plan only under contention, never hold
     START_TOL_S = 120.0
 
     def __init__(self, families=None, lookahead=None):
@@ -454,11 +455,37 @@ class CritSched(QtWindowFire):
         self.stats['fallback_stale'] += 1
         return None
 
+    def _contended(self, instance, machine, now):
+        """v5: are there more at-risk windowed groups than free furnaces?
+
+        On fair warm-ups no planning variant beat qtfw outright (crit_v4_ab):
+        the rule already fires at-risk groups first and underfilled when
+        needed. The one decision it makes myopically is WHICH at-risk groups
+        get the furnaces when there are not enough to go round -- it takes
+        the head lot's slack, not how many windows each run saves or what
+        arrives next. So the hybrid lets the plan decide only then.
+        """
+        groups = set()
+        for l in machine.waiting_lots:
+            st = l.actual_step
+            if (l.cqt_waiting is not None and l.cqt_deadline is not None
+                    and st is not None and st.order == l.cqt_waiting
+                    and 0 < l.cqt_deadline - now < self.slack_s):
+                groups.add((st.step_name, l.part_name))
+        free = sum(1 for t in instance.family_machines[machine.family]
+                   if instance.free_machines[t.idx])
+        return len(groups) > free
+
     def _override_family(self, instance, machine, now):
         queue = self.plan.get(('F', machine.family))
         if not queue:
             self.stats['fallback_noplan'] += 1
             return None
+        if self.HYBRID:
+            if not self._contended(instance, machine, now):
+                self.stats['hybrid_rule'] += 1
+                return None
+            self.stats['hybrid_plan'] += 1
         by_idx = {l.idx: l for l in machine.waiting_lots}
         # Hold budget: a free furnace may idle for a batch due soon only if
         # fewer furnaces of the family are already idling than batches are due.
@@ -481,13 +508,16 @@ class CritSched(QtWindowFire):
                 queue.pop(k)
                 self.stats['partial_batches'] += 1
                 return here[:here[0].actual_step.batch_max]
-        if due_soon > idling and queue and queue[0][0] - now <= self.HOLD_MAX_S:
+        if (not self.HYBRID and due_soon > idling and queue
+                and queue[0][0] - now <= self.HOLD_MAX_S):
             self.stats['hold_wait'] += 1
             return []
         self.stats['fallback_rule'] += 1
         return None
 
     def _feeds(self, lot):
+        if self.HYBRID:
+            return super()._feeds(lot)   # v5 leaves upstream expediting to the rule
         st = self.assigned.get(lot.idx)
         if st is not None and lot.actual_step is not None and lot.actual_step.family not in self.families:
             return st
