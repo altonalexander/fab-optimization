@@ -103,10 +103,12 @@ sensitivity arms (rework, under-min firing, hold); paper tables.
 |---|---|---|---|
 | T1 | `qtf` feed-the-batch rule + test + paired A/B | lead | built + tested; A/B running (bench/results/qtf_ab) |
 | T2 | critique plan; design the grid (axes, cells, compute, ETA) | coordinator | done (Log 2026-09-16 coordinator) |
-| T3 | regenerate warm-ups/baselines under batch fix (qp050b) for grid | coordinator | done: 30 qt(b) warm-ups, scales 8/5/4/3/2/1 × 5 seeds |
+| T3 | regenerate warm-ups/baselines under batch fix (qp050b) for grid | coordinator | done: 30 qt(b) + 15 qtfw (scales 4/3/2) warm-ups, 5 seeds |
 | T4 | critical-section CP-SAT scheduler | lead | built + synthetic test (c35ddfe); A/B next |
-| T5 | grid runs + analysis script + SUMMARY | coordinator | in progress: lanes A–E running; partial `bench/results/grid/GRID_SUMMARY.txt` |
-| T6 | lab note: batch-tier fix + feed-the-batch + grid | coordinator | draft `docs/notes/2026-09-17-where-rules-break.md` (update when crit arm + lanes land) |
+| T5 | grid runs + analysis script + SUMMARY | coordinator | done: rule grid final, `bench/results/grid/GRID_SUMMARY.txt` (load axis open) |
+| T6 | lab note: batch-tier fix + feed-the-batch + grid | coordinator | done: `docs/notes/2026-09-17-where-rules-break.md` (update when crit v5 lands) |
+| T7 | user sign-off: under-min exception (qtfw) as realistic baseline | lead → user | open |
+| T8 | crit v5 conservative hybrid, A/B on qtfw warm-ups | lead | open |
 
 ---
 
@@ -555,3 +557,17 @@ Next (lead): crit v5 = conservative hybrid — qtfw everywhere, CP-SAT plan over
 Coordinator: finalise GRID_SUMMARY.txt + T6 lab note from GRID_TABLE_auto — rules breakdown map as the result; optimiser status = not yet beating the tuned rule on fair warm-ups (report the v3 artifact plainly); flag under-min deviation for user sign-off.
 
 **2026-09-17 07:05Z lead** — crit v5 built: `CRIT_HYBRID=1` — qtfw decides unless at-risk windowed groups at a furnace family outnumber its free furnaces; then the v4 family plan (u300) picks; never holds; no plan-driven expediting. CLAIM 8 (detached `bench/tools/crit_v5_ab.sh`): qtfw s8 vs v5 × scales 3,2 × seeds 0,2 on fair qtfw warm-ups, 15 d. ETA ~60 min, `bench/results/crit_v5_ab/`.
+
+**2026-09-17 07:10Z coordinator** — chain.log transcript: lane C done 03:59Z, A 04:10Z, B 04:20Z, E 05:21Z,
+W2 06:44Z, W1 06:46Z (RELEASE all). QTFW-WARM x3 s0,s2 READY at 04:41Z. No STOP events.
+**I now hold 0 slots**; no coordinator processes are running.
+**T5 done:** `bench/results/grid/GRID_SUMMARY.txt` = headline breakdown map (qtfw at 4/3/2 from Wqtfw
+cells), warm-up bias stated, share-cutoff curve and full table appended.
+**T6 done:** `docs/notes/2026-09-17-where-rules-break.md` finalised:
+- the qt family is viable to scale 5, plain qt breaks at 4;
+- qtfw holds to 4 and breaks at 3–2 (scale 3: one seed at 15.8 %);
+- no crit version beats tuned qtfw on fair warm-ups, and the v3 win is stated as a qt-warm-up artifact with numbers;
+- the under-min deviation is flagged for user sign-off;
+- next = crit v5.
+
+The board adds T7 (user sign-off) and T8 (v5).
