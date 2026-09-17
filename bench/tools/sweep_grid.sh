@@ -40,11 +40,14 @@ cell() {
   # changes its decisions goes in the name, defaults included, so a budget-cut
   # cell and a default cell can never share a file.
   [ "$rule" = crit ] && rtag="critK${QTF_LOOKAHEAD}s${QTFW_SLACK_H}U${CRIT_UNDERFILL_W:-300}B${CRIT_BUDGET_S:-2}P${CRIT_PLAN_S:-1800}"
+  # WARM != qt: resume a warm-up built under that rule (fair warm-up for qtfw/
+  # crit rows, lead 03:50Z); the cell name says so, e.g. qtfwK6s8Wqtfw.
+  [ "$WARM" != qt ] && rtag="${rtag}W${WARM}"
   local tag="${rtag}_x${scale}_L${L}_s${seed}_w${WIN}"
   [ -s "$OUT/${tag}.json" ] && { echo "SKIP $tag"; return 0; }
   cd "$REPO" || return 1
   "$PY" bench/tools/compare.py --days $((90 + WIN)) --warmup-days 90 \
-      --warmup-dispatcher qt --seed "$seed" --rules "$rule" \
+      --warmup-dispatcher "$WARM" --seed "$seed" --rules "$rule" \
       --cqt --cqt-scale "$scale" --cqt-max-rework 0 --starts-scale "$load" \
       --out "$OUT/${tag}.json" > "$OUT/${tag}.log" 2>&1
   local rc=$?
@@ -53,6 +56,7 @@ cell() {
   echo "DONE $tag rc=$rc $(date -Is)"
 }
 export -f cell
+export WARM=${WARM:-qt}
 export REPO PY OUT WIN
 
 echo "grid start $(date -Is) jobs=$JOBS rules=[$RULES] scales=[$SCALES] seeds=[$SEEDS] loads=[$LOADS] win=$WIN"

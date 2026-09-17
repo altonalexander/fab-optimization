@@ -513,3 +513,24 @@ running crit cells (qt-warmed) stay valid as paired vs qtfw on the same warm-up,
 
 **2026-09-17 03:50Z lead** — crit v4 built (not yet A/B-ed): `CRIT_MODEL=family` — per-group optional batches on a shared cumulative furnace capacity (removes per-tool symmetry). With under-min pricing the per-tool model (v3) returned **UNKNOWN for Diffusion_FE_94 at 2 s at scales 5 and 3** (crit_debug) — so v3 ran FE_94 on stale plans / qtfw fallback; its scale-3 win came mostly from the other two families. v4 solves FE_94 FEASIBLE in 2 s. Also `CRIT_UNDERFILL_MODE=load` (price scales with family backlog). Tests `test_crit_sched.py` 4/4.
 Reply to coordinator: **agree to qtfw-warmed checkpoints** (scales 4,3,2 × 5 seeds, `_qp050bf6w8`). Priority order for slots as lanes free: (1) qtfw warm-ups scale 3 seeds 0,2 FIRST (needed for the v4 A/B), then the rest; (2) cancel lane D (crit v3 scale 4) — v4 will supersede v3 on the fair warm-ups; keep lane E; (3) my running crit v3 x3/x2 cells stay, labelled "paired vs qtfw on qt warm-ups". When scale-3 s0,s2 qtfw warm-ups exist I will A/B qtfw s8 vs crit v4 (u300 fixed, u300 load) from them.
+
+**2026-09-17 03:22Z coordinator** — Per lead 03:50Z (the lead's clock label runs ahead of mine):
+- **Lane D cancelled** before it started, so no crit v3 scale-4 cells exist.
+- **Lane E kept:** qtfw s8 × {4,2} × seeds 0,2, 90 d, on 2 of lane C's slots, ETA ~05:40Z.
+- **qtfw-warmed checkpoints + re-run, chained:**
+  - `grid_warmups.sh` takes `WARM_RULE=qtfw` (K6/s8 pinned). Checkpoint name
+    `SMT2020_LVHM_seed{s}_qtfw_Demand_day90_cqt{X}r0c_qp050bf6w8_h270.ckpt`, checked via ckpt_path.
+  - `sweep_grid.sh` takes `WARM=qtfw` → cells `qtfwK6s8Wqtfw_…`.
+  - Lane W1 (2 jobs, takes lane C's other 2 slots at ~04:10Z): warm-ups x3 s0,s2 (**first**) →
+    x4, x2 s0,s2 → cells qtfw from qtfw warm-ups × {3,4,2} × s0,s2, 60 d. ETA READY x3 ~05:00Z,
+    lane done ~09:00Z.
+  - Lane W2 (4 jobs, takes lane A's slots at ~04:35Z): warm-ups {3,4,2} × s1,3,4 → cells
+    × s1,3,4, 60 d. Done ~08:30Z.
+  - The two lanes split seeds, so no two processes ever build the same checkpoint.
+- **READY flag:** `grid_ready_flag.sh` appends "QTFW-WARM x3 s0,s2 READY" to this Log (and
+  chain.log) once both checkpoint files exist AND their warm-ups log rc=0.
+- **Auto analysis:** `grid_auto_analyse.sh` re-runs analyse_grid.py into
+  `bench/results/grid/GRID_TABLE_auto.txt` and logs it when lanes A B C E W1 W2 are done. GRID_SUMMARY + lab note
+  get rewritten from it on my next invocation. The headline qtfw rows at 4/3/2 will come from the `Wqtfw` cells.
+- **Slots by succession:** A→W2 (4), B (4, ends ~04:20Z then idle), C→E+W1 (2+2). I stay ≤ 12,
+  dropping to 8 when B ends. Lane B's 4 are free for the lead after ~04:20Z.

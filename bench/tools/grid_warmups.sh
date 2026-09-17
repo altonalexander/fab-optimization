@@ -19,19 +19,23 @@ SCALES=${2:-"5 1 3 8"}
 SEEDS=${3:-"0 2 1 3 4"}
 mkdir -p "$OUT"
 export QT_PROMOTE_FRAC=0.50 QT_BATCH_TIER=1 SIM_CONTROL_FILE=/dev/null
+# WARM_RULE=qtfw builds the fair warm-ups for qtfw/crit rows (lead 03:50Z):
+# checkpoint key _qp050bf{K}w{slack}, so K and slack are pinned here.
+export WARM_RULE=${WARM_RULE:-qt} QTF_LOOKAHEAD=${QTF_LOOKAHEAD:-6} QTFW_SLACK_H=${QTFW_SLACK_H:-8}
 
 build() {
   local seed=$1 scale=$2 tag="s${1}_x${2}"
+  [ "$WARM_RULE" != qt ] && tag="${WARM_RULE}_${tag}"
   local ck
   ck=$(cd "$REPO/bench/tools" && "$PY" -c "
 import sys; sys.path[:0] = ['$REPO/bench/tools']
 import sim_feed
-print(sim_feed.find_ckpt('SMT2020_LVHM', $seed, 'qt', 90, 'Demand', 180, None, None, None, True, float($scale), 0) or '')
+print(sim_feed.find_ckpt('SMT2020_LVHM', $seed, '$WARM_RULE', 90, 'Demand', 180, None, None, None, True, float($scale), 0) or '')
 " 2>/dev/null | tail -1)
   [ -n "$ck" ] && { echo "SKIP $tag $ck"; return 0; }
   cd "$REPO" || return 1
   "$PY" bench/tools/sim_feed.py --dataset SMT2020_LVHM --seed "$seed" \
-      --batch-strat Demand --days 270 --dispatcher qt --warmup-days 90 \
+      --batch-strat Demand --days 270 --dispatcher "$WARM_RULE" --warmup-days 90 \
       --checkpoint-only --no-store --speed 0 --out /dev/null \
       --cqt --cqt-scale="$scale" --cqt-max-rework=0 \
       > "$OUT/${tag}.log" 2>&1

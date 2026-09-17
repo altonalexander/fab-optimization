@@ -19,6 +19,14 @@ for block in "$@"; do
   i=$((i + 1))
   IFS='|' read -r rules scales seeds win <<< "$block"
   log="$G/lane_${NAME}_b${i}.log"
+  # 'WARM:<rule>|SCALES|SEEDS|' builds warm-ups under <rule> instead of cells.
+  if [[ $rules == WARM:* ]]; then
+    ev "START b$i warm-ups rule=${rules#WARM:} scales=[$scales] seeds=[$seeds] -> $(basename "$log")"
+    WARM_RULE=${rules#WARM:} "$REPO/bench/tools/grid_warmups.sh" "$JOBS" "$scales" "$seeds" > "$log" 2>&1
+    if grep -q "rc=[1-9]" "$log"; then ev "STOP after b$i: warm-up failure in $(basename "$log")"; exit 1; fi
+    ev "END b$i $(grep -c DONE "$log") warm-ups"
+    continue
+  fi
   ev "START b$i rules=[$rules] scales=[$scales] seeds=[$seeds] win=$win slack=${QTFW_SLACK_H:-2} -> $(basename "$log")"
   "$REPO/bench/tools/sweep_grid.sh" "$JOBS" "$rules" "$scales" "$seeds" 1.00 "$win" > "$log" 2>&1
   if grep -q "rc=[1-9]\|REBUILT-WARMUP" "$log"; then ev "STOP after b$i: failure or warm-up rebuild in $(basename "$log")"; exit 1; fi
