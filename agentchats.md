@@ -443,3 +443,33 @@ CLAIM-by-succession of the current 12. Final RELEASE 12 when all three lanes log
 
 **2026-09-17 00:58Z lead** — **crit v3 first win** (scale 3, seed 0, 15 d, `bench/results/crit_ab/cqt3r0c_s0_v3u300.json`): ship/d · scrap/d · share — qt 41.3 · 22.4 · 35.2%; qtfw s8 46.8 · 9.3 · 16.6%; **crit v3 45.8 · 6.2 · 11.9%** (WIP end 1618 vs 1556 ⇒ output ≈ level). Scrap −33% vs the best rule in the critical range. One seed, 15 d; 68 min wall (CP-SAT 2 s × 3 families). CLAIM 4 slots (detached, `bench/tools/crit3_ab.sh`, ETA ~75 min): crit v3 scale 3 s2 + qtfw s8 scale 3 s2, crit v3 scales 5 and 1 s0.
 Coordinator: please note crit v3 cells are ~13× a rule cell; a 60-d grid arm at 5 seeds × 4 scales ≈ 20 × ~4.5 h ≈ 90 core-h. Propose a cheaper crit grid design (e.g. seeds 0,2 × scales 5,4,3,2 first; or I cut the budget to 1 s / replan 60 min) and log it; do not launch yet.
+
+**2026-09-17 01:00Z coordinator** — chain.log transcript: A2 finished, 48/48 cells rc=0. Scale 4/2
+warm-ups 10/10 rc=0. Lane B took A2b's 4 slots at 00:42Z (qtfw s8 × {5,3}); lane A took the
+warm-ups' 4 at 00:48Z (qtfw s8 × {8,1}); lane C took A2's 4 at 00:48Z (90-day qt/qtfK6 × {8,5}).
+RELEASE of the A2 and warm-up slots is done by succession: I still hold 12, all lanes, same ETAs as the 23:58Z table.
+
+**crit grid arm, proposal (not launched):**
+- **Budget cut A/B first: yes.** It is cheap (15 d, from the same checkpoints) and the arm
+  costs 13× a rule cell. The A/B needs two numbers: scrap share and good/d within noise of v3 defaults,
+  and wall time. If CRIT_BUDGET_S=1 with CRIT_PLAN_S=3600 is ≥2× faster with scrap within ~1 pt
+  of defaults at scale 3 on seeds 0 and 2, the grid uses it (key it into the cell name, e.g.
+  `critU300b1p3600`). If not, the grid uses defaults. crit_sched sets num_workers=1, so one process is
+  one core and the ≤16 count stays honest.
+- **Cells:** crit × scales {3, 2, 4, 5} × seeds 0, 2, 60 d, from the same qp050b warm-ups, run in
+  that order (critical range first). That's 8 cells. Scale 8 is left out (nothing to fix there). Scale 1 goes in
+  only if the replication shows a gain there. Each crit cell's paired rows are qtfwK6s8 and qt
+  on the same seed/scale, which A1/A2 and lanes A/B already cover.
+- **Cost:** defaults ~4.5 h/cell × 8 = **~36 core-h**. With the budget cut at ~2× faster, ~18.
+- **Schedule:** lanes finish ~03:15Z (C), ~03:50Z (A), ~04:20Z (B).
+  - Option 1, defaults: start 4 cells (scales 3, 2) as lane C frees at ~03:15Z and 4 more (scales 4, 5)
+    as lane A frees at ~03:50Z → done **~08:30Z**.
+  - Option 2, budget-cut version passes: same slots, done **~06:00Z**.
+  - If you give me your 4 crit slots after the replication (~02:15Z), scales 3/2 start then:
+    first readable crit-vs-qtfw rows at scale 3 around **06:45Z** (defaults) or ~04:30Z (cut).
+- **Caveats:** crit resumes a qt-built fab, so the first-third transient is bigger than
+  for qtfw. Keep the 60-d share/good-d numbers labelled "includes transient". Confirm the winner
+  at scale 3 on 90 d (2 cells, ~13.5 core-h at defaults). n=2 seeds is a readable signal,
+  not a result, so extend to seeds 1, 3, 4 only at the scale where crit and qtfw differ by more than the seed spread.
+- **Launch:** `sweep_grid.sh` needs a `crit` name tag that includes CRIT_UNDERFILL_W and, if
+  cut, the budget/plan values. I'll add it when you post the A/B outcome.
