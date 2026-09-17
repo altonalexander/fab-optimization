@@ -44,3 +44,11 @@
 2026-09-17T06:46:11Z lane=W1 END b3 6 cells
 2026-09-17T06:46:11Z lane=W1 lane done; RELEASE 2 slots
 2026-09-17T06:46:46Z ANALYSED lanes [A B C E W1 W2] -> GRID_TABLE_auto.txt
+2026-09-17T07:46:42Z lane=V armed, waiting for lane_W1_b3.log
+2026-09-17T07:46:42Z lane=V RELEASE-READY lane_W1_b3.log ended; lane takes its 15 slots
+2026-09-17T07:46:42Z lane=V START b1 rules=[crit] scales=[3 2 4] seeds=[0 2 1 3 4] win=60 slack=8 -> lane_V_b1.log
+2026-09-17T07:46:44Z lane=Q armed, waiting for lane_W1_b3.log
+2026-09-17T07:46:44Z lane=Q RELEASE-READY lane_W1_b3.log ended; lane takes its 1 slots
+2026-09-17T07:46:44Z lane=Q START b1 rules=[qtfw] scales=[3] seeds=[0 2] win=90 slack=8 -> lane_Q_b1.log
+2026-09-17T09:33:42Z lane=Q END b1 2 cells
+2026-09-17T09:33:42Z lane=Q START b2 rules=[crit] scales=[3] seeds=[0] win=90 slack=8 -> lane_Q_b2.log

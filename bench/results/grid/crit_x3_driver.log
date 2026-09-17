@@ -1,0 +1,2 @@
+grid start 2026-09-17T03:06:14+00:00 jobs=2 rules=[crit] scales=[3] seeds=[0 2] loads=[1.00] win=60
+xargs: bash: terminated by signal 15
