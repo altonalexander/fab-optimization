@@ -24,9 +24,19 @@ export QTFW_SLACK_H=${QTFW_SLACK_H:-2}
 # pin it rather than let the name say U300 while the run says none.
 export CRIT_UNDERFILL_W=${CRIT_UNDERFILL_W:-300} CRIT_BUDGET_S=${CRIT_BUDGET_S:-2} CRIT_PLAN_S=${CRIT_PLAN_S:-1800}
 # Any other CRIT_* knob would change crit without changing the cell name.
-if env | grep -qE '^CRIT_(HORIZON_S|SLOTS|LOOKAHEAD|PAD_S|HOLD_MAX_S|FAMILIES)='; then
+# Named knobs: UNDERFILL_W, BUDGET_S, PLAN_S, and MODEL+HYBRID via the version
+# prefix. Anything else (every CRIT_* crit_sched reads, and any future one) refuses.
+if env | grep -E '^CRIT_' | grep -vqE '^CRIT_(UNDERFILL_W|BUDGET_S|PLAN_S|MODEL|HYBRID)='; then
   echo "refusing: a CRIT_* knob outside the cell name is set" >&2; exit 2
 fi
+export CRIT_MODEL=${CRIT_MODEL:-tool} CRIT_HYBRID=${CRIT_HYBRID:-0}
+case "$CRIT_MODEL/$CRIT_HYBRID" in
+  tool/0) CRIT_VER=crit ;;      # v1-v3 per-tool model
+  family/0) CRIT_VER=critv4 ;;  # v4 family model on shared furnace capacity
+  family/1) CRIT_VER=critv5 ;;  # v5 hybrid: qtfw unless the plan saves a window, no holds
+  *) echo "refusing: CRIT_MODEL=$CRIT_MODEL CRIT_HYBRID=$CRIT_HYBRID has no cell-name prefix" >&2; exit 2 ;;
+esac
+export CRIT_VER
 
 cell() {
   local rule=$1 scale=$2 seed=$3 load=$4
@@ -39,7 +49,7 @@ cell() {
   # crit = CP-SAT critical-section scheduler (qtfw fallback). Every knob that
   # changes its decisions goes in the name, defaults included, so a budget-cut
   # cell and a default cell can never share a file.
-  [ "$rule" = crit ] && rtag="critK${QTF_LOOKAHEAD}s${QTFW_SLACK_H}U${CRIT_UNDERFILL_W:-300}B${CRIT_BUDGET_S:-2}P${CRIT_PLAN_S:-1800}"
+  [ "$rule" = crit ] && rtag="${CRIT_VER}K${QTF_LOOKAHEAD}s${QTFW_SLACK_H}U${CRIT_UNDERFILL_W:-300}B${CRIT_BUDGET_S:-2}P${CRIT_PLAN_S:-1800}"
   # WARM != qt: resume a warm-up built under that rule (fair warm-up for qtfw/
   # crit rows, lead 03:50Z); the cell name says so, e.g. qtfwK6s8Wqtfw.
   [ "$WARM" != qt ] && rtag="${rtag}W${WARM}"

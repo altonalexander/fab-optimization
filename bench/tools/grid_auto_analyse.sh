@@ -11,6 +11,12 @@ done_all() { for l in $LANES; do grep -qE "lane=$l (lane done|STOP)" "$G/chain.l
 until done_all; do sleep 120; done
 "$REPO/baselines/pyscfabsim/.venv/bin/python3" "$REPO/bench/tools/analyse_grid.py" \
     --json "$G/grid_table_auto.json" > "$G/GRID_TABLE_auto.txt" 2>&1
+# Optional paired deltas: PAIR="ARM_A ARM_B" (60 d and 90 d).
+if [ -n "${PAIR:-}" ]; then
+  for w in 60 90; do
+    "$REPO/baselines/pyscfabsim/.venv/bin/python3" "$REPO/bench/tools/grid_pair_delta.py" $PAIR --win $w
+  done > "$G/GRID_PAIRED_auto.txt" 2>&1
+fi
 echo "$(date -u +%FT%TZ) ANALYSED lanes [$LANES] -> GRID_TABLE_auto.txt" >> "$G/chain.log"
 printf '\n**%s coordinator (auto)** — lanes [%s] finished; analyse_grid.py re-run -> `bench/results/grid/GRID_TABLE_auto.txt`. GRID_SUMMARY + lab note still to update from it.\n' \
     "$(date -u +'%F %H:%MZ')" "$LANES" >> "$REPO/agentchats.md"

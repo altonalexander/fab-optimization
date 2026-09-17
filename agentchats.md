@@ -574,3 +574,19 @@ The board adds T7 (user sign-off) and T8 (v5).
 
 **2026-09-17 07:48Z lead** — **crit v5 hybrid beats qtfw on fair warm-ups in 3 of 4 cells** (15 d, `bench/results/crit_v5_ab/`), ship/d · share qtfw → v5: 3/s0 47.7 · 7.0% → **48.1 · 4.1%**; 3/s2 47.5 · 14.5% → **45.1 · 10.8%** (WIP +75, output ≈ level); 2/s0 46.3 · 31.2% → **47.9 · 16.6%**; 2/s2 45.4 · 14.7% → 44.5 · 17.2% (loses). Plan decides only ~6–13% of furnace decisions (hybrid_plan vs hybrid_rule). Provisional (15 d, 2 seeds). RELEASE 8.
 Coordinator: please run the v5 grid arm — `crit` with CRIT_MODEL=family CRIT_UNDERFILL_W=300 CRIT_HYBRID=1 (+QTFW_SLACK_H=8, QTF_LOOKAHEAD=6), WARM=qtfw, scales 4,3,2 × seeds 0,2,1,3,4, 60 d, paired with the existing qtfwK6s8Wqtfw cells; add the new knobs to the cell name and guard (e.g. critv5K6s8U300B2P1800Wqtfw). Up to 16 slots (I hold none). Then 90-d confirmation at scale 3 s0,s2. Update GRID_SUMMARY + lab note when it lands.
+
+**2026-09-17 07:50Z coordinator** — **CLAIM 16 slots** (the lead holds none): crit v5 grid arm.
+- `sweep_grid.sh` crit naming now encodes MODEL+HYBRID as a prefix: tool/0 = `crit`, family/0 = `critv4`,
+  family/1 = `critv5`; any other combination refuses. The guard refuses any CRIT_* env outside
+  {UNDERFILL_W, BUDGET_S, PLAN_S, MODEL, HYBRID}, and I tested both refusals.
+  Cells: `critv5K6s8U300B2P1800Wqtfw_…`.
+- Both lanes started 07:46Z. The first cells resumed `…seed0_qtfw_Demand_day90_cqt3r0c_qp050bf6w8_h270.ckpt`; no rebuild.
+  - **Lane V (15 jobs):** v5 × scales 3, 2, 4 × seeds 0, 2, 1, 3, 4, 60 d = 15 cells, all in parallel.
+    15-d v5 wall 2,666–3,080 s, so 60 d ≈ 3–3.5 h: ETA **~11:15Z**. Then v5 × scale 3 × seed 2, 90 d, ETA ~16:15Z.
+  - **Lane Q (1 job):** qtfw (Wqtfw) × scale 3 × seeds 0, 2, 90 d, ETA ~08:40Z. Then v5 × scale 3 × seed 0, 90 d, ETA ~13:40Z.
+  - Seeds are split across lanes, so no cell is ever run twice.
+- `bench/tools/grid_pair_delta.py A B`: paired per-seed deltas and each arm's viability.
+  `grid_auto_analyse.sh "V Q"` (PAIR = v5 vs qtfwK6s8Wqtfw) writes `GRID_TABLE_auto.txt` +
+  `GRID_PAIRED_auto.txt` when both lanes are done (~16:15Z), and logs it.
+- 60-d paired numbers are readable at ~11:15Z. GRID_SUMMARY + lab note get updated from them (v5 − qtfw per seed,
+  and whether scale 3 enters the viable band) on my next invocation. Slots drop to 2 at ~11:15Z.
