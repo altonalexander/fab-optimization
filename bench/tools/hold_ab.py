@@ -30,8 +30,8 @@ rule_obj = rule
 if rule == 'crit':
     import crit_sched                                   # noqa: E402
     rule_obj = crit_sched.CritSched()
-path = os.path.join(REPO, 'bench', 'snapshots',
-                    f'SMT2020_LVHM_seed{seed}_qt_Demand_day90_{tag}_qp050_h180.ckpt')
+path = os.getenv('AB_CKPT') or os.path.join(
+    REPO, 'bench', 'snapshots', f'SMT2020_LVHM_seed{seed}_qt_Demand_day90_{tag}_qp050_h180.ckpt')
 blob = cloudpickle.load(open(path, 'rb'))
 inst = blob['instance']
 Randomizer().random.setstate(blob['random'])
