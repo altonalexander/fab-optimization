@@ -20,6 +20,13 @@ export QT_PROMOTE_FRAC=0.50 QT_BATCH_TIER=1 SIM_CONTROL_FILE=/dev/null
 # Lead decision 2026-09-16: qtf runs at K=6; K goes in the cell name (qtfK6).
 export QTF_LOOKAHEAD=${QTF_LOOKAHEAD:-6}
 export QTFW_SLACK_H=${QTFW_SLACK_H:-2}
+# crit v3 needs CRIT_UNDERFILL_W set (unset = no priced under-min batches), so
+# pin it rather than let the name say U300 while the run says none.
+export CRIT_UNDERFILL_W=${CRIT_UNDERFILL_W:-300} CRIT_BUDGET_S=${CRIT_BUDGET_S:-2} CRIT_PLAN_S=${CRIT_PLAN_S:-1800}
+# Any other CRIT_* knob would change crit without changing the cell name.
+if env | grep -qE '^CRIT_(HORIZON_S|SLOTS|LOOKAHEAD|PAD_S|HOLD_MAX_S|FAMILIES)='; then
+  echo "refusing: a CRIT_* knob outside the cell name is set" >&2; exit 2
+fi
 
 cell() {
   local rule=$1 scale=$2 seed=$3 load=$4
@@ -29,6 +36,10 @@ cell() {
   # qtfw = qtf + fire an underfilled batch when a member has < QTFW_SLACK_H of
   # window left. Fires below the dataset's batch minimum: a DECLARED arm.
   [ "$rule" = qtfw ] && rtag="qtfwK${QTF_LOOKAHEAD}s${QTFW_SLACK_H}${QTFW_MAXWAIT_H:+m$QTFW_MAXWAIT_H}"
+  # crit = CP-SAT critical-section scheduler (qtfw fallback). Every knob that
+  # changes its decisions goes in the name, defaults included, so a budget-cut
+  # cell and a default cell can never share a file.
+  [ "$rule" = crit ] && rtag="critK${QTF_LOOKAHEAD}s${QTFW_SLACK_H}U${CRIT_UNDERFILL_W:-300}B${CRIT_BUDGET_S:-2}P${CRIT_PLAN_S:-1800}"
   local tag="${rtag}_x${scale}_L${L}_s${seed}_w${WIN}"
   [ -s "$OUT/${tag}.json" ] && { echo "SKIP $tag"; return 0; }
   cd "$REPO" || return 1

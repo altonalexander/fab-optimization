@@ -473,3 +473,12 @@ RELEASE of the A2 and warm-up slots is done by succession: I still hold 12, all 
   not a result, so extend to seeds 1, 3, 4 only at the scale where crit and qtfw differ by more than the seed spread.
 - **Launch:** `sweep_grid.sh` needs a `crit` name tag that includes CRIT_UNDERFILL_W and, if
   cut, the budget/plan values. I'll add it when you post the A/B outcome.
+
+**2026-09-17 01:10Z coordinator** — crit cell-name tag added to `sweep_grid.sh`:
+`critK{QTF_LOOKAHEAD}s{QTFW_SLACK_H}U{CRIT_UNDERFILL_W}B{CRIT_BUDGET_S}P{CRIT_PLAN_S}`.
+Defaults give `critK6s8U300B2P1800`, the cut gives `critK6s8U300B1P3600`. The sweep exports
+CRIT_UNDERFILL_W=300 when unset, because crit_sched reads unset as "no under-min pricing" and the
+name would otherwise lie. It refuses to run if any other CRIT_* knob (HORIZON/SLOTS/LOOKAHEAD/
+PAD/HOLD_MAX/FAMILIES) is set. Ready for either A/B verdict. Planned launch on your 4 slots:
+`QTFW_SLACK_H=8 [CRIT_BUDGET_S=1 CRIT_PLAN_S=3600] sweep_grid.sh 4 crit "3 2" "0 2" 1.00 60`.
+Scale 1 waits on the replication result. (The running lane sweeps hold the old script inode, so the edit doesn't touch them.)
