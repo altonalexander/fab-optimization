@@ -272,15 +272,31 @@ def make_rule(spec, instance, args):
         return slate_rule.SlateRule(
             instance, solver=args.solver, cycle_s=args.cycle,
             budget_s=args.budget, pressure=pressure, threads=args.threads,
-            lazy=not args.no_lazy, fallback=args.slate_fallback, horizon_s=args.slate_horizon)
+            lazy=not args.no_lazy, fallback=args.slate_fallback, horizon_s=args.slate_horizon,
+            on_demand=bool(getattr(args, 'slate_on_demand', False)),
+            objective=getattr(args, 'slate_objective', 'v1'))
+    if spec == 'crit':
+        # CP-SAT scheduler for the critical batch families, qtf elsewhere.
+        # Tuned by CRIT_* env vars (bench/tools/crit_sched.py).
+        import crit_sched
+        return crit_sched.CritSched()
     return spec          # a plain name; sim_runner resolves it
 
 
 def _mxr(args):
-    """The queue-time rework cap, as the checkpoint key wants it. 0 on the
-    command line means unbounded, which the key represents as no fragment."""
+    """The queue-time rework cap, as the checkpoint key wants it.
+
+    NEGATIVE means unbounded, which the key represents as no fragment. Zero
+    means scrap on the FIRST violation -- the semantics of the testbed's own
+    queue-time paper (WSC 2020: violated lots "have to be scrapped"), which
+    until 2026-09-16 could not be expressed at all because 0 was read as
+    unbounded (audit finding F4). The simulator needs no change for it: a cap
+    of 0 makes the first rework exceed the cap, so the lot is scrapped before
+    any rework is counted.
+    """
     v = getattr(args, 'cqt_max_rework', 3)
-    return None if not v else int(v)
+    v = 3 if v is None else int(v)
+    return None if v < 0 else v
 
 
 def warm_checkpoint(args):
@@ -298,7 +314,7 @@ def warm_checkpoint(args):
                             args.warmup_days, args.batch_strat, args.days, ov,
                             mix, tr, getattr(args, 'cqt', False),
                             getattr(args, 'cqt_scale', 1.0),
-                            _mxr(args))
+                            _mxr(args), transport_s=getattr(args, 'transport_s', 0.0))
     if ck is None:
         print(f'  no {args.warmup_dispatcher} checkpoint for day '
               f'{args.warmup_days:g} (horizon >= {args.days}d'
@@ -318,14 +334,16 @@ def warm_checkpoint(args):
               + ([f'--cqt-scale={args.cqt_scale:g}']
                  if abs(getattr(args, 'cqt_scale', 1.0) - 1.0) > 1e-9 else []) \
               + ([f'--cqt-max-rework={int(getattr(args, "cqt_max_rework", 3))}']
-                 if getattr(args, 'cqt', False) else [])
+                 if getattr(args, 'cqt', False) else []) \
+              + ([f'--transport-s={getattr(args, "transport_s", 0.0):g}']
+                 if getattr(args, 'transport_s', 0.0) else [])
         env = dict(os.environ, SIM_CONTROL_FILE=os.devnull)
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ck = sim_feed.find_ckpt(args.dataset, args.seed, args.warmup_dispatcher,
                                 args.warmup_days, args.batch_strat, args.days,
                                 ov, mix, tr, getattr(args, 'cqt', False),
                                 getattr(args, 'cqt_scale', 1.0),
-                                _mxr(args))
+                                _mxr(args), transport_s=getattr(args, 'transport_s', 0.0))
         if rc != 0 or ck is None:
             sys.exit('  could not build the warm-up checkpoint')
     return ck
@@ -457,8 +475,14 @@ def run_one(spec, args):
     instance.cqt_enforce = bool(getattr(args, 'cqt', False))
     instance.cqt_scale = float(getattr(args, 'cqt_scale', 1.0) or 1.0)
     instance.cqt_rework = not bool(getattr(args, 'cqt_no_rework', False))
-    _mx = getattr(args, 'cqt_max_rework', 3)
-    instance.cqt_max_rework = None if not _mx else int(_mx)
+    instance.cqt_max_rework = _mxr(args)
+    # Lot transport (NEXT.md §0.6): in the checkpoint key, so a resumed fab
+    # was warmed with the same move cost; applied again here because it is
+    # idempotent and a freshly built fab needs it too.
+    nt = sim_runner.apply_transport(instance, getattr(args, 'transport_s', 0.0))
+    if nt:
+        print(f'  transport {args.transport_s:g}s on {nt} family-to-family moves',
+              flush=True)
 
     # The q-time counters live on the instance and are therefore PICKLED INTO
     # THE CHECKPOINT: a resumed run starts with the warm-up's totals already
@@ -547,6 +571,14 @@ def run_one(spec, args):
                      - cqt_base['scrapped']),
         'rework_enabled': bool(getattr(instance, 'cqt_rework', True)),
         'max_rework': getattr(instance, 'cqt_max_rework', None),
+        # Hold-before-entry (Instance.hold_blocks). hold_events counts every
+        # time a queued lot was passed over by the gate -- a lot held across
+        # ten decisions counts ten -- cumulative over warm-up and window.
+        'hold_frac': getattr(instance, 'cqt_hold_frac', None),
+        'hold_max_h': (getattr(instance, 'cqt_hold_max_s', 0) / 3600.0
+                       if getattr(instance, 'cqt_hold_frac', None) is not None else None),
+        'hold_events': (instance._hold_state()['held']
+                        if getattr(instance, 'cqt_hold_frac', None) is not None else 0),
         'warmup': cqt_base,
         'cumulative': {
             'violations': getattr(instance, 'counter_cqt_violated', 0),
@@ -688,6 +720,15 @@ def main():
     p.add_argument('--slate-fallback', default='cr',
                    choices=['score', 'cr', 'qt'],
                    help='how the slate scores a lot it holds no token for')
+    p.add_argument('--slate-objective', default='v1', choices=['v1', 'v2'],
+                   help='v1 = the objective every published row used; v2 = '
+                        'monotone due term through cr 1-3 and no per-lot '
+                        'process time in the cost numerator (ADR 0017 §12.12)')
+    p.add_argument('--slate-on-demand', action='store_true',
+                   help='re-solve a family on the spot when a tool frees with '
+                        'two or more lots waiting and the slate holds no token '
+                        'for any of them (NEXT.md §0.5). Fills the coverage gap '
+                        'between 60 s cycles at the cost of extra solves.')
     p.add_argument('--slate-horizon', type=float, default=900.0,
                    help='plan lots arriving within this many fab-seconds too (ADR 0010); 0 = queue only')
     p.add_argument('--overlay', default=None,
@@ -712,12 +753,19 @@ def main():
     p.add_argument('--cqt-scale', type=float, default=1.0,
                    help='multiply every queue-time window: >1 loosens, <1 '
                         'tightens. The Y axis of adr/0017 grid.')
+    p.add_argument('--transport-s', type=float, default=0.0,
+                   help='lot transport time in seconds on every family-to-family '
+                        'move (NEXT.md §0.6). SMT2020 ships none; 0 = free moves, '
+                        'as every published row. Keys the warm-up checkpoint.')
     p.add_argument('--cqt-max-rework', type=int, default=3,
-                   help='scrap a lot after this many queue-time reworks. 0 '
-                        'means unbounded, which is what produced the '
+                   help='scrap a lot after this many queue-time reworks. '
+                        '0 = scrap on the FIRST violation, the semantics of '
+                        "the testbed's own queue-time paper (WSC 2020). "
+                        'NEGATIVE = unbounded, which is what produced the '
                         'absorbing state of adr/0016 §6: 422 violations on 12 '
                         'lots, one reworked 83 times, utilisation 30%% '
-                        'against an 80%% control.')
+                        'against an 80%% control. (Until 2026-09-16, 0 meant '
+                        'unbounded and scrap-on-first was inexpressible.)')
     p.add_argument('--trim', default=None,
                    help='right-size the tool set from a trim table beside the '
                         'dataset, e.g. --trim trim-82 (adr/0015)')

@@ -13,7 +13,7 @@ seeds on every replicate, so the two things to fix first are the constraint
 itself and the operating point it was calibrated at. In order, each gating
 the next:
 
-1. [ ] **Fix the queue-time window open** (ADR 0016 §8). It opens at the
+1. [x] **Fix the queue-time window open** (ADR 0016 §8) — *code done 2026-09-15 on `cqt-window-fix`; nothing re-run yet.* Also fixed the same day: a lot missing its **final** window shipped as a completion instead of being reworked or scrapped, on the six routes that end on an exit step (ADR 0016 §9). Spec audit and synthetic tests: `docs/audit/smt2020-columns.md`, `bench/tests/test_cqt_mechanism.py`. It opens at the
       *start* of the entrance step in `instance.dispatch()`; SMT2020 opens it
       at *completion*. Move the open to `free_up_lots()`. At native scale the
       entrance step eats a median 36% of the window, so this is not tidying:
@@ -33,7 +33,7 @@ the next:
       point hard on all of them.
 4. [ ] **Solver replicates at that point on all five seeds**, including seed
       4, the second hard draw that has no solver runs today.
-5. [ ] **Coverage toward 100% where the solver is eligible.** A decision is
+5. [~] **Coverage toward 100% where the solver is eligible** — *`--slate-on-demand` built 2026-09-15; 3-day cold smoke: effective coverage 69 → 78 %, raw 50 → 56 %, 12.6k demand solves, wall +28 %. Not yet run at length.* A decision is
       the solver's only when the freed tool holds a token for a lot in its
       queue; the 60 s cycle, one token per tool, carried-over tokens and a
       5 ms budget leave ~31% of real choices to the fallback (0017 §12.11.4).
@@ -41,17 +41,18 @@ the next:
       frees without a token; a ranked token list per tool instead of one;
       a shorter cycle. All cost wall clock; measure staleness as ADR 0002
       asks rather than assume it.
-6. [ ] **Transport time, so a reticle move costs something.** PySCFabSim
-      moves lots and masks for free, which is why the reticle library
-      (ADR 0014) never binds and why an assignment solver has least to offer
-      here (§2 below). SMT2020 ships no transport data, so this is a
-      modelled parameter to declare and sweep, not a dataset fact: an
-      inter-bay lot move time and a reticle transfer time between scanners
-      (minutes, not hours). With either non-zero, a mask on the wrong
-      scanner idles a tool, the coupling the solver exists to exploit
-      appears, and 0013/0014's "untested rather than refuted" becomes
-      testable. Sequence it after 1–4 so it lands on a fab whose constraint
-      and load are already right.
+6. [~] **Transport as a resource, not a delay** — *`--transport-s` built
+      2026-09-15 (overrides the dataset draw with a constant; 0 keeps the
+      dataset); 3-day smoke at 300 s: throughput −4 %, CT +0.4 d.* Second
+      correction to this item (docs/audit/smt2020-columns.md F6): the
+      dataset is not transport-free. `fromto.txt` gives every
+      family-to-family move U(5, 10) min, the loader applies it to 3,714 of
+      4,013 steps, and a lot accrues ~32 h of it per cycle. What is free is
+      the *resource*: no vehicle, no contention, and the tool is released
+      without the move. So the knob that would create the coupling an
+      assignment solver exploits is not a longer delay but a **capacitated
+      move** — a transport resource lots queue for — and reticle scarcity
+      (§2) for the masks. Sequence after 1–4.
 7. [ ] **Objective audit and the imitation floor** (§3b). The easy-seed loss
       has a signature — shorter cycle time, thin lateness on every product —
       that says the objective prefers short jobs to thin-margin dates. Check

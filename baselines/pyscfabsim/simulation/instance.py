@@ -1,3 +1,4 @@
+import collections
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 import os
@@ -70,6 +71,109 @@ class Instance:
     #
     # None restores the old unbounded behaviour, for reproducing the above.
     cqt_max_rework = 3
+
+    # Hold-before-entry (docs/notes/2026-09-16-scrap-band): do not START a
+    # window the lot is unlikely to finish. Every rule -- and the slate --
+    # only ORDERS a tool's queue: a free tool always takes a lot, so nothing
+    # could decline to open a window whose exit tool is already backed up.
+    # Real fabs keep queue-time zones with exactly this gate.
+    #
+    # A lot waiting at an ENTRANCE step is held when the exit family's
+    # estimated wait -- lots queued there divided by the family's recent start
+    # rate -- exceeds CQT_HOLD_FRAC of the (scaled) window. A held lot is
+    # released after CQT_HOLD_MAX_H hours regardless, so a hold can delay but
+    # never strand. Unset = off, and every earlier row is unchanged.
+    cqt_hold_frac = (float(os.environ['CQT_HOLD_FRAC'])
+                     if os.environ.get('CQT_HOLD_FRAC') else None)
+    cqt_hold_max_s = float(os.environ.get('CQT_HOLD_MAX_H', '24')) * 3600.0
+    HOLD_RATE_N = 64                 # recent starts per family for the rate
+    HOLD_RATE_MIN = 8                # fewer than this: no estimate, no hold
+
+    def _hold_state(self):
+        d = self.__dict__
+        if '_hold' not in d:         # absent on checkpoints from before holds
+            d['_hold'] = {'starts': {}, 'exit': {}, 'q': {}, 'parked': set(),
+                          'held': 0, 'released': 0}
+        return d['_hold']
+
+    def note_starts(self, family, n):
+        s = self._hold_state()['starts'].setdefault(family, collections.deque(maxlen=self.HOLD_RATE_N))
+        s.append((self.current_time, n))
+        self._hold_state()['q'].clear()      # a start changes the queue it measured
+
+    def _exit_family(self, lot, step):
+        cache = self._hold_state()['exit']
+        k = id(step)
+        if k not in cache:
+            fam = None
+            for st in lot.remaining_steps:
+                if st.order == step.cqt_for_step:
+                    fam = st.family
+                    break
+            cache[k] = fam
+        return cache[k]
+
+    def exit_wait_estimate(self, family):
+        """Seconds a lot joining `family` now would wait, or None if unknown."""
+        h = self._hold_state()
+        ck = (family, self.current_time)
+        if ck in h['q']:
+            return h['q'][ck]
+        if len(h['q']) > 4096:
+            h['q'].clear()
+        starts = h['starts'].get(family)
+        est = None
+        if starts and len(starts) >= self.HOLD_RATE_MIN:
+            span = self.current_time - starts[0][0]
+            if span > 0:
+                rate = sum(n for _, n in starts) / span
+                # Lots waiting to START a window are excluded: they are the
+                # ones being gated, and counting them would let a window whose
+                # entrance and exit share a family hold itself shut.
+                queued = len({l.idx for m in self.family_machines.get(family, ())
+                              for l in m.waiting_lots
+                              if not isinstance(getattr(l.actual_step, 'cqt_for_step', None), (int, float))})
+                est = queued / rate
+        h['q'][ck] = est
+        return est
+
+    def hold_blocks(self, lot):
+        """Should this lot be kept from starting its entrance step right now?"""
+        step = lot.actual_step
+        if (self.cqt_hold_frac is None or not self.cqt_enforce or step is None
+                or not isinstance(step.cqt_for_step, (int, float)) or not step.cqt_time):
+            return False
+        if self.current_time - (lot.free_since or 0) >= self.cqt_hold_max_s:
+            return False
+        fam = self._exit_family(lot, step)
+        if fam is None:
+            return False
+        est = self.exit_wait_estimate(fam)
+        return est is not None and est > self.cqt_hold_frac * step.cqt_time * self.cqt_scale
+
+    def park_for_hold(self, machine):
+        h = self._hold_state()
+        h['parked'].add(machine)
+
+    def wake_hold_waiters(self):
+        """Re-offer tools that went idle only because their lots were held.
+
+        Same reason as wake_mask_waiters: an idle tool has no event of its own
+        coming, and the thing that releases a hold (a queue elsewhere draining,
+        or the hold cap expiring) happens off that tool.
+        """
+        # Also used by scheduling rules that hold tools (crit_sched), which
+        # run without the entry gate -- so key on parked tools existing.
+        if self.cqt_hold_frac is None and '_hold' not in self.__dict__:
+            return
+        h = self._hold_state()
+        h['q'].clear()               # lots just joined queues; re-measure
+        if not h['parked']:
+            return
+        for m in h['parked']:
+            if self.free_machines[m.idx] and m.waiting_lots:
+                self.usable_machines.add(m)
+        h['parked'].clear()
 
     def eligible(self, lot, machine):
         """Can `machine` run `lot` at the step it is waiting for?
@@ -237,7 +341,26 @@ class Instance:
             lot.free_since = self.current_time
             step_found = False
             scrapped = False
-            while len(lot.remaining_steps) > 0:
+            # The step that has just COMPLETED, and the index it is about to
+            # take in processed_steps. Both are needed below to open a
+            # queue-time window at the right instant (ADR 0016 §8).
+            done_step = lot.actual_step
+            done_idx = len(lot.processed_steps)
+            # A lot whose EXIT step is the last step of its route has no
+            # remaining steps, so the loop below -- which is where a missed
+            # window is reworked or scrapped -- would never run and the
+            # violated lot would ship as a completion. Enter it once anyway
+            # in that case (docs/audit, synthetic test
+            # test_rework_returns_to_entrance_and_scraps_at_cap). SIX of the
+            # ten SMT2020 LVHM routes end on an exit step (1, 2, 3, 5, 7, 8),
+            # so before 2026-09-15 a lot that missed its final window was
+            # counted as a violation and then shipped as a completion, never
+            # reworked or scrapped. Every published row carries that
+            # undercount on those six routes' last window (docs/audit).
+            first = True
+            while len(lot.remaining_steps) > 0 or (
+                    first and lot.cqt_violated and self.cqt_rework and lot.actual_step is not None):
+                first = False
                 old_step = None
                 if lot.actual_step is not None:
                     lot.processed_steps.append(lot.actual_step)
@@ -295,6 +418,11 @@ class Instance:
                     # or it would fire on the next window this lot opens.
                     lot.cqt_violated = False
                     lot.cqt_open_step = None
+                if not lot.remaining_steps:
+                    # Entered only for the last-step rework case above and
+                    # the rollback found nothing to roll back to: the route
+                    # is complete.
+                    break
                 lot.actual_step, lot.remaining_steps = lot.remaining_steps[0], lot.remaining_steps[1:]
                 if lot.actual_step.has_to_perform():
                     self.dm.free_up_lots(self, lot)
@@ -312,6 +440,31 @@ class Instance:
                 self.done_lots.append(lot)
                 for plugin in self.plugins:
                     plugin.on_lot_done(self, lot)
+            # OPEN a queue-time window (ADR 0016 §8). SMT2020 defines the
+            # window from the COMPLETION of the entrance step to the START of
+            # the exit step. The clock is read here, when the entrance step
+            # has just finished, so its own setup and processing time no
+            # longer count against the window (they did until 2026-09-15,
+            # which made every window stricter than the dataset specifies --
+            # by a median 36% of the window at native scale).
+            #
+            # Only a step that was actually PERFORMED and still STANDS opens
+            # one: a step this lot skipped (sampling) never ran, and a step
+            # the route's own rework or a queue-time rework has just rolled
+            # back is no longer done. `processed_steps[done_idx] is done_step`
+            # is exact under both, because rollback truncates the list to
+            # before that index; an `in` test would not be, since re-entrant
+            # routes put the same Step object in the list many times.
+            if (self.cqt_enforce and done_step is not None
+                    and lot.actual_step is not None
+                    and len(lot.processed_steps) > done_idx
+                    and lot.processed_steps[done_idx] is done_step):
+                fs = getattr(done_step, 'cqt_for_step', None)
+                if isinstance(fs, (int, float)) and done_step.cqt_time:
+                    lot.cqt_waiting = fs
+                    lot.cqt_window_s = done_step.cqt_time * self.cqt_scale
+                    lot.cqt_deadline = self.current_time + lot.cqt_window_s
+                    lot.cqt_open_step = done_step
 
             for plugin in self.plugins:
                 plugin.on_lot_free(self, lot)
@@ -319,10 +472,13 @@ class Instance:
         # can make work runnable on an idle tool that has no event of its own
         # coming. Re-offer those tools here or they stay parked.
         self.wake_mask_waiters()
+        self.wake_hold_waiters()
 
     def dispatch(self, machine: Machine, lots: List[Lot]):
         # remove machine and lot from active sets
         self.reserve_machine_lot(lots, machine)
+        if self.cqt_hold_frac is not None:
+            self.note_starts(machine.family, len(lots))
         lwam = self.lot_waiting_at_machine[machine.family]
         self.lot_waiting_at_machine[machine.family] = (lwam[0] + len(lots),
                                                        lwam[1] + sum([self.current_time - l.free_since for l in lots]))
@@ -330,14 +486,13 @@ class Instance:
             lot.waiting_time += self.current_time - lot.free_since
             if lot.actual_step.batch_max > 1:
                 lot.waiting_time_batching += self.current_time - lot.free_since
-            # Queue-time windows (ADR 0016). The clock is read HERE, at the
-            # start of processing, which is the industry definition: material
-            # degrades while it waits, and the wait ends when the next
-            # operation begins, not when the lot joins a queue.
-            #
-            # CLOSE before OPEN: one step can both close an inbound window and
-            # open an outbound one, and doing it the other way round would
-            # have a step close the window it had just opened.
+            # Queue-time windows (ADR 0016): CLOSE. The window ends when the
+            # exit step STARTS processing -- material degrades while it
+            # waits, and the wait ends when the next operation begins, not
+            # when the lot joins a queue. The window is OPENED in
+            # free_up_lots(), when the entrance step completes (ADR 0016 §8;
+            # until 2026-09-15 it was opened here, at the start of the
+            # entrance step, which charged that step's own time against it).
             #
             # Note the original commented-out code stored the window LENGTH
             # in cqt_deadline where it needed an absolute time -- the correct
@@ -354,13 +509,6 @@ class Instance:
                             plugin.on_cqt_violated(self, machine, lot)
                     lot.cqt_waiting = None
                     lot.cqt_deadline = None
-                fs = getattr(st, 'cqt_for_step', None)
-                if isinstance(fs, (int, float)) and st.cqt_time:
-                    lot.cqt_waiting = fs
-                    lot.cqt_window_s = st.cqt_time * self.cqt_scale
-                    lot.cqt_deadline = (self.current_time
-                                        + lot.cqt_window_s)
-                    lot.cqt_open_step = st
         # compute times for lot and machine
         lot_time, machine_time, setup_time = self.get_times(self.setups, lots, machine)
         # Mount the photomask (ADR 0014). Moving one between scanners costs

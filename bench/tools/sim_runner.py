@@ -109,6 +109,37 @@ def build(dataset, days, seed, plugins, batch_strat, build_days=None,
     return FileInstance(files, build_to, True, plugins, None, batch_strat), run_to
 
 
+
+def apply_transport(instance, seconds):
+    """Give every family-to-family move a fixed transport time (NEXT.md §0.6).
+
+    CORRECTION (docs/audit/smt2020-columns.md F6): the dataset DOES ship
+    transport -- `fromto.txt` gives every Fab-to-Fab move U(5, 10) min and
+    the loader puts it on 3,714 of 4,013 steps, ~32 h per completed lot --
+    and `Instance.get_times` adds it to the lot's time after the current
+    step. What the dataset lacks is a transport RESOURCE: no vehicle, no
+    contention, the tool is released without the move. This helper therefore
+    OVERRIDES the dataset's draw with one constant on every step whose family
+    differs from the previous step's (never a Delay pseudo-step), for
+    sensitivity runs; zero leaves the dataset's own transport exactly as
+    loaded. Idempotent, so it is safe after a checkpoint restore as well as
+    after a build. Returns the number of steps it set.
+    """
+    from tools import ConstantDistribution
+    seconds = float(seconds or 0.0)
+    if seconds <= 0:
+        return 0
+    n = 0
+    for route in instance.routes.values():
+        prev = None
+        for st in route.steps:
+            fam = str(st.family)
+            if prev is not None and fam != prev and not fam.startswith('Delay'):
+                st.transport_time = ConstantDistribution(seconds)
+                n += 1
+            prev = fam
+    return n
+
 def run(instance, run_to, dispatcher, before_dispatch=None,
         after_dispatch=None, stream=sys.stderr):
     """Pump the simulation to completion. Returns True if Ctrl-C stopped it.

@@ -57,6 +57,33 @@ import fabslate
 # violation reworks the lot, and a lot that misses too often is scrapped.
 QTIME_INERT = 1e9
 
+# Objective versions (ADR 0017 §12.12). 'v1' is the objective every published
+# row was produced with. 'v2' answers the audit's two findings:
+#   - the due term is monotone through the cr 1-3 band where waiting lots
+#     actually sit (v1 was flat above 2 and reached only 2x at cr = 1);
+#   - the cost numerator no longer carries the lot's own process time, which
+#     within a family of identical tools only ranked lots shortest-job-first
+#     (91% order agreement on the warmed fab). A fixed reference keeps
+#     setup relative to *something* without ranking by job length.
+OBJECTIVES = ('v1', 'v2')
+REF_PROCESS_S = 3600.0
+
+
+def due_term(cr, objective='v1'):
+    """Due-date multiplier on urgency as a function of critical ratio."""
+    if objective == 'v2':
+        # 1x at cr >= 3, 2x at 1.5, 3x at 1; below 1 the v1 steep term rides
+        # on top, continuous at cr = 1.
+        u = min(3.0, max(1.0, 3.0 / max(cr, 0.02)))
+        if cr < 1.0:
+            u *= min(50.0, 1.0 / max(cr, 0.02))
+        return u
+    u = 1.0 + max(0.0, 2.0 - cr)
+    if cr < 1.0:
+        u *= min(50.0, 1.0 / max(cr, 0.02))
+    return u
+
+
 
 def qtime_slack_s(lot, t):
     """Seconds until this lot's open queue-time window lapses, for the C++
@@ -114,11 +141,24 @@ class SlateRule:
 
     def __init__(self, instance, solver='cpsat', cycle_s=60.0, budget_s=0.005,
                  pressure='full', threads=1, lazy=True, lib_path=None,
-                 fallback='cr', horizon_s=900.0):
+                 fallback='cr', horizon_s=900.0, on_demand=False, objective='v1'):
         if pressure not in self.TIERS:
             raise ValueError(f'pressure must be one of {self.TIERS}')
         if fallback not in self.FALLBACKS:
             raise ValueError(f'fallback must be one of {self.FALLBACKS}')
+        if objective not in OBJECTIVES:
+            raise ValueError(f'objective must be one of {OBJECTIVES}')
+        self.objective = objective
+        # On-demand re-solve (docs/NEXT.md §0.5). With the 60 s cycle, one
+        # token per tool, carried-over tokens and a 5 ms budget, ~31% of the
+        # decisions with a real choice fall to the fallback (adr/0017
+        # §12.11.4). When this is on, a tool that frees with two or more
+        # lots waiting and NO token for any of them gets its family re-solved
+        # right then, from the live queue, before the rule is consulted. The
+        # periodic cycle is unchanged; this only fills the gaps between it.
+        # Off by default so every existing row is reproducible.
+        self.on_demand = bool(on_demand)
+        self.demand_solves = 0
         # What scores a lot the slate holds no token for (~half of all
         # decision points at 47% coverage): 'score' is the linearized solver
         # cost, continuous with the plan; 'cr' is critical ratio, the rule
@@ -275,14 +315,58 @@ class SlateRule:
     def maybe_rebuild(self, instance=None):
         inst = instance or self.instance
         t = inst.current_time
-        if self.last_build_t is not None and (t - self.last_build_t) < self.cycle_s:
-            return False
-        self.rebuild(inst)
-        return True
+        if self.last_build_t is None or (t - self.last_build_t) >= self.cycle_s:
+            self.rebuild(inst)
+            return True
+        if self.on_demand:
+            # The machine sim_runner is about to ask for is the first element
+            # of usable_machines (greedy.get_lots_to_dispatch_by_machine takes
+            # the same `for m in set: break`), so peek the same way. Only a
+            # decision with a real choice and no pick is worth a solve: one
+            # lot waiting is forced under any rule.
+            m = None
+            for m in inst.usable_machines:
+                break
+            if m is not None and len(m.waiting_lots) >= 2:
+                held = self.by_tool.get(str(m.idx))
+                if not (held and any(l.idx in held for l in m.waiting_lots)):
+                    self.rebuild(inst, only={m.family})
+                    self.demand_solves += 1
+                    return True
+        return False
 
-    def rebuild(self, instance=None):
+    def rebuild(self, instance=None, only=None):
+        """Rebuild the slate; `only` restricts it to a set of families.
+
+        With `only`, this is the on-demand path: the queue of those families
+        is re-solved from live state, their tool state is synced, nothing
+        else is touched (no look-ahead scan, no family-WIP refresh, no token
+        pruning outside the set, no reset of the periodic clock).
+        """
         inst = instance or self.instance
         t = inst.current_time
+
+        if only:
+            lots = [l for l in self._ready_lots(inst) if l.actual_step.family in only]
+            upcoming = []
+            self._sync_tools(t, families=only)
+            dirty = set(only)
+            solve_lots = [(l, l.actual_step, 0.0) for l in lots]
+            if not solve_lots:
+                return
+            payload = [self._lot_dict(l, t, st, arr) for l, st, arr in solve_lots]
+            tokens, stats = self.planner.plan(
+                payload, budget_s=self.budget_s, threads=self.threads)
+            for lot, _st, _arr in solve_lots:
+                self.token_of.pop(lot.idx, None)
+            for lot_index, tool_id, alternate, rank, _exp in tokens:
+                lot = solve_lots[lot_index][0]
+                self.token_of[lot.idx] = (tool_id, alternate, rank)
+            self.by_tool = {}
+            for lot_idx, (tool_id, _alt, rank) in self.token_of.items():
+                self.by_tool.setdefault(tool_id, {})[lot_idx] = rank
+            self.solve_time_s += stats['solve_time_s']
+            return
 
         lots = self._ready_lots(inst)
         self._family_wip = _family_counts(lots)
@@ -348,8 +432,12 @@ class SlateRule:
         self.solve_time_s += stats['solve_time_s']
         self.last_stats = stats
 
-    def _sync_tools(self, t=None):
+    def _sync_tools(self, t=None, families=None):
         """Push only the tool state that moved; return the families it touched.
+
+        `families` restricts the scan to those families' machines (the
+        on-demand path, where scanning all 1,313 per decision would cost
+        more than the solve).
 
         With a look-ahead horizon a tool counts as available only if it is
         free now or frees within the horizon (its MachineDoneEvent is known):
@@ -359,7 +447,10 @@ class SlateRule:
         """
         changed = 0
         touched = set()
-        for i, m in enumerate(self._machines):
+        scan = enumerate(self._machines)
+        if families is not None:
+            scan = [(i, m) for i, m in enumerate(self._machines) if m.family in families]
+        for i, m in scan:
             avail = True
             if self.horizon_s > 0 and t is not None and m.events:
                 done = [ev.timestamp for ev in m.events if isinstance(ev, MachineDoneEvent)]
@@ -477,7 +568,8 @@ class SlateRule:
             # forbids two of them at once.
             'reticle': (self._reticles.lot_reticle(lot)
                         if self._reticles is not None else ''),
-            'step_process_s': step.processing_time.avg(),
+            'step_process_s': (REF_PROCESS_S if self.objective == 'v2'
+                               else step.processing_time.avg()),
             'due_s': lot.deadline_at,
             'waiting_s': max(0.0, t - (lot.free_since or t)),
         }
@@ -501,9 +593,7 @@ class SlateRule:
         # a lot twice as late is twice as urgent, which is the ordering that
         # held on-time under load where the old x3 cap did not (ADR 0012 s3).
         cr = lot.cr(t)
-        u *= 1.0 + max(0.0, 2.0 - cr)
-        if cr < 1.0:
-            u *= min(50.0, 1.0 / max(cr, 0.02))
+        u *= due_term(cr, self.objective)
 
         # Ageing, so a lot cannot be starved indefinitely by a stream of more
         # urgent work. Deliberately weak: one week of queueing doubles it.
@@ -651,7 +741,7 @@ class SlateRule:
     def _score(self, lot, time, machine, setup):
         """The linearized form of SolverExporter::cost. Lower is better."""
         step = lot.actual_step
-        proc = step.processing_time.avg()
+        proc = REF_PROCESS_S if self.objective == 'v2' else step.processing_time.avg()
         time_cost = (setup or 0.0) + proc
         return time_cost / max(self._urgency(lot, time), 0.01)
 
@@ -686,8 +776,11 @@ class SlateRule:
             'solver': self.planner.solver,
             'solver_available': self.planner.solver_available,
             'pressure': self.pressure,
+            'objective': self.objective,
             'cycle_s': self.cycle_s,
             'builds': self.builds,
+            'on_demand': self.on_demand,
+            'demand_solves': self.demand_solves,
             'decisions': self.decisions,
             'coverage': round(cov, 4),
             # the split that makes coverage meaningful (adr/0017): decisions

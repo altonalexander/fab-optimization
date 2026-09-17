@@ -27,6 +27,25 @@ last_sort_time = -1
 round_robin = False
 
 
+class WakeEvent:
+    """Re-offer an idle tool at a chosen time (under-min batch firing).
+
+    Unlike MachineDoneEvent it frees nothing: if the tool was dispatched in
+    the meantime this is a no-op, so it can never release a busy machine.
+    """
+
+    def __init__(self, timestamp, machine):
+        self.timestamp = timestamp
+        self.machine = machine
+        self.machines = []
+        self.lots = []
+
+    def handle(self, instance):
+        m = self.machine
+        if instance.free_machines[m.idx] and m.waiting_lots:
+            instance.usable_machines.add(m)
+
+
 def dispatching_combined_permachine(ptuple_fcn, machine, time, setups):
     for lot in machine.waiting_lots:
         # if (machine.min_runs_left is not None and machine.current_setup != lot.actual_step.setup_needed) or lot.cqt_waiting != '':
@@ -79,6 +98,19 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
     if machine is None:
         for machine in instance.usable_machines:
             break
+    if getattr(ptuple_fcn, 'wants_instance', False):
+        ptuple_fcn.bind(instance)        # dispatcher.FeedTheBatch
+    # A scheduling rule (bench/tools/crit_sched.CritSched) may decide this
+    # tool outright: a planned batch, or [] = hold the tool idle for members
+    # still on their way. Parked tools are re-offered by wake_hold_waiters.
+    ov = getattr(ptuple_fcn, 'override', None)
+    if ov is not None:
+        planned = ov(instance, machine)
+        if planned is not None:
+            if not planned:
+                instance.park_for_hold(machine)
+                return machine, None
+            return machine, planned
     dispatching_combined_permachine(ptuple_fcn, machine, time, instance.setups)
     # The mask filter is applied HERE and not in `eligible` (ADR 0014 §3.3):
     # a lot queues on its machines once, when it becomes available, and a
@@ -91,6 +123,18 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
         cand = [l for l in cand if instance.mask_free(l, machine)]
         if not cand:
             return machine, None
+    # Hold-before-entry (Instance.hold_blocks): same shape as the mask filter.
+    # A held lot stays queued and is simply not a candidate this instant; a
+    # tool left with nothing but held lots parks, and wake_hold_waiters
+    # re-offers it. Applies to every rule, the slate included.
+    if getattr(instance, 'cqt_hold_frac', None) is not None:
+        kept = [l for l in cand if not instance.hold_blocks(l)]
+        if len(kept) < len(cand):
+            instance._hold_state()['held'] += len(cand) - len(kept)
+        if not kept:
+            instance.park_for_hold(machine)
+            return machine, None
+        cand = kept
     wl = sorted(cand, key=lambda k: k.ptuple)
     # select lots to dispatch
     lot = wl[0]
@@ -99,14 +143,33 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
         lot_m = defaultdict(lambda: [])
         for w in wl:
             lot_m[w.actual_step.step_name + '_' + w.part_name].append(w) 
+        if getattr(ptuple_fcn, 'batch_qtime_tier', False):
+            # `qt` (dispatcher.QT_BATCH_TIER): its slot 1 is the at-risk flag
+            # and slot 2 the slack rank, NOT setup. The upstream key below
+            # skips slot 1, which leaves rank -- 0 for nothing-to-save,
+            # positive for savable -- sorting savable groups LAST
+            # (bench/tests/test_qt_batch_tier.py). Fireable groups first, so a
+            # savable group below batch_min never idles a tool that could run
+            # another; then the window tier; then fill; then the rest of qt.
+            # Min-before-fill is order-equivalent to upstream's fill-before-
+            # min: a group below min always has the lower fill.
+            batch_key = lambda l: (
+                l[0].ptuple[0],
+                0 if len(l) >= l[0].actual_step.batch_min else 1,
+                l[0].ptuple[1], l[0].ptuple[2],
+                -min(1, len(l) / l[0].actual_step.batch_max),
+                *(l[0].ptuple[3:]),
+            )
+        else:
+            batch_key = None
         lot_l = sorted(list(lot_m.values()),
-                       key=lambda l: (
+                       key=batch_key or (lambda l: (
                            l[0].ptuple[0],  # min run setup 
                            #l[0].ptuple[1],  # cqt
                            -min(1, len(l) / l[0].actual_step.batch_max),  # then maximize the batch size
                            0 if len(l) >= l[0].actual_step.batch_min else 1,  # then take min batch size into account
                            *(l[0].ptuple[2:]),  # finally, order based on prescribed priority rule
-                       ))
+                       )))
         lots: List[Lot] = lot_l[0]
         if instance.rpt_route is not None:
             if len(lots) >= lots[0].actual_step.batch_min:
@@ -123,7 +186,24 @@ def get_lots_to_dispatch_by_machine(instance, ptuple_fcn, machine=None):
                 round_robin = not round_robin
             if instance.batch_strat == 'Demand':
                 lots = demand_batch(lots)
-                
+            # Under-min firing (dispatcher.QtWindowFire, `qtfw`): no group
+            # reached batch_min, but the rule may fire an underfilled one --
+            # the min-batch-with-exception rule fabs run. Opt-in per rule.
+            fire = getattr(ptuple_fcn, 'fire_partial', None)
+            if lots is None and fire is not None:
+                for g in lot_l:
+                    if fire(g, time):
+                        lots = g[:g[0].actual_step.batch_max]
+                        break
+                if lots is None:
+                    # Nothing to fire yet. An idle tool has no event of its
+                    # own, so book one for the moment the earliest waiting
+                    # lot crosses the firing threshold.
+                    t_next = ptuple_fcn.next_fire_time(lot_l, time)
+                    if t_next is not None and t_next != getattr(machine, '_wake_at', None):
+                        machine._wake_at = t_next
+                        instance.add_event(WakeEvent(t_next, machine))
+
     else:
         # dispatch single lot
         lots = [lot]
