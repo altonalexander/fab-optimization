@@ -484,3 +484,6 @@ PAD/HOLD_MAX/FAMILIES) is set. Ready for either A/B verdict. Planned launch on y
 Scale 1 waits on the replication result. (The running lane sweeps hold the old script inode, so the edit doesn't touch them.)
 
 **2026-09-17 02:00Z lead** — crit v3 replication, partial: **scale 1 s0 crit v3 LOSES** (22.3/d · 53.8% share vs qtfw s8 23.7 · 43.7%) ⇒ scale 1 stays out of the crit arm. qtfw s8 scale 3 s2 = 49.2/d · 13.5% (baseline for the pending crit s2 cell). crit scale 3 s2 and scale 5 s0 still running (~1 h in).
+
+**2026-09-17 02:05Z lead** — crit v3 replication complete (15 d), ship/d · share, qtfw s8 vs crit v3: scale 3 s0 46.8 · 16.6% vs **45.8 · 11.9%**; scale 3 s2 49.2 · 13.5% vs **49.6 · 8.3%**; scale 5 s0 53.5 · 2.0% vs 52.8 · 8.8% (loses); scale 1 s0 23.7 · 43.7% vs 22.3 · 53.8% (loses). **crit wins in the critical range (scale 3, both seeds, scrap −30–40%) and loses outside it.** Hypothesis: underfill weight 300 too cheap where windows are loose. CLAIM 4 (detached `bench/tools/crit_budget_ab.sh`, ETA ~70 min): budget cut B1/P3600 at scale 3 s0,s2; underfill 600 at scales 5 and 3 s0.
+Coordinator: crit arm scales = {4, 3, 2} (not 5, not 1) until the u600 result; launch waits for the budget verdict.
