@@ -64,6 +64,9 @@ class CritSched(QtWindowFire):
     # spent on fewer wafers). None = batch_min hard, as in v1/v2.
     UNDERFILL_W = (float(os.environ['CRIT_UNDERFILL_W'])
                    if os.getenv('CRIT_UNDERFILL_W') else None)
+    UNDERFILL_MODE = os.getenv('CRIT_UNDERFILL_MODE', 'fixed')   # 'fixed' | 'load' (v4)
+    MODEL = os.getenv('CRIT_MODEL', 'tool')                      # 'tool' (v1-v3) | 'family' (v4)
+    GROUP_BATCHES = int(os.getenv('CRIT_GROUP_BATCHES', '2'))
     START_TOL_S = 120.0
 
     def __init__(self, families=None, lookahead=None):
@@ -129,12 +132,14 @@ class CritSched(QtWindowFire):
             cands = self._candidates(fam, now)
             if not cands:
                 continue
-            ok = self._solve(fam, tools, cands, now)
+            solve = self._solve_family if self.MODEL == 'family' else self._solve
+            ok = solve(fam, tools, cands, now)
             if ok:
                 # Replace this family's plan only on success: a solver timeout
                 # keeps the previous plan rather than dropping to no plan.
                 for t in tools:
                     self.plan.pop(t.idx, None)
+                self.plan.pop(('F', fam), None)
                 self.plan.update(ok[0])
                 self.assigned = {k: v for k, v in self.assigned.items() if self.eta.get(k, (None,))[0] != fam}
                 self.assigned.update(ok[1])
@@ -235,7 +240,19 @@ class CritSched(QtWindowFire):
                     m.AddImplication(sched.Not(), blown)
                 cost.append(self.BLOWN_W * blown)
         if underfill:
-            cost.append(int(self.UNDERFILL_W) * sum(underfill))
+            price = self.UNDERFILL_W
+            if self.UNDERFILL_MODE == 'load':
+                # v4: a missing lot costs capacity only when capacity is
+                # scarce. crit_ab showed no fixed price wins both regimes
+                # (u600 needed at scale 5, u300 better at 3). Price by the
+                # family's fireable backlog relative to what its free-soon
+                # tools can absorb in one cycle.
+                waiting = sum(1 for c in cands if c[0] in self._waiting and c[3] is c[0].actual_step)
+                cap = sum(c[3].batch_max for c in cands[:1]) * max(1, len(tools))
+                load = waiting / max(1, cap)
+                price = self.UNDERFILL_W * min(4.0, max(0.25, 4.0 * load))
+                self.debug.setdefault(fam, {})['underfill_price'] = round(price)
+            cost.append(int(price) * sum(underfill))
         m.Minimize(sum(cost))
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = self.BUDGET_S
@@ -266,6 +283,133 @@ class CritSched(QtWindowFire):
                     assigned[li] = st
         return {k: sorted(v) for k, v in per_tool.items()}, assigned
 
+    def _solve_family(self, fam, tools, cands, now):
+        """v4 model: batches belong to a group, tools are a shared capacity.
+
+        The per-tool model gives every slot on every tool a group choice, so
+        13 identical furnaces x 2 slots x ~20 groups is hugely symmetric: with
+        under-min batches allowed, Diffusion_FE_94 returned UNKNOWN in 2 s at
+        scales 5 and 3 (crit_debug), leaving the family on stale plans. Here
+        each group gets up to GROUP_BATCHES optional batches, and one
+        cumulative constraint says at most len(tools) run at once (busy tools
+        enter as fixed intervals). Which furnace runs a batch is decided at
+        execution: the first free one.
+        """
+        inst = self.instance
+        hor = int(self.HORIZON_S // 60)
+        m = cp_model.CpModel()
+        groups = collections.defaultdict(list)
+        for i, c in enumerate(cands):
+            groups[c[2]].append(i)
+        under = self.UNDERFILL_W is not None
+        groups = {g: ix for g, ix in groups.items()
+                  if under or len(ix) >= cands[ix[0]][3].batch_min}
+        if not groups:
+            return {}, {}
+        eta = [max(0, int((c[1] - now) // 60)) for c in cands]
+        ivs, demands = [], []
+        maxdur = 1
+        for tool in tools:
+            if inst.free_machines[tool.idx]:
+                continue
+            ends = [e.timestamp for e in tool.events if hasattr(e, 'timestamp')]
+            busy = max(1, int((min(ends) - now) // 60)) if ends else 60
+            ivs.append(m.NewIntervalVar(0, busy, busy, ''))
+            demands.append(1)
+        batches = []                      # (group, start var, active var)
+        x = {}
+        underfill = []
+        for g, members in groups.items():
+            step = cands[members[0]][3]
+            dur = max(1, int(_avg(step.processing_time) // 60))
+            maxdur = max(maxdur, dur)
+            nb = min(self.GROUP_BATCHES, max(1, len(members) // (1 if under else step.batch_min)))
+            prev = None
+            for b in range(nb):
+                a = m.NewBoolVar('')
+                s = m.NewIntVar(0, hor, '')
+                ivs.append(m.NewOptionalIntervalVar(s, dur, s + dur, a, ''))
+                demands.append(1)
+                bi = len(batches)
+                batches.append((g, s, a))
+                xs = []
+                for i in members:
+                    xv = m.NewBoolVar('')
+                    x[(i, bi)] = xv
+                    xs.append(xv)
+                    m.AddImplication(xv, a)
+                    m.Add(s >= eta[i]).OnlyEnforceIf(xv)
+                m.Add(sum(xs) <= step.batch_max)
+                if under:
+                    short = m.NewIntVar(0, step.batch_min, '')
+                    m.Add(sum(xs) + short >= step.batch_min).OnlyEnforceIf(a)
+                    m.Add(sum(xs) >= 1).OnlyEnforceIf(a)
+                    underfill.append(short)
+                else:
+                    m.Add(sum(xs) >= step.batch_min).OnlyEnforceIf(a)
+                if prev is not None:      # symmetry within a group
+                    m.AddImplication(a, prev[1])
+                    m.Add(s >= prev[0]).OnlyEnforceIf(a)
+                prev = (s, a)
+        m.AddCumulative(ivs, demands, len(tools))
+        cost = []
+        for i, c in enumerate(cands):
+            xs = [v for (li, _), v in x.items() if li == i]
+            if not xs:
+                continue
+            m.Add(sum(xs) <= 1)
+            sched = m.NewBoolVar('')
+            m.Add(sum(xs) == sched)
+            if c[0] in self._waiting and c[3] is c[0].actual_step:
+                start_i = m.NewIntVar(0, hor, '')
+                for (li, bi), v in x.items():
+                    if li == i:
+                        m.Add(start_i == batches[bi][1]).OnlyEnforceIf(v)
+                m.Add(start_i == 0).OnlyEnforceIf(sched.Not())
+                cost += [start_i, (self.UNSCHED_W + hor) * sched.Not()]
+            if c[4] is not None:
+                dl = int((c[4] - now) // 60)
+                blown = m.NewBoolVar('')
+                for (li, bi), v in x.items():
+                    if li == i:
+                        m.Add(batches[bi][1] <= dl).OnlyEnforceIf([v, blown.Not()])
+                if dl < hor:
+                    m.AddImplication(sched.Not(), blown)
+                cost.append(self.BLOWN_W * blown)
+        if underfill:
+            price = self.UNDERFILL_W
+            if self.UNDERFILL_MODE == 'load':
+                waiting = sum(1 for c in cands if c[0] in self._waiting and c[3] is c[0].actual_step)
+                cap = cands[0][3].batch_max * max(1, len(tools))
+                price = self.UNDERFILL_W * min(4.0, max(0.25, 4.0 * waiting / max(1, cap)))
+            cost.append(int(price) * sum(underfill))
+        m.Minimize(sum(cost))
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = self.BUDGET_S
+        solver.parameters.num_workers = 1
+        t_solve = _time.time()
+        res = solver.Solve(m)
+        self.debug[fam] = {
+            'model': 'family', 'cands': len(cands), 'groups': len(groups), 'batches': len(batches),
+            'tools': len(tools), 'free_tools': sum(1 for t in tools if inst.free_machines[t.idx]),
+            'status': solver.StatusName(res), 'wall_s': round(_time.time() - t_solve, 2),
+            'obj': solver.ObjectiveValue() if res in (cp_model.OPTIMAL, cp_model.FEASIBLE) else None,
+        }
+        if res not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            self.stats['plan_fail'] += 1
+            return None
+        queue, assigned = [], {}
+        for bi, (g, s, a) in enumerate(batches):
+            if not solver.Value(a):
+                continue
+            members = [cands[li][0].idx for (li, bj), v in x.items() if bj == bi and solver.Value(v)]
+            if members:
+                st = now + solver.Value(s) * 60
+                queue.append((st, members))
+                for li in members:
+                    assigned[li] = st
+        return {('F', fam): sorted(queue)}, assigned
+
     # ---- execution -----------------------------------------------------------
     def override(self, instance, machine):
         """None = let the rule decide; [] = hold this tool; [lots] = run them."""
@@ -275,6 +419,8 @@ class CritSched(QtWindowFire):
         now = instance.current_time
         if self.planned_at is None or now - self.planned_at >= self.PLAN_S:
             self._replan(now)
+        if self.MODEL == 'family':
+            return self._override_family(instance, machine, now)
         queue = self.plan.get(machine.idx)
         if not queue:
             self.stats['fallback_noplan'] += 1
@@ -306,6 +452,39 @@ class CritSched(QtWindowFire):
         # plan is stale for this tool: drop it and let the rule act
         self.plan.pop(machine.idx, None)
         self.stats['fallback_stale'] += 1
+        return None
+
+    def _override_family(self, instance, machine, now):
+        queue = self.plan.get(('F', machine.family))
+        if not queue:
+            self.stats['fallback_noplan'] += 1
+            return None
+        by_idx = {l.idx: l for l in machine.waiting_lots}
+        # Hold budget: a free furnace may idle for a batch due soon only if
+        # fewer furnaces of the family are already idling than batches are due.
+        due_soon = sum(1 for st, _ in queue if st <= now + self.HOLD_MAX_S)
+        parked = self.instance._hold_state()['parked']
+        idling = sum(1 for t in self.instance.family_machines[machine.family]
+                     if t in parked and t is not machine and self.instance.free_machines[t.idx])
+        for k, (start, members) in enumerate(queue):
+            if start > now + self.START_TOL_S:
+                break
+            here = [by_idx[i] for i in members if i in by_idx]
+            if len(here) == len(members):
+                queue.pop(k)
+                self.stats['planned_batches'] += 1
+                return here
+            missing_due = [self.eta.get(i, (None, float('inf')))[1] for i in members if i not in by_idx]
+            if any(e <= now + self.HOLD_MAX_S for e in missing_due) and now - start < self.HOLD_MAX_S:
+                continue                  # members still coming: try the next batch
+            if here:
+                queue.pop(k)
+                self.stats['partial_batches'] += 1
+                return here[:here[0].actual_step.batch_max]
+        if due_soon > idling and queue and queue[0][0] - now <= self.HOLD_MAX_S:
+            self.stats['hold_wait'] += 1
+            return []
+        self.stats['fallback_rule'] += 1
         return None
 
     def _feeds(self, lot):

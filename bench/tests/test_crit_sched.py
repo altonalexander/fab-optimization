@@ -73,6 +73,29 @@ def test_crit_holds_the_furnace_and_saves_it():
     assert rule.stats['hold_wait_start'] + rule.stats['hold_wait_members'] > 0, dict(rule.stats)
 
 
+def test_crit_family_model_holds_and_saves_it():
+    """v4: batches per group on a shared furnace capacity, same outcome."""
+    rule = crit_rule()
+    rule.MODEL = 'family'
+    out = run(rule)
+    assert out == (4, 0), (out, dict(rule.stats))
+    assert rule.stats['hold_wait'] > 0, dict(rule.stats)
+
+
+def test_crit_family_underfill_fires_a_lone_windowed_lot():
+    """v4 with priced under-min batches: with W2 never arriving (A lots only),
+    the scheduler may run W1 alone rather than let its window blow."""
+    rule = crit_rule()
+    rule.MODEL = 'family'
+    rule.UNDERFILL_W = 300.0
+    inst = build()
+    # W2 released far in the future: no partner inside the window.
+    inst.dispatchable_lots[1].release_at = 5 * 86400
+    inst.dispatchable_lots.sort(key=lambda l: l.release_at)
+    sim_runner.run(inst, 1 * 86400, rule, stream=open(os.devnull, 'w'))
+    assert inst.counter_cqt_violated == 0, (inst.counter_cqt_violated, dict(rule.stats))
+
+
 def main():
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith('test_')]
     failed = 0
