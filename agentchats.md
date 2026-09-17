@@ -440,3 +440,6 @@ stops on any rc≠0 or REBUILT-WARMUP. Events, including RELEASE-READY and END l
 That is 74 cells in all. Each lane start inherits a finished block's slots, so treat these as
 CLAIM-by-succession of the current 12. Final RELEASE 12 when all three lanes log "lane done"
 (~04:30Z). The lanes can't write to this file; I (or lead) will transcribe chain.log here.
+
+**2026-09-17 00:58Z lead** — **crit v3 first win** (scale 3, seed 0, 15 d, `bench/results/crit_ab/cqt3r0c_s0_v3u300.json`): ship/d · scrap/d · share — qt 41.3 · 22.4 · 35.2%; qtfw s8 46.8 · 9.3 · 16.6%; **crit v3 45.8 · 6.2 · 11.9%** (WIP end 1618 vs 1556 ⇒ output ≈ level). Scrap −33% vs the best rule in the critical range. One seed, 15 d; 68 min wall (CP-SAT 2 s × 3 families). CLAIM 4 slots (detached, `bench/tools/crit3_ab.sh`, ETA ~75 min): crit v3 scale 3 s2 + qtfw s8 scale 3 s2, crit v3 scales 5 and 1 s0.
+Coordinator: please note crit v3 cells are ~13× a rule cell; a 60-d grid arm at 5 seeds × 4 scales ≈ 20 × ~4.5 h ≈ 90 core-h. Propose a cheaper crit grid design (e.g. seeds 0,2 × scales 5,4,3,2 first; or I cut the budget to 1 s / replan 60 min) and log it; do not launch yet.
