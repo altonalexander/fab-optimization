@@ -536,3 +536,7 @@ Reply to coordinator: **agree to qtfw-warmed checkpoints** (scales 4,3,2 × 5 se
   dropping to 8 when B ends. Lane B's 4 are free for the lead after ~04:20Z.
 
 **2026-09-17 04:22Z lead** — Lane B released 4 (chain.log 04:20Z); lane C not yet ended so W1 (qtfw warm-ups s0,s2) has not started. To avoid racing W1, the crit v4 A/B will use the **scale 3 qtfw warm-ups for seeds 1 and 3 that W2 is building now** (ETA ~05:00Z). CLAIM lane B's 4 slots + my own 4 (crit v3 x3/x2 60-d cells will be stopped at A/B launch — superseded by v4, and on biased qt warm-ups). A/B = qtfw s8 | v4 u300 | v4 u300 load × seeds 1,3, 15 d (6 procs).
+
+**2026-09-17 04:41Z coordinator (auto)** — QTFW-WARM x3 s0,s2 READY: bench/snapshots/SMT2020_LVHM_seed{0,2}_qtfw_Demand_day90_cqt3r0c_qp050bf6w8_h270.ckpt (lane W1).
+
+**2026-09-17 04:55Z lead** — Stopped crit v3 60-d cells (x3, x2; superseded by v4; partial logs left, no JSON). RELEASE 4 of those; CLAIM 6 (lane B's 4 + 2): `bench/tools/crit_v4_ab.sh` on the qtfw-warmed scale-3 checkpoints from W1 (seeds 0,2): qtfw s8 | crit v4 u300 | crit v4 u300 load, 15 d. ETA ~75 min, `bench/results/crit_v4_ab/`. 2 lead slots idle.

@@ -13,7 +13,7 @@ mkdir -p "$OUT"
 cd "$REPO" || exit 1
 export QTF_LOOKAHEAD=6 QTFW_SLACK_H=8 QT_PROMOTE_FRAC=0.50
 for s in $SEEDS; do
-  ck=$(ls bench/snapshots/SMT2020_LVHM_seed${s}_qtfw_Demand_day90_cqt3r0c_qp050bf6w8*_h270.ckpt 2>/dev/null | head -1)
+  ck=$(ls $REPO/bench/snapshots/SMT2020_LVHM_seed${s}_qtfw_Demand_day90_cqt3r0c_qp050bf6w8*_h270.ckpt 2>/dev/null | head -1)
   if [ -z "$ck" ]; then echo "missing qtfw warm-up seed $s" >> "$OUT/driver.log"; continue; fi
   AB_CKPT=$ck "$PY" bench/tools/hold_ab.py cqt3r0c $s off $DAYS qtfw > "$OUT/x3_s${s}_qtfw_d${DAYS}.json" 2> "$OUT/x3_s${s}_qtfw_d${DAYS}.err" &
   AB_CKPT=$ck CRIT_MODEL=family CRIT_UNDERFILL_W=300 "$PY" bench/tools/hold_ab.py cqt3r0c $s off $DAYS crit > "$OUT/x3_s${s}_v4u300_d${DAYS}.json" 2> "$OUT/x3_s${s}_v4u300_d${DAYS}.err" &
