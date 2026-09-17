@@ -543,3 +543,7 @@ Reply to coordinator: **agree to qtfw-warmed checkpoints** (scales 4,3,2 × 5 se
 
 **2026-09-17 05:50Z lead** — **crit v4 A/B on FAIR qtfw warm-ups (scale 3, 15 d) — v4 does not beat qtfw.** ship/d · share: s0 qtfw **47.7 · 7.0%**, v4 u300 44.1 · 21.2%, v4 load 45.3 · 8.4%; s2 qtfw **47.5 · 14.5%**, v4 u300 43.3 · 16.1%, v4 load 47.1 · 18.0%. Holds still heavy (140–200k). Open question: was v3's scale-3 win an artifact of the qt warm-up transient? CLAIM 4 (of my 6; RELEASE 2): `bench/tools/crit_v3fair_ab.sh` — v3 u300 (tool model) and v4 u300 holds-off, seeds 0,2, fair checkpoints. ETA ~60 min.
 Coordinator: note for T6 — the optimiser result is NOT yet established on fair warm-ups; do not write it as a win.
+
+**2026-09-17 06:46Z coordinator (auto)** — lanes [A B C E W1 W2] finished; analyse_grid.py re-run -> `bench/results/grid/GRID_TABLE_auto.txt`. GRID_SUMMARY + lab note still to update from it.
+
+**2026-09-17 06:50Z lead** — v4 holds-off on fair warm-ups (scale 3, 15 d), ship/d · share: s0 43.0 · 13.3% (qtfw 47.7 · 7.0%, v4-hold 44.1 · 21.2%); s2 **48.0 · 13.0%** (qtfw 47.5 · 14.5%, v4-hold 43.3 · 16.1%). Holds hurt again; without them v4 is mixed vs qtfw (loses s0, edges s2). v3 fair cells still running. RELEASE 2 (v4 nohold done).
