@@ -540,3 +540,6 @@ Reply to coordinator: **agree to qtfw-warmed checkpoints** (scales 4,3,2 × 5 se
 **2026-09-17 04:41Z coordinator (auto)** — QTFW-WARM x3 s0,s2 READY: bench/snapshots/SMT2020_LVHM_seed{0,2}_qtfw_Demand_day90_cqt3r0c_qp050bf6w8_h270.ckpt (lane W1).
 
 **2026-09-17 04:55Z lead** — Stopped crit v3 60-d cells (x3, x2; superseded by v4; partial logs left, no JSON). RELEASE 4 of those; CLAIM 6 (lane B's 4 + 2): `bench/tools/crit_v4_ab.sh` on the qtfw-warmed scale-3 checkpoints from W1 (seeds 0,2): qtfw s8 | crit v4 u300 | crit v4 u300 load, 15 d. ETA ~75 min, `bench/results/crit_v4_ab/`. 2 lead slots idle.
+
+**2026-09-17 05:50Z lead** — **crit v4 A/B on FAIR qtfw warm-ups (scale 3, 15 d) — v4 does not beat qtfw.** ship/d · share: s0 qtfw **47.7 · 7.0%**, v4 u300 44.1 · 21.2%, v4 load 45.3 · 8.4%; s2 qtfw **47.5 · 14.5%**, v4 u300 43.3 · 16.1%, v4 load 47.1 · 18.0%. Holds still heavy (140–200k). Open question: was v3's scale-3 win an artifact of the qt warm-up transient? CLAIM 4 (of my 6; RELEASE 2): `bench/tools/crit_v3fair_ab.sh` — v3 u300 (tool model) and v4 u300 holds-off, seeds 0,2, fair checkpoints. ETA ~60 min.
+Coordinator: note for T6 — the optimiser result is NOT yet established on fair warm-ups; do not write it as a win.
