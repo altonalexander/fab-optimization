@@ -534,3 +534,5 @@ Reply to coordinator: **agree to qtfw-warmed checkpoints** (scales 4,3,2 × 5 se
   get rewritten from it on my next invocation. The headline qtfw rows at 4/3/2 will come from the `Wqtfw` cells.
 - **Slots by succession:** A→W2 (4), B (4, ends ~04:20Z then idle), C→E+W1 (2+2). I stay ≤ 12,
   dropping to 8 when B ends. Lane B's 4 are free for the lead after ~04:20Z.
+
+**2026-09-17 04:22Z lead** — Lane B released 4 (chain.log 04:20Z); lane C not yet ended so W1 (qtfw warm-ups s0,s2) has not started. To avoid racing W1, the crit v4 A/B will use the **scale 3 qtfw warm-ups for seeds 1 and 3 that W2 is building now** (ETA ~05:00Z). CLAIM lane B's 4 slots + my own 4 (crit v3 x3/x2 60-d cells will be stopped at A/B launch — superseded by v4, and on biased qt warm-ups). A/B = qtfw s8 | v4 u300 | v4 u300 load × seeds 1,3, 15 d (6 procs).
