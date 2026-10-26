@@ -1,0 +1,33 @@
+  SMT2020_LVHM  270 days  seed=2  batch=Demand  warmup=90d  overlay=none (pristine)
+  no qt checkpoint for day 90 (horizon >= 270d); building it
+  feeding /dev/null  (SMT2020_LVHM, 270d, qt, speed=0)
+  warming up to day 90 (unpaced, silent) — about 9 min of CPU
+    warm-up day    9.0 / 90  (10.0%)    2.7 min elapsed  ~24 min left
+    warm-up day   18.0 / 90  (20.0%)    5.1 min elapsed  ~21 min left
+    warm-up day   27.0 / 90  (30.0%)    7.8 min elapsed  ~18 min left
+    warm-up day   36.0 / 90  (40.0%)   10.2 min elapsed  ~15 min left
+    warm-up day   45.0 / 90  (50.0%)   12.7 min elapsed  ~13 min left
+    warm-up day   54.0 / 90  (60.0%)   15.1 min elapsed  ~10 min left
+    warm-up day   63.0 / 90  (70.0%)   17.8 min elapsed  ~8 min left
+    warm-up day   72.0 / 90  (80.0%)   20.3 min elapsed  ~5 min left
+    warm-up day   81.0 / 90  (90.0%)   22.9 min elapsed  ~3 min left
+  simulator checkpointed to bench/snapshots/SMT2020_LVHM_seed2_qt_Demand_day90_cqt10r3c_h270.ckpt in 0.8s -- later starts resume from here
+  checkpoint written; --checkpoint-only, stopping here
+  resumed bench/snapshots/SMT2020_LVHM_seed2_qt_Demand_day90_cqt10r3c_h270.ckpt at day 90.0002
+
+=== fifo ===
+  rule: fifo
+    day  100.0  wip  2281  good/d  50.4  scrap    47   28.5m elapsed  ~482.3m left
+    day  110.0  wip  2591  good/d  33.2  scrap   148   31.2m elapsed  ~248.7m left
+    day  120.0  wip  2248  good/d  23.8  scrap  1010   33.5m elapsed  ~167.0m left
+    day  130.1  wip  2249  good/d  21.7  scrap  1427   36.1m elapsed  ~125.9m left
+    day  140.1  wip  2261  good/d  26.1  scrap  1556   38.7m elapsed  ~100.5m left
+    day  150.1  wip  2392  good/d  23.9  scrap  1869   41.2m elapsed  ~ 82.2m left
+    day  160.1  wip  2532  good/d  21.8  scrap  2192   43.6m elapsed  ~ 68.4m left
+    day  170.1  wip  2688  good/d  20.4  scrap  2516   46.1m elapsed  ~ 57.5m left
+    day  180.1  wip  2753  good/d  21.4  scrap  2726   48.8m elapsed  ~ 48.7m left
+    day  190.1  wip  2944  good/d  21.9  scrap  2852   51.5m elapsed  ~ 41.1m left
+    day  200.1  wip  3003  good/d  22.3  scrap  3089   53.7m elapsed  ~ 34.1m left
+    day  210.1  wip  3240  good/d  22.3  scrap  3209   56.0m elapsed  ~ 27.9m left
+    day  220.1  wip  3437  good/d  22.2  scrap  3373   58.4m elapsed  ~ 22.4m left
+    day  230.1  wip  3636  good/d  22.1  scrap  3518   60.9m elapsed  ~ 17.4m left

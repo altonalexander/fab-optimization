@@ -3,5 +3,19 @@
 
 === crit ===
   rule: crit
-    day  100.0  wip  1808  good/d  47.2  scrap   627   41.2m elapsed  ~329.3m left
-    day  110.0  wip  1812  good/d  49.8  scrap   659   80.5m elapsed  ~281.7m left
+    day  100.0  wip  1820  good/d  44.2  scrap   645   35.6m elapsed  ~285.1m left
+    day  110.0  wip  1820  good/d  48.6  scrap   675   70.7m elapsed  ~247.3m left
+    day  120.0  wip  1914  good/d  46.9  scrap   726  102.5m elapsed  ~205.0m left
+    day  130.0  wip  1931  good/d  46.9  scrap   812  138.6m elapsed  ~173.2m left
+    day  140.0  wip  1887  good/d  48.4  scrap   888  171.1m elapsed  ~136.9m left
+    day  150.0  wip  1895  good/d  48.8  scrap   932  204.7m elapsed  ~102.4m left
+    day  160.0  wip  1956  good/d  48.5  scrap   974  240.3m elapsed  ~ 68.7m left
+    day  170.0  wip  1859  good/d  50.3  scrap  1027  275.8m elapsed  ~ 34.5m left
+    day  180.0  wip  1759  good/d  50.5  scrap  1159  311.2m elapsed  ~  0.0m left
+  4549 lots, CT 33.3788d, on-time 99.87%, util 79.66%, wall 18672.4s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  crit       33.379        4549      99.87          4.0     79.7     85.8         -        282.6        429.6
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/grid/critv5K6s8U300B2P1800Wqtfw_x3_L100_s0_w90.json
