@@ -1,0 +1,7 @@
+  SMT2020_LVHM  150 days  seed=0  batch=Demand  warmup=90d  overlay=none (pristine)
+  resumed bench/snapshots/SMT2020_LVHM_seed0_qt_Demand_day90_cqt3r0c_qp050b_h270.ckpt at day 90
+
+=== crit ===
+  rule: crit
+    day  100.0  wip  1651  good/d  45.8  scrap  1834   46.4m elapsed  ~230.9m left
+    day  110.0  wip  1705  good/d  47.8  scrap  1853   92.1m elapsed  ~183.7m left

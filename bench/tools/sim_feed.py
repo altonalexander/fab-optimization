@@ -218,10 +218,18 @@ CKPT_FEED_FIELDS = ('_hist', '_cohort_by_lot', '_route_len', '_last_split',
 
 
 def _mx(a):
-    """The rework cap off the parsed args; 0 on the command line means the
-    unbounded behaviour, which the key represents as no fragment at all."""
+    """The rework cap off the parsed args.
+
+    NEGATIVE means unbounded, which the key represents as no fragment at all.
+    Zero means scrap on the FIRST violation (WSC 2020's own semantics; audit
+    F4). Must agree with compare._mxr: when this read 0 as unbounded and
+    compare read it as scrap-on-first, the warm-up subprocess built
+    `_cqt8c` while the parent looked for `_cqt8r0c`, and every run died with
+    "could not build the warm-up checkpoint" after an hour of warm-up.
+    """
     v = getattr(a, 'cqt_max_rework', 3)
-    return None if not v else int(v)
+    v = 3 if v is None else int(v)
+    return None if v < 0 else v
 
 
 def cqt_key(enforce, scale, max_rework=3):
@@ -238,12 +246,17 @@ def cqt_key(enforce, scale, max_rework=3):
     (adr/0016 §6), capped scraps them. Only when enforcement is on, so every
     non-cqt checkpoint filename is still unchanged. Checkpoints built before
     the cap existed carry no 'r' fragment and are therefore orphaned rather
-    than silently reused, which is the point.
+    than silently reused, which is the point. The trailing 'c' does the
+    same for the window-open definition.
     """
     if not enforce:
         return ''
     base = '_cqt' if abs(scale - 1.0) < 1e-9 else f'_cqt{scale:g}'
-    return base + ('' if max_rework is None else f'r{int(max_rework)}')
+    # 'c' = the window opens at COMPLETION of the entrance step (ADR 0016
+    # §8, 2026-09-15). Checkpoints warmed under the earlier start-of-step
+    # definition carry no 'c' and are orphaned rather than reused: the two
+    # definitions produce different fabs.
+    return base + ('' if max_rework is None else f'r{int(max_rework)}') + 'c'
 
 
 def mix_key(parts):
@@ -266,9 +279,69 @@ def mix_key(parts):
     return f'_mix{h.hexdigest()}'
 
 
+def transport_key(seconds):
+    """Checkpoint key fragment for lot transport time (NEXT.md §0.6). A fab
+    warmed with moves costing time has different WIP from one warmed with
+    free moves; empty at zero so every existing filename is unchanged."""
+    seconds = float(seconds or 0.0)
+    return '' if seconds <= 0 else f'_tr{seconds:g}'
+
+
+def qt_tuning_key(dispatcher):
+    """Checkpoint key fragment for the QT rule's promote threshold.
+
+    `qt` is not one rule, it is a family: QT_PROMOTE_FRAC decides how much of
+    a window's length may remain before a saveable lot is promoted, and 0.50
+    (the tuned value the paper runs) warms a MEASURABLY different fab from
+    1.0 (the default). The dispatcher name in the checkpoint key is `qt` for
+    both, so until 2026-09-15 a fab warmed under one could be, and silently
+    was, resumed under the other -- the ADR 0013 §3.5 failure again, with a
+    third cause after the qualification matrix and queue-time enforcement.
+
+    Unlike every other fragment here this one is NOT empty at the default.
+    An existing `_qt_` checkpoint was built under whatever the environment
+    happened to hold, and that provenance was never recorded, so it cannot be
+    claimed for either value. Non-empty orphans all of them, which forces a
+    rebuild once and is the safe direction.
+    """
+    if dispatcher not in ('qt', 'qtf', 'qtfw'):
+        return ''
+    if dispatcher == 'qtfw':
+        tier = '' if os.getenv('QT_BATCH_TIER', '1') == '0' else 'b'
+        mw = os.getenv('QTFW_MAXWAIT_H')
+        return (f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}{tier}'
+                f'f{int(os.getenv("QTF_LOOKAHEAD", "3"))}'
+                f'w{float(os.getenv("QTFW_SLACK_H", "2")):g}'
+                f'{"m" + mw if mw else ""}')
+    if dispatcher == 'qtf':
+        # qtf is qt plus feed-the-batch; its lookahead changes the fab too.
+        tier = '' if os.getenv('QT_BATCH_TIER', '1') == '0' else 'b'
+        return (f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}{tier}'
+                f'f{int(os.getenv("QTF_LOOKAHEAD", "3"))}')
+    # 'b': the window tier reaches batch formation (dispatcher.QT_BATCH_TIER).
+    # Every qt checkpoint before 2026-09-16 was warmed without it, so the
+    # suffix goes on the FIXED fab and leaves those files valid for =0.
+    tier = '' if os.getenv('QT_BATCH_TIER', '1') == '0' else 'b'
+    return f'_qp{int(round(float(os.getenv("QT_PROMOTE_FRAC", "1.0")) * 100)):03d}{tier}'
+
+
+def hold_key():
+    """Checkpoint key fragment for hold-before-entry (Instance.cqt_hold_frac).
+
+    A fab warmed with holds has different WIP in front of every entrance step
+    from one warmed without, so the two must never share a checkpoint. Empty
+    when holds are off, so every existing filename is unchanged.
+    """
+    f = os.getenv('CQT_HOLD_FRAC')
+    if not f:
+        return ''
+    return (f'_hq{int(round(float(f) * 100)):03d}'
+            f'm{int(round(float(os.getenv("CQT_HOLD_MAX_H", "24"))))}')
+
+
 def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
               parts=None, trim=None, cqt=False, cqt_scale=1.0,
-              cqt_max_rework=3):
+              cqt_max_rework=3, transport_s=0.0):
     """Where the shared warm-up checkpoint for this configuration lives.
 
     The overlay hash is part of the NAME (ADR 0013 §3.5). A fab warmed 90 days
@@ -283,18 +356,21 @@ def ckpt_path(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
             f'_day{day:g}{overlay_mod.key(overlay)}{mix_key(parts)}'
             f'{trim_mod.key(trim)}'
             f'{cqt_key(cqt, cqt_scale, cqt_max_rework)}'
+            f'{transport_key(transport_s)}'
+            f'{qt_tuning_key(dispatcher)}'
+            f'{hold_key()}'
             f'_h{int(days)}.ckpt')
     return os.path.join(CACHE_DIR, name)
 
 
 def find_ckpt(dataset, seed, dispatcher, day, batch_strat, days, overlay=None,
               parts=None, trim=None, cqt=False, cqt_scale=1.0,
-              cqt_max_rework=3):
+              cqt_max_rework=3, transport_s=0.0):
     """The cached checkpoint with the smallest horizon that still covers `days`."""
     import glob
     pat = ckpt_path(dataset, seed, dispatcher, day, batch_strat, 0, overlay,
                     parts, trim, cqt, cqt_scale,
-                    cqt_max_rework).replace('_h0.ckpt',
+                    cqt_max_rework, transport_s).replace('_h0.ckpt',
                                                          '_h*.ckpt')
     best = None
     for path in glob.glob(pat):
@@ -1730,6 +1806,10 @@ def main():
                         'pristine one unlabelled. Omit for the pristine fab.')
     p.add_argument('--cqt', action='store_true',
                    help='enforce the dataset queue-time windows (adr/0016)')
+    p.add_argument('--transport-s', type=float, default=0.0,
+                   help='lot transport time in seconds on every family-to-family '
+                        'move (NEXT.md §0.6). SMT2020 ships none; 0 = free moves, '
+                        'as every published row. Keys the checkpoint.')
     p.add_argument('--cqt-max-rework', type=int, default=3,
                    help='scrap a lot after this many queue-time reworks; 0 '
                         'means unbounded (adr/0016 §6)')
@@ -1883,7 +1963,7 @@ def main():
     ckpt = None if (warm_s is None or a.rebuild) else find_ckpt(
         a.dataset, a.seed, warm_rule, a.warmup_days, a.batch_strat, a.days,
         ov, a.starts_part_map, a.trim_obj, a.cqt, a.cqt_scale,
-        _mx(a))
+        _mx(a), transport_s=a.transport_s)
     if warm_s and ckpt is None and warm_rule != a.dispatcher:
         # No shared checkpoint yet. Build it under the warm-up rule -- a
         # separate process, so that rule's checkpoint is exactly what a plain
@@ -1902,7 +1982,7 @@ def main():
         rc = subprocess.call(cmd, cwd=REPO, env=env)
         ckpt = find_ckpt(a.dataset, a.seed, warm_rule, a.warmup_days,
                          a.batch_strat, a.days, ov, a.starts_part_map,
-                         a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
+                         a.trim_obj, a.cqt, a.cqt_scale, _mx(a), transport_s=a.transport_s)
         if rc != 0 or ckpt is None:
             p.error(f'could not build the {warm_rule} day-{a.warmup_days:g} '
                     'checkpoint')
@@ -1954,6 +2034,7 @@ def main():
             instance.cqt_enforce = bool(a.cqt)
             instance.cqt_scale = float(a.cqt_scale or 1.0)
             instance.cqt_max_rework = _mx(a)
+            sim_runner.apply_transport(instance, a.transport_s)
             n = scale_starts(instance, a.starts_scale)
             if n:
                 print(f'  starts x{a.starts_scale:g}: {n} future releases compressed', file=sys.stderr)
@@ -1989,6 +2070,10 @@ def main():
         instance.cqt_enforce = bool(a.cqt)
         instance.cqt_scale = float(a.cqt_scale or 1.0)
         instance.cqt_max_rework = _mx(a)
+        nt = sim_runner.apply_transport(instance, a.transport_s)
+        if nt:
+            print(f'  transport {a.transport_s:g}s on {nt} family-to-family moves',
+                  file=sys.stderr)
         if a.starts_part_map:
             n = scale_starts(instance, 1.0, a.starts_part_map)
             print(f'  start mix: {n} future releases re-timed for '
@@ -2036,7 +2121,7 @@ def main():
             save_snapshot(cpath, snap)
             kpath = ckpt_path(a.dataset, a.seed, warm_rule, a.warmup_days,
                               a.batch_strat, a.days, ov, a.starts_part_map,
-                              a.trim_obj, a.cqt, a.cqt_scale, _mx(a))
+                              a.trim_obj, a.cqt, a.cqt_scale, _mx(a), transport_s=a.transport_s)
             try:
                 t0 = time.time()
                 save_checkpoint(kpath, instance, feed, a.days)

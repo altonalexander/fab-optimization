@@ -1,0 +1,17 @@
+  SMT2020_LVHM  150 days  seed=1  batch=Demand  warmup=90d  overlay=none (pristine)
+  resumed bench/snapshots/SMT2020_LVHM_seed1_qt_Demand_day90_cqt2r0c_qp050b_h270.ckpt at day 90
+
+=== fifo ===
+  rule: fifo
+    day  100.0  wip  1272  good/d  27.5  scrap  3231    3.5m elapsed  ~ 17.7m left
+    day  110.0  wip  1231  good/d  26.8  scrap  3581    7.2m elapsed  ~ 14.4m left
+    day  120.0  wip  1245  good/d  26.0  scrap  3894   10.8m elapsed  ~ 10.8m left
+    day  130.1  wip  1283  good/d  24.6  scrap  4221   14.8m elapsed  ~  7.3m left
+    day  140.1  wip  1362  good/d  24.7  scrap  4469   18.7m elapsed  ~  3.7m left
+  1501 lots, CT 24.9078d, on-time 99.93%, util 65.98%, wall 1339.4s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  fifo       24.908        1501      99.93          0.2     66.0     67.7         -        564.9        996.5
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/grid/fifo_x2_L100_s1_w60.json

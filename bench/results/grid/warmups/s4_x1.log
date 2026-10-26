@@ -1,0 +1,13 @@
+  feeding /dev/null  (SMT2020_LVHM, 270d, qt, speed=0)
+  warming up to day 90 (unpaced, silent) — about 9 min of CPU
+    warm-up day    9.0 / 90  (10.0%)    2.7 min elapsed  ~24 min left
+    warm-up day   18.0 / 90  (20.0%)    4.7 min elapsed  ~19 min left
+    warm-up day   27.0 / 90  (30.0%)    6.4 min elapsed  ~15 min left
+    warm-up day   36.0 / 90  (40.0%)    8.0 min elapsed  ~12 min left
+    warm-up day   45.0 / 90  (50.0%)    9.6 min elapsed  ~10 min left
+    warm-up day   54.0 / 90  (60.0%)   10.8 min elapsed  ~7 min left
+    warm-up day   63.0 / 90  (70.0%)   11.9 min elapsed  ~5 min left
+    warm-up day   72.0 / 90  (80.0%)   12.9 min elapsed  ~3 min left
+    warm-up day   81.0 / 90  (90.0%)   14.0 min elapsed  ~2 min left
+  simulator checkpointed to bench/snapshots/SMT2020_LVHM_seed4_qt_Demand_day90_cqtr0c_qp050b_h270.ckpt in 1.0s -- later starts resume from here
+  checkpoint written; --checkpoint-only, stopping here

@@ -1,0 +1,1 @@
+{"tag": "cqtr0c", "seed": 2, "hold": "off", "days": 15.0, "rule": "qtf", "shipped_per_day": 12.4, "scrapped_per_day": 43.13333333333333, "scrap_share": 0.7767106842737095, "violations": 647, "wip_start": 1030, "wip_end": 1067, "hold_events": 0, "wall_s": 124}

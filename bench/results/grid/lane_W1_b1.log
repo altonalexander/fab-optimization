@@ -1,0 +1,4 @@
+grid warm-ups start 2026-09-17T03:59:28+00:00 jobs=2 scales=[3] seeds=[0 2]
+DONE qtfw_s0_x3 rc=0 2026-09-17T04:41:20+00:00
+DONE qtfw_s2_x3 rc=0 2026-09-17T04:41:24+00:00
+grid warm-ups end 2026-09-17T04:41:24+00:00

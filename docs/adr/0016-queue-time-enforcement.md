@@ -344,26 +344,87 @@ sweep over queue-time scale and start rate.** That fix requires re-running
 every result, since all of them depend on the window definition; the sweep is
 the natural occasion.
 
-**Size of the deviation (2026-09-15, from the dataset, no runs touched).**
-For the 264 q-time pairs, the entrance step's own processing time (per-piece
-steps counted for a 25-wafer lot) is the fraction of the window that the bug
-charges:
+**Size of the deviation (2026-09-15, from the dataset, no runs touched;
+corrected the same day).** `STEP_CQT` points *forward*: the step carrying it
+is the entrance and the step it names is the exit, which is how the
+simulator reads it. The first sizing had the roles reversed and measured the
+exit step's time; these are the entrance step's. For the 264 q-time pairs,
+the entrance step's own processing time (per-piece steps counted for a
+25-wafer lot) as a fraction of the window it opens:
 
 | | native windows (scale 1) | as run (scale 10) |
 |---|---|---|
 | window, min / median / max | 1 h / 2 h / 24 h | 10 h / 20 h / 240 h |
-| entrance time ÷ window, median | 36% | 3.6% |
-| mean | 39% | 3.9% |
-| 90th percentile | 67% | 6.7% |
-| worst pair | 181% | 18% |
+| entrance time ÷ window, median | 44% | 4.4% |
+| mean | 61% | 6.1% |
+| 90th percentile | 174% | 17% |
+| worst pair | 284% | 28% |
 
-At scale 10 the windows were on median ~4% shorter than intended, the same
-handicap for every policy, so the paired results stand and will move slightly
-in every policy's favour after the fix. At native scale the bug is enormous:
-the entrance step alone consumes a third of a typical window and exceeds the
-whole window for the worst pair. **The native-scale infeasibility that led to
-the scale-10 operating point was therefore at least partly manufactured by
-this bug.** The robustness sweep must re-establish the viable scale from the
-corrected window rather than assume 10.
+At scale 10 the windows were on median ~4% shorter than intended and up to
+28% shorter for the worst pair, the same handicap for every policy, so the
+paired results stand and will move in every policy's favour after the fix.
+At native scale the deviation is not a distortion but a different
+constraint: for one pair in ten the entrance step alone is **longer than
+the whole window**, so those windows could never be met under the old
+definition however the fab was dispatched. **The native-scale infeasibility
+that led to the scale-10 operating point was therefore substantially
+manufactured by this bug.** The robustness sweep must re-establish the
+viable scale from the corrected window rather than assume 10.
 
 Caught in review by Alton, from the dataset's definition, not from the code.
+
+**Fixed 2026-09-15** on branch `cqt-window-fix`, after the replicate batch
+was stopped and the paper rewritten on it (ADR 0017 §12.11). The open moved
+from `instance.dispatch()` to `free_up_lots()`, keyed on the step that has
+just completed and guarded so that a skipped (sampling) step and a step
+rolled back by rework do not open one. The close is unchanged. Every
+checkpoint key gains a trailing `c` so nothing warmed under the old
+definition can be resumed under the new one. **No result in ADR 0017 or the
+paper has been re-run yet**; the sweep in `docs/NEXT.md` §0 is where they
+are.
+
+**Verification of the fix, 2026-09-15.** Two checks, both 40/20 cold days,
+seed 0, detection only (no rework), so the only thing the definition can
+change is what the windows report:
+
+- *Invariance.* `fifo` at scale 8 under the new code reproduces the old-code
+  control `dx_s8-norw.json` **bit for bit** (fingerprint `861f3df6da156276`,
+  2,380 lots) while its violation count falls from 300 to 125. A
+  window-blind rule cannot see the change, so the dynamics are untouched
+  and the drop is the definition alone.
+- *Response.* Untuned `qt` over 20 days: violations 7,341 → 1,645 at scale 1
+  and 20 → 0 at scale 10, WIP and utilisation unchanged — and on-time
+  **falls** (95.1 → 69.4 % at scale 1, 94.6 → 56.3 % at scale 10) with
+  tardiness up 7–16×. That is the rule, not the fab: the untuned rule
+  promotes every lot with an open, saveable window, and under the correct
+  definition far more windows are open and saveable at once, so it reorders
+  the fab by slack rather than by due date. The tuned rule
+  (`QT_PROMOTE_FRAC`) exists for exactly this, and its threshold has to be
+  re-tuned on the corrected window before any rule-versus-solver row is
+  read. It also means the warm-up rule produces a different fab now, which
+  is one more reason nothing from before the fix is comparable with
+  anything after it.
+
+## 9. Second defect, 2026-09-15: a window that closes on the last route step was never enforced
+
+Found by the synthetic test written for §8 (`bench/tests/test_cqt_mechanism.py`,
+`test_rework_returns_to_entrance_and_scraps_at_cap`), not by a run. Rework and
+scrap live inside `free_up_lots()`'s `while len(lot.remaining_steps) > 0`
+loop. A lot whose **exit** step is the **last** step of its route has no
+remaining steps when that step completes, so the loop never runs: the
+violation had been counted at dispatch, and the lot then shipped as a
+completion — never reworked, never scrapped.
+
+**Six of the ten LVHM routes end on an exit step** (1, 2, 3, 5, 7, 8; the
+spec audit's F3). So every published row counted those violations and
+applied no consequence to them: rework and scrap are undercounted, and
+throughput and on-time are overstated, by the share of misses that fell on
+those six routes' final window — one of ~26 windows per route, so on the
+order of a few percent of violations, and the same for every policy.
+
+Fixed by entering the loop once when a violated lot has nothing left to do,
+so the rollback (or the scrap) applies; a rollback that finds nothing to
+roll back to breaks out and the route completes as before. Detection-only
+behaviour is untouched (the extra entry requires `cqt_rework`), which the
+fifo invariance check re-confirms. Re-running everything after §8 already
+covers this.
