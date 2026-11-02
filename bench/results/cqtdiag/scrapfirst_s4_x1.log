@@ -1,0 +1,34 @@
+  SMT2020_LVHM  180 days  seed=4  batch=Demand  warmup=90d  overlay=none (pristine)
+  no qt checkpoint for day 90 (horizon >= 180d); building it
+  feeding /dev/null  (SMT2020_LVHM, 180d, qt, speed=0)
+  warming up to day 90 (unpaced, silent) — about 9 min of CPU
+    warm-up day    9.0 / 90  (10.0%)    4.4 min elapsed  ~40 min left
+    warm-up day   18.0 / 90  (20.0%)    7.6 min elapsed  ~30 min left
+    warm-up day   27.0 / 90  (30.0%)    9.8 min elapsed  ~23 min left
+    warm-up day   36.0 / 90  (40.0%)   11.9 min elapsed  ~18 min left
+    warm-up day   45.0 / 90  (50.0%)   13.9 min elapsed  ~14 min left
+    warm-up day   54.0 / 90  (60.0%)   15.9 min elapsed  ~11 min left
+    warm-up day   63.0 / 90  (70.0%)   17.9 min elapsed  ~8 min left
+    warm-up day   72.0 / 90  (80.0%)   19.9 min elapsed  ~5 min left
+    warm-up day   81.0 / 90  (90.0%)   21.7 min elapsed  ~2 min left
+  simulator checkpointed to bench/snapshots/SMT2020_LVHM_seed4_qt_Demand_day90_cqtr0c_qp050_h180.ckpt in 1.1s -- later starts resume from here
+  checkpoint written; --checkpoint-only, stopping here
+  resumed bench/snapshots/SMT2020_LVHM_seed4_qt_Demand_day90_cqtr0c_qp050_h180.ckpt at day 90
+
+=== qt ===
+  rule: qt
+    day  100.0  wip  1014  good/d  14.0  scrap  4907   25.0m elapsed  ~199.2m left
+    day  110.0  wip  1061  good/d  14.5  scrap  5280   27.1m elapsed  ~ 94.6m left
+    day  120.0  wip  1040  good/d  15.1  scrap  5707   28.6m elapsed  ~ 57.2m left
+    day  130.1  wip  1030  good/d  15.1  scrap  6137   30.3m elapsed  ~ 37.8m left
+    day  140.1  wip  1064  good/d  14.9  scrap  6541   32.2m elapsed  ~ 25.6m left
+    day  150.1  wip  1064  good/d  15.0  scrap  6954   33.8m elapsed  ~ 16.8m left
+    day  160.1  wip  1052  good/d  15.1  scrap  7369   35.7m elapsed  ~ 10.1m left
+    day  170.1  wip  1070  good/d  15.2  scrap  7772   37.1m elapsed  ~  4.6m left
+  1367 lots, CT 22.3711d, on-time 99.78%, util 57.22%, wall 907.8s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  qt       22.371        1367      99.78          2.4     57.2     56.5         -        724.5       1227.7
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/cqtdiag/scrapfirst_s4_x1.json

@@ -1,0 +1,143 @@
+{
+ "tag": "cqt8r0c",
+ "seed": 0,
+ "days": 3.0,
+ "families": {
+  "Diffusion_FE_94": {
+   "batches_per_day": 30.0,
+   "lots_per_day": 123.7,
+   "arrivals_per_day": 130.7,
+   "fill_vs_max_mean": 0.81,
+   "share_at_min_only": 0.92,
+   "lot_wait_h_p50_p90": [
+    5.54,
+    19.88
+   ],
+   "windowed_lots": 126,
+   "windowed_lots_blown": 0,
+   "tools": 13,
+   "stalled_tool_hours_per_day": 24.7
+  },
+  "Diffusion_FE_101": {
+   "batches_per_day": 23.3,
+   "lots_per_day": 111.7,
+   "arrivals_per_day": 110.7,
+   "fill_vs_max_mean": 0.87,
+   "share_at_min_only": 0.71,
+   "lot_wait_h_p50_p90": [
+    4.76,
+    18.32
+   ],
+   "windowed_lots": 0,
+   "windowed_lots_blown": 0
+  },
+  "Diffusion_FE_127": {
+   "batches_per_day": 23.7,
+   "lots_per_day": 104.7,
+   "arrivals_per_day": 104.0,
+   "fill_vs_max_mean": 0.88,
+   "share_at_min_only": 0.58,
+   "lot_wait_h_p50_p90": [
+    2.32,
+    21.18
+   ],
+   "windowed_lots": 0,
+   "windowed_lots_blown": 0
+  },
+  "Diffusion_FE_120": {
+   "batches_per_day": 23.0,
+   "lots_per_day": 88.0,
+   "arrivals_per_day": 86.7,
+   "fill_vs_max_mean": 0.81,
+   "share_at_min_only": 0.9,
+   "lot_wait_h_p50_p90": [
+    4.31,
+    17.23
+   ],
+   "windowed_lots": 139,
+   "windowed_lots_blown": 0,
+   "tools": 8,
+   "stalled_tool_hours_per_day": 23.7
+  },
+  "Diffusion_BE_123": {
+   "batches_per_day": 22.7,
+   "lots_per_day": 79.7,
+   "arrivals_per_day": 78.7,
+   "fill_vs_max_mean": 0.8,
+   "share_at_min_only": 0.88,
+   "lot_wait_h_p50_p90": [
+    3.15,
+    15.27
+   ],
+   "windowed_lots": 239,
+   "windowed_lots_blown": 1,
+   "tools": 9,
+   "stalled_tool_hours_per_day": 43.0
+  },
+  "Diffusion_FE_44": {
+   "batches_per_day": 20.0,
+   "lots_per_day": 75.7,
+   "arrivals_per_day": 79.7,
+   "fill_vs_max_mean": 0.86,
+   "share_at_min_only": 0.63,
+   "lot_wait_h_p50_p90": [
+    4.56,
+    15.9
+   ],
+   "windowed_lots": 0,
+   "windowed_lots_blown": 0
+  },
+  "Diffusion_FE_122": {
+   "batches_per_day": 12.7,
+   "lots_per_day": 60.7,
+   "arrivals_per_day": 63.3,
+   "fill_vs_max_mean": 0.84,
+   "share_at_min_only": 0.87,
+   "lot_wait_h_p50_p90": [
+    0.55,
+    25.34
+   ],
+   "windowed_lots": 0,
+   "windowed_lots_blown": 0
+  },
+  "Diffusion_FE_100": {
+   "batches_per_day": 8.0,
+   "lots_per_day": 46.3,
+   "arrivals_per_day": 51.0,
+   "fill_vs_max_mean": 0.97,
+   "share_at_min_only": 0.21,
+   "lot_wait_h_p50_p90": [
+    13.4,
+    27.0
+   ],
+   "windowed_lots": 0,
+   "windowed_lots_blown": 0
+  },
+  "Diffusion_FE_126": {
+   "batches_per_day": 10.0,
+   "lots_per_day": 41.3,
+   "arrivals_per_day": 41.0,
+   "fill_vs_max_mean": 0.83,
+   "share_at_min_only": 0.87,
+   "lot_wait_h_p50_p90": [
+    3.77,
+    16.22
+   ],
+   "windowed_lots": 0,
+   "windowed_lots_blown": 0
+  },
+  "Diffusion_FE_125": {
+   "batches_per_day": 12.7,
+   "lots_per_day": 40.0,
+   "arrivals_per_day": 40.7,
+   "fill_vs_max_mean": 0.79,
+   "share_at_min_only": 0.84,
+   "lot_wait_h_p50_p90": [
+    1.98,
+    15.02
+   ],
+   "windowed_lots": 0,
+   "windowed_lots_blown": 0
+  }
+ }
+}

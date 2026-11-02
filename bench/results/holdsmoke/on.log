@@ -1,0 +1,14 @@
+  SMT2020_LVHM  5 days  seed=0  batch=Demand  overlay=none (pristine)
+  NOTE: <=365 days and no --warmup-days, so the numbers include the fill-up
+        transient and are not comparable to warmed runs or to published
+        730-day results.
+
+=== qt ===
+  rule: qt
+  194 lots, CT 37.8473d, on-time 89.69%, util 82.22%, wall 151.2s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  qt       37.847         194      89.69         11.8     82.2     91.0         -        599.8        630.6
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/holdsmoke/on.json

@@ -1,0 +1,17 @@
+  SMT2020_LVHM  150 days  seed=2  batch=Demand  warmup=90d  overlay=none (pristine)
+  resumed bench/snapshots/SMT2020_LVHM_seed2_qt_Demand_day90_cqt4r0c_qp050b_h270.ckpt at day 90
+
+=== qt ===
+  rule: qt
+    day  100.0  wip  1709  good/d  50.8  scrap   971    5.0m elapsed  ~ 25.0m left
+    day  110.0  wip  1711  good/d  48.9  scrap  1068    9.9m elapsed  ~ 19.8m left
+    day  120.0  wip  1764  good/d  47.6  scrap  1136   14.5m elapsed  ~ 14.4m left
+    day  130.1  wip  1841  good/d  45.8  scrap  1223   19.4m elapsed  ~  9.7m left
+    day  140.1  wip  1825  good/d  46.6  scrap  1321   24.2m elapsed  ~  4.8m left
+  2904 lots, CT 31.5617d, on-time 99.86%, util 79.11%, wall 1735.9s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  qt       31.562        2904      99.86          2.4     79.1     85.4         -        356.4        513.5
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/grid/qt_x4_L100_s2_w60.json

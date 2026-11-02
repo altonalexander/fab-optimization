@@ -1,0 +1,64 @@
+hold sweep start 2026-09-16T17:09:35+00:00 scales=[5 2 1] holds=[0.50 1.00] jobs=30
+Terminated
+hold sweep end 2026-09-16T17:43:59+00:00
+cells: 0 / 30
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+DONE s2_x2_hq050 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+Terminated
+DONE s0_x5_hq050 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+DONE s3_x1_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s2_x5_hq100 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+DONE s2_x5_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s0_x2_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s0_x5_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s1_x5_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s1_x5_hq050 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+DONE s4_x1_hq050 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+Terminated
+DONE s2_x2_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s4_x5_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s2_x1_hq050 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+DONE s3_x2_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s4_x5_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s3_x2_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s1_x1_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s3_x5_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s4_x2_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s3_x5_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s0_x1_hq050 rc=143 2026-09-16T17:44:01+00:00
+DONE s1_x2_hq050 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+DONE s4_x2_hq100 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+Terminated
+DONE s0_x1_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s3_x1_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s1_x2_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s0_x2_hq100 rc=143 2026-09-16T17:44:01+00:00
+Terminated
+Terminated
+DONE s4_x1_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s1_x1_hq100 rc=143 2026-09-16T17:44:01+00:00
+DONE s2_x1_hq100 rc=143 2026-09-16T17:44:01+00:00

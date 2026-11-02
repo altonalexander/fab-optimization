@@ -1,0 +1,4 @@
+grid start 2026-09-17T15:27:49+00:00 jobs=2 rules=[crit] scales=[3] seeds=[0 2] loads=[1.00] win=90
+DONE critv5K6s8U300B2P1800Wqtfw_x3_L100_s2_w90 rc=0 2026-09-17T20:38:59+00:00
+DONE critv5K6s8U300B2P1800Wqtfw_x3_L100_s0_w90 rc=0 2026-09-17T20:39:04+00:00
+grid end 2026-09-17T20:39:04+00:00

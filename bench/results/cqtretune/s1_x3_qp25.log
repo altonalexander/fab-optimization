@@ -1,0 +1,35 @@
+  SMT2020_LVHM  180 days  seed=1  batch=Demand  warmup=90d  overlay=none (pristine)
+  no qt checkpoint for day 90 (horizon >= 180d); building it
+  feeding /dev/null  (SMT2020_LVHM, 180d, qt, speed=0)
+  warming up to day 90 (unpaced, silent) — about 9 min of CPU
+    warm-up day    9.0 / 90  (10.0%)    8.6 min elapsed  ~77 min left
+    warm-up day   18.0 / 90  (20.0%)   16.4 min elapsed  ~66 min left
+    warm-up day   27.0 / 90  (30.0%)   22.5 min elapsed  ~52 min left
+    warm-up day   36.0 / 90  (40.0%)   26.5 min elapsed  ~40 min left
+    warm-up day   45.0 / 90  (50.0%)   30.1 min elapsed  ~30 min left
+    warm-up day   54.0 / 90  (60.0%)   34.2 min elapsed  ~23 min left
+    warm-up day   63.0 / 90  (70.0%)   37.9 min elapsed  ~16 min left
+    warm-up day   72.0 / 90  (80.0%)   41.7 min elapsed  ~10 min left
+    warm-up day   81.0 / 90  (90.0%)   45.5 min elapsed  ~5 min left
+  simulator checkpointed to bench/snapshots/SMT2020_LVHM_seed1_qt_Demand_day90_cqt3r3c_qp025_h180.ckpt in 2.8s -- later starts resume from here
+  checkpoint written; --checkpoint-only, stopping here
+  resumed bench/snapshots/SMT2020_LVHM_seed1_qt_Demand_day90_cqt3r3c_qp025_h180.ckpt at day 90
+
+=== qt ===
+  rule: qt
+    day  100.0  wip  4163  good/d  24.8  scrap   495   55.1m elapsed  ~440.4m left
+    day  110.0  wip  4495  good/d  20.8  scrap   555   60.0m elapsed  ~209.9m left
+    day  120.0  wip  4846  good/d  19.6  scrap   611   64.2m elapsed  ~128.5m left
+    day  130.0  wip  5145  good/d  19.5  scrap   692   69.0m elapsed  ~ 86.3m left
+    day  140.0  wip  5486  good/d  19.2  scrap   752   73.6m elapsed  ~ 58.9m left
+    day  150.0  wip  5793  good/d  19.3  scrap   806   78.7m elapsed  ~ 39.3m left
+    day  160.0  wip  6124  good/d  19.2  scrap   860   84.1m elapsed  ~ 24.0m left
+    day  170.0  wip  6452  good/d  19.2  scrap   916   89.4m elapsed  ~ 11.2m left
+    day  180.0  wip  6765  good/d  19.2  scrap   972   94.5m elapsed  ~  0.0m left
+  1729 lots, CT 23.9247d, on-time 93.81%, util 52.47%, wall 2689.3s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  qt       23.925        1729      93.81       2809.6     52.5     52.6         -        633.3       1080.9
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/cqtretune/s1_x3_qp25.json

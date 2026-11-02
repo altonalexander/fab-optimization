@@ -1,0 +1,35 @@
+  SMT2020_LVHM  180 days  seed=4  batch=Demand  warmup=90d  overlay=none (pristine)
+  resumed bench/snapshots/SMT2020_LVHM_seed4_qt_Demand_day90_cqt10r3c_h270.ckpt at day 90.0001
+
+=== cr ===
+  rule: cr
+    day  100.0  wip  2236  good/d  52.3  scrap     0   20.3m elapsed  ~162.0m left
+    day  110.0  wip  2191  good/d  56.4  scrap     0   40.4m elapsed  ~141.5m left
+    day  120.0  wip  2203  good/d  55.8  scrap    23   58.8m elapsed  ~117.5m left
+    day  130.0  wip  2241  good/d  55.1  scrap    24   78.5m elapsed  ~ 98.1m left
+    day  140.0  wip  2366  good/d  53.0  scrap    33   95.0m elapsed  ~ 76.0m left
+    day  150.0  wip  2466  good/d  51.8  scrap    33  106.7m elapsed  ~ 53.4m left
+    day  160.0  wip  2591  good/d  50.8  scrap    33  116.8m elapsed  ~ 33.4m left
+    day  170.0  wip  2703  good/d  50.3  scrap    33  126.2m elapsed  ~ 15.8m left
+  4510 lots, CT 40.7911d, on-time 53.92%, util 80.11%, wall 7993.1s
+  resumed bench/snapshots/SMT2020_LVHM_seed4_qt_Demand_day90_cqt10r3c_h270.ckpt at day 90.0001
+
+=== qt ===
+  rule: qt
+    day  100.0  wip  2176  good/d  58.3  scrap     0    8.1m elapsed  ~ 64.5m left
+    day  110.0  wip  2045  good/d  63.7  scrap     0   15.8m elapsed  ~ 55.2m left
+    day  120.0  wip  2119  good/d  59.3  scrap     0   23.6m elapsed  ~ 47.1m left
+    day  130.0  wip  2104  good/d  59.1  scrap     0   31.4m elapsed  ~ 39.3m left
+    day  140.0  wip  2069  good/d  59.6  scrap     0   39.3m elapsed  ~ 31.4m left
+    day  150.0  wip  2163  good/d  57.4  scrap     0   45.9m elapsed  ~ 22.9m left
+    day  160.0  wip  2263  good/d  55.9  scrap     0   51.8m elapsed  ~ 14.8m left
+    day  170.0  wip  2210  good/d  56.9  scrap     0   56.5m elapsed  ~  7.1m left
+    day  180.0  wip  2227  good/d  56.6  scrap     0   60.2m elapsed  ~  0.0m left
+  5092 lots, CT 37.6163d, on-time 87.96%, util 81.2%, wall 3611.2s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  cr       40.791        4510      53.92      10143.7     80.1     86.3         -        306.9        405.6
+  qt       37.616        5092      87.96        661.2     81.2     88.1         -        303.8        363.5
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/cqtsweep90/s4_x10.json

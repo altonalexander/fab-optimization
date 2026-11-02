@@ -118,6 +118,20 @@ is recoverable from upstream at the SHA above.
    published `fifo` and `cr` row is byte-identical to before. The commented
    lines are left exactly as upstream wrote them.
 
+10. **Queue-time windows are enforced** (`simulation/instance.py`,
+    `simulation/classes.py`; ADR 0016). Upstream parses `STEP_CQT`/`CQT` into
+    `Step.cqt_for_step`/`cqt_time` and never reads them. Behind
+    `Instance.cqt_enforce` (off by default, so every pristine row is
+    unchanged) a window is **opened in `free_up_lots()` when the entrance
+    step completes** and **closed in `dispatch()` when the exit step
+    starts**, which is SMT2020's definition; a miss reworks the lot to the
+    opening step and the third miss scraps it (`cqt_max_rework`). Until
+    2026-09-15 the open was in `dispatch()` at the *start* of the entrance
+    step, charging that step's own time against the window (ADR 0016 §8);
+    the checkpoint key carries a trailing `c` for the corrected definition.
+    The rework/scrap loop is also entered for a violated lot on its last
+    route step (six LVHM routes end on an exit step; ADR 0016 §9).
+
 Also modified but not load-bearing: `.gitignore` (5 lines), and
 `chart_jobs.html` / `chart_tools.html`, which are regenerated run outputs rather
 than upstream source - `chart_jobs.html` is empty upstream.

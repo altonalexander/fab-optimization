@@ -1,0 +1,49 @@
+  SMT2020_LVHM  180 days  seed=0  batch=Demand  warmup=90d  overlay=none (pristine)
+  no qt checkpoint for day 90 (horizon >= 180d); building it
+  feeding /dev/null  (SMT2020_LVHM, 180d, qt, speed=0)
+  warming up to day 90 (unpaced, silent) — about 9 min of CPU
+    warm-up day    9.0 / 90  (10.0%)   19.5 min elapsed  ~175 min left
+    warm-up day   18.0 / 90  (20.0%)   37.2 min elapsed  ~149 min left
+    warm-up day   27.0 / 90  (30.0%)   55.7 min elapsed  ~130 min left
+    warm-up day   36.0 / 90  (40.0%)   72.6 min elapsed  ~109 min left
+    warm-up day   45.0 / 90  (50.0%)   84.3 min elapsed  ~84 min left
+    warm-up day   54.0 / 90  (60.0%)   92.4 min elapsed  ~62 min left
+    warm-up day   63.0 / 90  (70.0%)   98.3 min elapsed  ~42 min left
+    warm-up day   72.0 / 90  (80.0%)  103.0 min elapsed  ~26 min left
+    warm-up day   81.0 / 90  (90.0%)  107.3 min elapsed  ~12 min left
+  simulator checkpointed to bench/snapshots/SMT2020_LVHM_seed0_qt_Demand_day90_cqt3r3c_h180.ckpt in 1.9s -- later starts resume from here
+  checkpoint written; --checkpoint-only, stopping here
+  resumed bench/snapshots/SMT2020_LVHM_seed0_qt_Demand_day90_cqt3r3c_h180.ckpt at day 90
+
+=== cr ===
+  rule: cr
+    day  100.0  wip  3218  good/d  18.6  scrap   477  117.9m elapsed  ~943.2m left
+    day  110.0  wip  3331  good/d  25.3  scrap   604  124.9m elapsed  ~437.0m left
+    day  120.0  wip  3439  good/d  29.7  scrap   691  132.2m elapsed  ~264.3m left
+    day  130.0  wip  3516  good/d  31.8  scrap   802  140.9m elapsed  ~176.1m left
+    day  140.0  wip  3538  good/d  34.6  scrap   903  149.6m elapsed  ~119.7m left
+    day  150.0  wip  3597  good/d  36.2  scrap   959  157.7m elapsed  ~ 78.8m left
+    day  160.0  wip  3638  good/d  37.7  scrap  1027  164.8m elapsed  ~ 47.1m left
+    day  170.0  wip  3795  good/d  37.6  scrap  1074  171.5m elapsed  ~ 21.4m left
+  3412 lots, CT 56.1945d, on-time 43.02%, util 68.41%, wall 3885.1s
+  resumed bench/snapshots/SMT2020_LVHM_seed0_qt_Demand_day90_cqt3r3c_h180.ckpt at day 90
+
+=== qt ===
+  rule: qt
+    day  100.0  wip  3155  good/d  18.7  scrap   539    3.0m elapsed  ~ 24.3m left
+    day  110.0  wip  3426  good/d  19.1  scrap   632    6.2m elapsed  ~ 21.8m left
+    day  120.0  wip  3671  good/d  21.0  scrap   721    8.9m elapsed  ~ 17.8m left
+    day  130.0  wip  3954  good/d  21.0  scrap   798   11.4m elapsed  ~ 14.3m left
+    day  140.0  wip  4223  good/d  21.2  scrap   887   13.7m elapsed  ~ 10.9m left
+    day  150.0  wip  4423  good/d  21.9  scrap   995   15.6m elapsed  ~  7.8m left
+    day  160.0  wip  4709  good/d  21.8  scrap  1064   17.5m elapsed  ~  5.0m left
+    day  170.0  wip  4919  good/d  22.8  scrap  1136   19.2m elapsed  ~  2.4m left
+    day  180.0  wip  5128  good/d  22.6  scrap  1282   20.9m elapsed  ~  0.0m left
+  2031 lots, CT 25.6006d, on-time 96.01%, util 55.71%, wall 1251.7s
+
+  rule   cycle time  throughput  on-time %    tardiness   util %   scan %  coverage  idleQ t·h/d  idleF t·h/d
+  -----------------------------------------------------------------------------------------------------------
+  cr       56.194        3412      43.02      77088.7     68.4     70.9         -        492.5        829.1
+  qt       25.601        2031      96.01       1318.5     55.7     56.3         -        717.4       1143.4
+
+  wrote /home/alton/src/fab-optimization/.claude/worktrees/adr-0013-runs/bench/results/cqtsweep90/s0_x3.json

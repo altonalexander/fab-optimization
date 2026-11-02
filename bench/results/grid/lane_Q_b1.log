@@ -1,0 +1,4 @@
+grid start 2026-09-17T07:46:44+00:00 jobs=1 rules=[qtfw] scales=[3] seeds=[0 2] loads=[1.00] win=90
+DONE qtfwK6s8Wqtfw_x3_L100_s0_w90 rc=0 2026-09-17T08:39:56+00:00
+DONE qtfwK6s8Wqtfw_x3_L100_s2_w90 rc=0 2026-09-17T09:33:42+00:00
+grid end 2026-09-17T09:33:42+00:00

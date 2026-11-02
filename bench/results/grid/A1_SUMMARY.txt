@@ -1,0 +1,109 @@
+A1 — rules-breakdown grid, first read. 2026-09-16.
+qt, qtfK6 (QTF_LOOKAHEAD=6), cr, fifo x window scale 8/5/3/1 x seeds 0,2 (n=2 per row).
+Every cell resumed the SAME qt(b) warm-up (qp050b_h270, day 90) for its seed+scale; 60-day window,
+QT_PROMOTE_FRAC=0.50, QT_BATCH_TIER=1, scrap-on-first, Demand batching, load 1.0.
+Seeds 1,3,4 (A2) excluded here. Tools: bench/tools/analyse_grid.py, bench/tools/grid_wip_trace.py.
+
+== Table as defined (viable = final-third slope < +5/day every seed AND share <= 15 %) ==
+viable = final-third WIP slope < +5/day on every seed AND scrap share <= 15%
+CT is over shipped lots only (survivor-biased). cons = (shipped+scrapped+dWIP)/starts.
+
+scale  load  win rule        n  good/d  vs best  share   share min-max   CT d max slope  cons  verdict
+    8  1.00   60 cr          2    44.9   -20.9%  30.6%   30.0%- 31.2%   34.3      +4.1  1.00   BREAKS
+    8  1.00   60 fifo        2    52.5    -7.6%  15.2%    7.9%- 22.4%   34.7      -1.5  1.00   BREAKS
+    8  1.00   60 qt          2    56.5    -0.6%   2.3%    1.7%-  2.9%   37.0     +10.1  1.00   BREAKS
+    8  1.00   60 qtfK6       2    56.8    +0.0%   1.0%    1.0%-  1.1%   37.2      +8.8  1.00   BREAKS
+
+    5  1.00   60 cr          2    42.7   -21.9%  31.9%   27.3%- 36.6%   32.4      +7.7  1.00   BREAKS
+    5  1.00   60 fifo        2    46.7   -14.7%  26.5%   23.6%- 29.4%   31.5      +2.6  1.00   BREAKS
+    5  1.00   60 qt          2    54.7    +0.0%   7.9%    7.8%-  8.0%   34.8     +10.3  1.00   BREAKS
+    5  1.00   60 qtfK6       2    53.9    -1.4%   8.7%    8.0%-  9.4%   34.8      +5.7  1.00   BREAKS
+
+    3  1.00   60 cr          2    32.6   -12.7%  44.1%   41.6%- 46.5%   27.4      +0.9  1.00   BREAKS
+    3  1.00   60 fifo        2    35.6    -4.7%  38.2%   37.5%- 38.9%   27.1      -1.8  1.00   BREAKS
+    3  1.00   60 qt          2    37.2    -0.4%  33.9%   33.1%- 34.8%   28.0      +8.0  1.00   BREAKS
+    3  1.00   60 qtfK6       2    37.4    +0.0%  34.6%   32.2%- 37.0%   28.5      -0.3  1.00   BREAKS
+
+    1  1.00   60 cr          2    14.0    -3.8%  75.3%   75.0%- 75.6%   22.1      -0.2  1.00   BREAKS
+    1  1.00   60 fifo        2    14.5    +0.0%  74.0%   73.4%- 74.5%   22.2      +0.7  1.00   BREAKS
+    1  1.00   60 qt          2    13.8    -5.3%  75.7%   75.4%- 76.0%   22.3      -2.8  1.00   BREAKS
+    1  1.00   60 qtfK6       2    14.5    -0.2%  74.0%   73.7%- 74.4%   22.5      -1.6  1.00   BREAKS
+
+viable (slope ok on every seed) by scrap-share cutoff:
+scale  load  win rule          5%   10%   15%   25%
+    8  1.00   60 cr            no    no    no    no
+    8  1.00   60 fifo          no    no    no   yes
+    8  1.00   60 qt            no    no    no    no
+    8  1.00   60 qtfK6         no    no    no    no
+    5  1.00   60 cr            no    no    no    no
+    5  1.00   60 fifo          no    no    no    no
+    5  1.00   60 qt            no    no    no    no
+    5  1.00   60 qtfK6         no    no    no    no
+    3  1.00   60 cr            no    no    no    no
+    3  1.00   60 fifo          no    no    no    no
+    3  1.00   60 qt            no    no    no    no
+    3  1.00   60 qtfK6         no    no    no    no
+    1  1.00   60 cr            no    no    no    no
+    1  1.00   60 fifo          no    no    no    no
+    1  1.00   60 qt            no    no    no    no
+    1  1.00   60 qtfK6         no    no    no    no
+
+== The slope verdict is not trustworthy on a 60-day window ==
+Every BREAKS at scales 8 and 5 for qt/qtfK6 is slope-only (share 1-9 %). WIP per cell
+(wip0 = day 90; mean and OLS slope per third; last-30-day slope; 10-day means):
+cell                      wip0  mean1/3  mean2/3  mean3/3  sl1/3  sl2/3  sl3/3 last30  10-day means
+cr_x1_s0_w60               995     1041     1039     1069   +5.2   -2.9   -0.2   +2.1  1014 1069 1054 1024 1073 1065
+cr_x1_s2_w60              1028     1022     1050     1020   -0.2   +1.8   -1.5   -2.2  1025 1018 1038 1061 1024 1016
+cr_x3_s0_w60              1564     1503     1481     1438   -4.2   +2.6  -13.7   -6.1  1520 1486 1467 1495 1520 1356
+cr_x3_s2_w60              1461     1482     1462     1472   +1.1   +1.3   +0.9   +0.3  1480 1484 1450 1473 1463 1480
+cr_x5_s0_w60              2086     1705     1696     1752  -18.0   +1.8   +6.9   +3.8  1793 1618 1686 1705 1718 1787
+cr_x5_s2_w60              2085     1816     1721     1715  -24.1   -2.3   +7.7   +2.0  1955 1677 1733 1710 1663 1767
+cr_x8_s0_w60              2175     1867     1823     1803  -12.5   -3.6   +4.1   +0.3  1909 1825 1840 1807 1775 1831
+cr_x8_s2_w60              2196     1954     1834     1826  -17.7   -0.5   +3.5   +1.2  2045 1863 1842 1825 1809 1842
+fifo_x1_s0_w60             995     1052     1060     1088   +6.0   -4.8   +0.7   +3.2  1023 1082 1092 1028 1092 1085
+fifo_x1_s2_w60            1027     1042     1081     1093   +3.5   +1.6   -1.6   +0.3  1023 1061 1077 1085 1100 1086
+fifo_x3_s0_w60            1564     1432     1470     1505  -13.7   +3.6   -1.8   +0.6  1516 1348 1455 1485 1513 1498
+fifo_x3_s2_w60            1461     1432     1459     1488   -5.2   +2.8   -2.9   -0.4  1466 1399 1444 1474 1503 1473 1474
+fifo_x5_s0_w60            2084     1682     1652     1690  -24.2   +5.1   -0.5   +0.3  1812 1551 1624 1680 1692 1688
+fifo_x5_s2_w60            2085     1796     1721     1713  -16.1   +0.8   +2.6   +0.3  1872 1721 1718 1724 1693 1733
+fifo_x8_s0_w60            2175     1956     1942     1914   -6.6   -0.3   -1.5   -1.7  1979 1933 1944 1940 1923 1905
+fifo_x8_s2_w60            2192     2034     1960     1945  -15.4   +4.5   -3.1   -2.3  2112 1957 1935 1985 1964 1925
+qtfK6_x1_s0_w60            995     1050     1100     1096   +5.9   +1.0   -3.0   -0.9  1021 1078 1099 1102 1115 1078
+qtfK6_x1_s2_w60           1028     1041     1088     1078   +1.7   +4.7   -1.6   -1.9  1037 1045 1062 1113 1084 1073
+qtfK6_x3_s0_w60           1564     1553     1548     1568   -0.4   -1.4   -0.3   +1.1  1556 1550 1555 1541 1571 1564
+qtfK6_x3_s2_w60           1461     1502     1574     1467   +2.8   +6.7  -10.5   -9.6  1491 1513 1534 1613 1524 1410 1453
+qtfK6_x5_s0_w60           2086     1972     1802     1918  -15.9   +6.4   +5.7   +5.2  2050 1894 1763 1840 1884 1951
+qtfK6_x5_s2_w60           2085     2101     1967     1929   -3.4   +5.7   +0.0   -2.9  2121 2081 1932 2002 1925 1933
+qtfK6_x8_s0_w60           2175     2113     2031     2053   -7.5   -0.6   +8.8   +3.0  2141 2085 2026 2037 2014 2091 2156
+qtfK6_x8_s2_w60           2196     2207     2178     2145   +1.4   -3.2   -3.5   -1.6  2200 2214 2200 2156 2175 2114
+qt_x1_s0_w60               995     1020     1050     1040   +2.5   +1.4   -2.8   -1.7  1005 1034 1042 1058 1056 1023
+qt_x1_s2_w60              1028     1042     1089     1074   +1.9   +2.6   -3.9   -2.2  1033 1051 1078 1100 1097 1052
+qt_x3_s0_w60              1564     1533     1458     1541   -2.7   -3.3   +8.0   +7.3  1545 1521 1482 1434 1500 1583
+qt_x3_s2_w60              1461     1503     1523     1541   +1.2   +3.4   +0.4   +0.1  1501 1505 1502 1544 1540 1541 1539
+qt_x5_s0_w60              2086     1953     1908     1918  -13.9   +1.6  +10.3   +3.0  2025 1880 1903 1915 1858 1978
+qt_x5_s2_w60              2085     2082     1961     1870   -6.3   -1.4   +2.9   -2.7  2118 2046 1971 1951 1848 1893
+qt_x8_s0_w60              2175     2089     2013     2038   -8.9   -3.5  +10.1   +5.4  2126 2053 2039 1986 1980 2095 2137
+qt_x8_s2_w60              2196     2239     2126     2140   +3.0   -5.1   -0.1   +2.2  2217 2260 2160 2092 2146 2133
+
+Read:
+- No flagged cell is climbing. In every slope-flagged qt-family cell the last-third mean WIP is
+  within +-3 % of the first-third mean, and end WIP is at or below the day-90 start
+  (qt x5 s0: 1953 -> 1918; qt x8 s0: 2089 -> 2038; qt x3 s0: 1533 -> 1541).
+- Two things produce the +6..+10 slopes: (1) a post-warm-up dip over the first ~20 days
+  (strongest for cr/fifo, -16..-24/day, which inherit qt's WIP) then a rebound; (2) 10-day mean
+  WIP swings of +-100-150 lots, so an OLS slope over a 20-day tail is +-10/day noise. The
+  pre-fix 90-day qt windows at the same scales had 30-day tails within +-5.
+- Proposal (NOT applied; needs lead agreement): stability = drift of mean WIP between the first
+  and last third, per day between third centres (window x 2/3), < +5/day on every seed; keep the
+  final-third slope as a printed diagnostic. Under that test every A1 cell is stable (max drift
+  about +1/day). Confirm on 90-day windows for scales 8 and 5 (qt, qtfK6, seeds 0,2: 8 cells).
+
+== Verdicts under the proposed drift test (share <= 15 %) ==
+scale 8: qt, qtfK6 viable; fifo BREAKS (share 7.9-22.4 %); cr BREAKS (30 %).
+scale 5: qt, qtfK6 viable (qtfK6 -1.4 % good/d, +0.8 pt share); fifo 26 %, cr 32 % BREAK.
+scale 3, 1: every rule BREAKS on scrap (34-44 %, 74-76 %).
+Best by good lots/day: 8 qtfK6 ~ qt; 5 qt; 3 qtfK6 ~ qt ~ fifo (cr -13 %); 1 fifo ~ qtfK6 ~ cr ~ qt.
+
+Caveats: n=2. 60 d is < 2 CT at scales 8/5, so cr/fifo rows still carry qt's inherited WIP (their
+first-third dip), and good/d and share include that transient. Not comparable with the pre-fix
+90-day qt rows (different window length and batch-tier fix).
