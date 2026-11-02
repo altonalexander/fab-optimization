@@ -114,10 +114,16 @@ PY_JS = {
   "pyyaml": ("MIT", "Copyright Ingy dot Net, Kirill Simonov"),
   "anthropic": ("MIT", "Copyright Anthropic, PBC"),
   "google-auth": ("Apache-2.0", "Copyright Google LLC"),
+  "google-adk": ("Apache-2.0", "Copyright Google LLC"),
+  # The one copyleft dependency in the service. See the note under the Python
+  # table: LGPL obligations are real and different from the rest of this list.
+  "psycopg": ("LGPL-3.0-or-later", "Copyright The Psycopg Team"),
   "react": ("MIT", "Copyright Meta Platforms, Inc. and affiliates"),
   "react-dom": ("MIT", "Copyright Meta Platforms, Inc. and affiliates"),
+  "three": ("MIT", "Copyright the three.js authors"),
   "vite": ("MIT", "Copyright Evan You and Vite contributors"),
   "@vitejs/plugin-react": ("MIT", "Copyright Evan You and Vite contributors"),
+  "playwright": ("Apache-2.0", "Copyright Microsoft Corporation"),
 }
 
 def read(p):
@@ -235,6 +241,13 @@ def render():
         lic, cp = lookup(n)
         a(f"| `{n}` | `{v}` | {lic} | {cp} |")
     a("")
+    a("Note **`psycopg`**: LGPL-3.0-or-later, the only copyleft dependency in")
+    a("the service and a stronger obligation than everything above it. The API")
+    a("imports it as a separate library and does not modify it, which is the")
+    a("case the LGPL is written for -- but redistributing an image containing")
+    a("it carries the licence's terms, including the recipient's right to")
+    a("replace that library. LGPL-3.0 is drafted as a set of additional")
+    a("permissions on top of GPL-3.0, so both texts are in `licenses/`.\n")
     a("## JavaScript — UI\n")
     a("| Package | Version | Licence | Copyright |")
     a("|---|---|---|---|")
